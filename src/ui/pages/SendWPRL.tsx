@@ -55,7 +55,9 @@ export default function SendWPRL() {
       return;
     }
     await new Promise((r) => setTimeout(r, 800));
-    setTxHash("0x" + Math.random().toString(16).slice(2).padEnd(64, "0").slice(0, 64));
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    setTxHash("0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""));
     setStage("sent");
   }
 

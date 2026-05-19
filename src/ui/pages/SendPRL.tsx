@@ -56,9 +56,12 @@ export default function SendPRL() {
       setError("Enter your password to authorize the send.");
       return;
     }
-    // Mock: pretend we built + signed + broadcast.
+    // Mock: pretend we built + signed + broadcast. Use a real CSPRNG
+    // so the placeholder hash doesn't look like attacker-predictable noise.
     await new Promise((r) => setTimeout(r, 800));
-    const fakeHash = "mock_" + Math.random().toString(16).slice(2, 18);
+    const bytes = new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    const fakeHash = "mock_" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
     setTxHash(fakeHash);
     setStage("sent");
   }
