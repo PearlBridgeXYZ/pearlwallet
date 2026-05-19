@@ -16,7 +16,7 @@ interface UIState {
   setTipEnabled(v: boolean): void;
 }
 
-const STORAGE_KEY = "pearl-wallet-ui";
+const STORAGE_KEY = "pearl-wallet-ui-v2";
 
 interface PersistedUI {
   theme: Theme;
@@ -27,7 +27,7 @@ interface PersistedUI {
 
 const DEFAULT_UI: PersistedUI = {
   theme: "system",
-  mockMode: true,
+  mockMode: false,
   pearlRpcOverride: "",
   tipEnabled: true,
 };

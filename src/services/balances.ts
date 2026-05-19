@@ -1,17 +1,18 @@
 // Balances service. Eth-side (WPRL) reads live from the WPRL ERC-20.
-// Pearl-side (PRL) reads live from the configured sentry RPC if reachable;
-// otherwise returns 0 with `prlSource = "pending-sentry"` so the UI can
-// surface "PRL balance loading via sentry RPC" rather than a stale mock.
+// Pearl-side (PRL) reads live from the configured sentry RPC via
+// searchrawtransactions (UTXO walk). On RPC failure the UI surfaces
+// `error` rather than showing a stale or fabricated value.
 
 import { useUI } from "../state/ui-store";
 import { readWprlBalance } from "./bridge";
+import { fetchPrlBalanceGrains } from "./pearl-rpc";
 
 export interface Balances {
   prl: bigint;        // grains (10^8)
   wprl: bigint;       // wei (10^18)
   prlUsd: number;
   wprlUsd: number;
-  prlSource: "live" | "mock" | "pending-sentry";
+  prlSource: "live" | "mock" | "error";
   wprlSource: "live" | "mock" | "error";
 }
 
@@ -33,12 +34,14 @@ export async function fetchBalances(pearlAddr: string, ethAddr: string): Promise
     };
   }
 
-  // Pearl-side: TODO when sentry RPC allowlist proxy is provisioned.
-  // For now, return 0 with `pending-sentry` so the UI shows the right state.
-  const prl = 0n;
-  const prlSource: Balances["prlSource"] = "pending-sentry";
+  let prl = 0n;
+  let prlSource: Balances["prlSource"] = "live";
+  try {
+    prl = await fetchPrlBalanceGrains(pearlAddr);
+  } catch {
+    prlSource = "error";
+  }
 
-  // Eth-side: real WPRL.balanceOf via viem.
   let wprl = 0n;
   let wprlSource: Balances["wprlSource"] = "live";
   try {
@@ -48,7 +51,6 @@ export async function fetchBalances(pearlAddr: string, ethAddr: string): Promise
   }
 
   // USD prices: not wired yet — leave 0; UI hides USD col when missing.
-  void pearlAddr; // suppress unused-arg lint until Pearl reads land
   return {
     prl,
     wprl,
