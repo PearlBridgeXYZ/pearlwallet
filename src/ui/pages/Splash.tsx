@@ -1,6 +1,5 @@
 import { Link } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
-import { BUILD_GIT_SHA, BUILD_VERSION } from "../../build-info";
 
 export default function Splash() {
   const status = useWallet((s) => s.status);
@@ -28,18 +27,6 @@ export default function Splash() {
             </Link>
           )}
         </div>
-
-        <footer className="mt-12 flex flex-col items-center gap-1 text-xs text-ink-400">
-          <a
-            href="https://github.com/PearlBridgeXYZ/pearlwallet"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline-offset-2 hover:underline"
-          >
-            Open source · github.com/PearlBridgeXYZ/pearlwallet
-          </a>
-          <span>v{BUILD_VERSION} · build {BUILD_GIT_SHA}</span>
-        </footer>
       </div>
     </div>
   );

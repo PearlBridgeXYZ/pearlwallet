@@ -1,12 +1,13 @@
 {
   "name": "pearl-web-wallet",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "Non-custodial pure-web wallet for PRL + WPRL with native PearlBridge integration",
   "license": "MIT",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/sync-version.mjs && vite",
+    "prebuild": "node scripts/sync-version.mjs",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

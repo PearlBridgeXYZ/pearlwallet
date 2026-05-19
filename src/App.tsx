@@ -14,6 +14,7 @@ import Bridge from "./ui/pages/Bridge";
 import History from "./ui/pages/History";
 import Settings from "./ui/pages/Settings";
 import About from "./ui/pages/About";
+import Footer from "./ui/components/Footer";
 
 export default function App() {
   const init = useWallet((s) => s.init);
@@ -65,20 +66,25 @@ export default function App() {
   }, [status]);
 
   return (
-    <Routes>
-      <Route path="/" element={<Splash />} />
-      <Route path="/onboarding/create" element={<OnboardingCreate />} />
-      <Route path="/onboarding/restore" element={<OnboardingRestore />} />
-      <Route path="/unlock" element={<Unlock />} />
-      <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/receive" element={<Receive />} />
-      <Route path="/send/prl" element={<SendPRL />} />
-      <Route path="/send/wprl" element={<SendWPRL />} />
-      <Route path="/bridge" element={<Bridge />} />
-      <Route path="/history" element={<History />} />
-      <Route path="/settings" element={<Settings />} />
-      <Route path="/about" element={<About />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <div className="flex min-h-full flex-col">
+      <div className="flex-1">
+        <Routes>
+          <Route path="/" element={<Splash />} />
+          <Route path="/onboarding/create" element={<OnboardingCreate />} />
+          <Route path="/onboarding/restore" element={<OnboardingRestore />} />
+          <Route path="/unlock" element={<Unlock />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/receive" element={<Receive />} />
+          <Route path="/send/prl" element={<SendPRL />} />
+          <Route path="/send/wprl" element={<SendWPRL />} />
+          <Route path="/bridge" element={<Bridge />} />
+          <Route path="/history" element={<History />} />
+          <Route path="/settings" element={<Settings />} />
+          <Route path="/about" element={<About />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </div>
+      <Footer />
+    </div>
   );
 }

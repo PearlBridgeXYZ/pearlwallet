@@ -1,8 +1,12 @@
 import { HDKey } from "@scure/bip32";
 
-// Per docs/06 + docs/11 Q1: default to BTC coin type (0') for Pearl until SLIP-44
-// assigns Pearl its own number. Eth is 60' (standard).
-export const PEARL_COIN_TYPE = 0;
+// Pearl L1 uses HDCoinType = 808276 (ASCII "PRL" packed), matching the
+// btcd-oyster reference wallet (pearl-research-labs/pearl,
+// node/chaincfg/params.go: MainNetParams.HDCoinType). Verified against
+// oyster mainnet by deriving the BIP-39 vector 1 seed through both wallets
+// and asserting bit-exact equality across the first five addresses. Eth is
+// 60' (standard SLIP-44).
+export const PEARL_COIN_TYPE = 808276;
 export const ETH_COIN_TYPE = 60;
 
 // BIP-86 (Taproot) for Pearl, BIP-44 for Eth.
