@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
+import { pearlParams } from "../../chains/pearl/network";
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -17,6 +18,12 @@ export default function Settings() {
   const setTheme = useUI((s) => s.setTheme);
   const mockMode = useUI((s) => s.mockMode);
   const setMockMode = useUI((s) => s.setMockMode);
+  const pearlRpcOverride = useUI((s) => s.pearlRpcOverride);
+  const setPearlRpcOverride = useUI((s) => s.setPearlRpcOverride);
+
+  const defaultRpcUrl = pearlParams(pearlNetwork).rpcUrl;
+  const [rpcDraft, setRpcDraft] = useState(pearlRpcOverride);
+  const [rpcStatus, setRpcStatus] = useState<string | null>(null);
 
   const [showMnemonic, setShowMnemonic] = useState(false);
   const [mnemonicValue, setMnemonicValue] = useState<string | null>(null);
@@ -67,6 +74,36 @@ export default function Settings() {
           : e instanceof Error ? e.message : "Change failed.",
       );
     }
+  }
+
+  function saveRpc() {
+    setRpcStatus(null);
+    const trimmed = rpcDraft.trim();
+    if (trimmed === "") {
+      setPearlRpcOverride("");
+      setRpcStatus(`Using default (${defaultRpcUrl}).`);
+      return;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      setRpcStatus("That's not a valid URL.");
+      return;
+    }
+    if (parsed.protocol !== "https:") {
+      setRpcStatus("RPC URL must use https://.");
+      return;
+    }
+    setPearlRpcOverride(parsed.toString());
+    setRpcDraft(parsed.toString());
+    setRpcStatus(`Using custom: ${parsed.toString()}`);
+  }
+
+  function resetRpc() {
+    setRpcDraft("");
+    setPearlRpcOverride("");
+    setRpcStatus(`Using default (${defaultRpcUrl}).`);
   }
 
   async function doWipe() {
@@ -184,6 +221,36 @@ export default function Settings() {
             Testnet
           </label>
         </div>
+      </section>
+
+      <section className="card mb-4">
+        <h2 className="text-sm font-semibold">Pearl RPC endpoint</h2>
+        <p className="mt-2 text-xs text-ink-500">
+          Defaults to the PearlBridgeXYZ team RPC at{" "}
+          <span className="font-mono">{defaultRpcUrl}</span>
+          {pearlRpcOverride && " (currently overridden — see below)"}. Point at any
+          btcd-compatible JSON-RPC endpoint you trust, or leave blank to use the default.
+        </p>
+        <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+          A malicious RPC can lie about your balance and tx state, and can see your addresses.
+          It cannot move funds (your keys never leave this browser), but only point at endpoints you trust.
+        </p>
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+          <input
+            className="input mono flex-1"
+            placeholder={defaultRpcUrl}
+            value={rpcDraft}
+            autoComplete="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            onChange={(e) => setRpcDraft(e.target.value)}
+          />
+          <button onClick={saveRpc} className="btn-primary">Save</button>
+          <button onClick={resetRpc} className="btn-secondary" disabled={!pearlRpcOverride && !rpcDraft}>
+            Reset
+          </button>
+        </div>
+        {rpcStatus && <p className="mt-2 text-xs text-ink-500">{rpcStatus}</p>}
       </section>
 
       <section className="card mb-4">
