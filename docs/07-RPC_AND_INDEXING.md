@@ -121,7 +121,7 @@ For USD-equivalent display:
 - Show "≈ $X.XX" with disclaimer it's approximate.
 - If oracle down: hide USD column, show native units only.
 
-PRL needs a CoinGecko listing. If not yet listed, fall back to a manual oracle published at `https://pearlwallet.xyz/oracle.json` (build team or G updates).
+PRL needs a CoinGecko listing. If not yet listed, fall back to a manual oracle published at `https://pearlwallet.xyz/oracle.json` (build team updates).
 
 ## RPC error handling
 

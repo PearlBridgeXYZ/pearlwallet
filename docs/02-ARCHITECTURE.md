@@ -2,7 +2,7 @@
 
 ## Build-vs-Buy (READ FIRST)
 
-G's directive (2026-05-17) is to build custom. The build team should still pressure-test this before writing code:
+Team directive (2026-05-17) is to build custom. The build team should still pressure-test this before writing code:
 
 ### Option A: Build custom (chosen)
 - **Pro:** full control of UX, branding, bridge integration, dependency tree.

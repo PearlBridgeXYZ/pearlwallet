@@ -18,17 +18,15 @@ PRL holders currently have no good retail wallet. The bridge exists but lives at
 | **Frontend engineer** | UI (`docs/04-UX.md`), state management, a11y, tx flows |
 | **Designer** | Figma file (linked from `assets/`), brand polish, microcopy review |
 | **Auditor** | External firm (TOB / OZ / Cure53), engaged at M5 — see `docs/12-ACCEPTANCE_TESTS.md` |
-| **G** | Approvals, scope changes, audit gate sign-off |
-| **Bridge Developer** | Spec author + ongoing context bridge to local tooling infra (Pearl fleet, PearlBridge, vault) |
+| **Core team** | Approvals, scope changes, audit gate sign-off |
+| **Bridge Developer** | Spec author + ongoing context bridge to Pearl fleet, PearlBridge contracts, and infra |
 
 ## Repo
 
-- **Org:** `PearlBridgeXYZ` (G's known GitHub identity for these projects)
-- **Name:** `pearl-web-wallet`
+- **Org:** `PearlBridgeXYZ`
+- **Name:** `pearlwallet`
 - **Visibility:** **PRIVATE** until first audit ships; open-sourced at launch.
-- **License at open-source:** MIT (proposed; G to confirm).
-
-> Note: G's primary GitHub `PearlBridgeXYZ` is intentionally not used per the `USER` doc — `PearlBridgeXYZ` is the working identity.
+- **License at open-source:** MIT (proposed; core team to confirm).
 
 ## Conventions
 
@@ -48,7 +46,7 @@ PRL holders currently have no good retail wallet. The bridge exists but lives at
 - **Branching:** trunk-based. Short-lived feature branches off `main`. No long-lived `develop`.
 - **Commit messages:** conventional commits (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`).
 - **PRs:** must reference a milestone / issue, must include test coverage, must update docs if behavior changes.
-- **Required trailers:** `Co-Authored-By: Claude <model>` if Bernard authored code in the PR (per CLAUDE.md auto-commit rule).
+- **Required trailers:** `Co-Authored-By: Claude <model>` for any AI-assisted PR.
 - **Signed commits required** on `main`.
 
 ### Testing
@@ -89,23 +87,23 @@ PRL holders currently have no good retail wallet. The bridge exists but lives at
 - Architecture/scope decisions go in `docs/decisions/YYYY-MM-DD-<topic>.md` (ADR format).
 - Open questions live in `docs/11-OPEN_QUESTIONS.md` until resolved, then move to a decision record.
 
-## Hand-off from Bridge Developer
+## Hand-off context
 
-I have working context on:
-- PearlBridge (`(PearlBridge repo)`) — relay, contracts, audit reports.
-- Pearl fleet (`(Pearl fleet watchdog)`, `(Pearl ops repo)`) — pearld nodes available for wallet RPC.
-- Vault patterns (`(vault skill docs)`).
-- Telegraph alerts (`~/scripts/tg-send-logged.sh` for status alerts).
-- Cloudflare DNS for `pearlwallet.xyz` (template for `pearlwallet.xyz` setup).
+Working context available from the Bridge Developer:
+- PearlBridge — relay, contracts, audit reports.
+- Pearl fleet — pearld nodes available for wallet RPC.
+- Vault / secrets patterns for ops.
+- Telegram-based status alerts.
+- Cloudflare DNS templates for the wallet domain.
 
-I'm available to:
+The Bridge Developer is available to:
 - Walk through PearlBridge contracts and relayer API.
 - Provision Pearl RPC proxy + indexer on a VPS.
 - Set up DNS / Cloudflare Pages.
 - Register domains once a path around the Namecheap "wallet" block is chosen.
 - Review code (security-focused, not style-focused).
 
-Reach me via the channels in `~/CLAUDE.md` — quickest is G's Telegram for routed messages.
+Reach out via `bridgedev@mailbox.org` or the team Telegram group.
 
 ## What you should NOT build
 
@@ -127,7 +125,7 @@ Build with the audit in mind from day one:
 
 ## When in doubt
 
-- For product decisions: ask G.
+- For product decisions: ask the core team.
 - For technical decisions: discuss in PR, escalate to Lead.
 - For crypto-correctness questions: check `@scure`/`@noble` test vectors; if uncertain, post in the team channel.
 - For audit-touching questions: post AND wait for Lead before merging.

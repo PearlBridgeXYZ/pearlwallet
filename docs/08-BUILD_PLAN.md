@@ -107,7 +107,7 @@ Week 9   ████████      M6 — Mainnet beta launch (capped TVL)
 - [ ] Status page (`https://status.pearlwallet.xyz`) live, monitoring RPC + relayer + indexer.
 - [ ] Launch blog post drafted, audit report linked.
 - [ ] Initial bridge TVL cap set conservatively (e.g. $100k mainnet) — adjustable later.
-- [ ] G's sign-off recorded.
+- [ ] Core team sign-off recorded.
 - [ ] DNS pointing to Cloudflare Pages.
 
 ## Audit gate (HARD)
@@ -121,7 +121,7 @@ No mainnet bridge integration ships without an external audit. Audit must cover:
 Pre-mainnet checklist:
 - [ ] Zero critical findings open.
 - [ ] Zero high findings open.
-- [ ] All mediums triaged; G signs off on any deferrals.
+- [ ] All mediums triaged; the core team signs off on any deferrals.
 
 ## Post-launch (out of this plan, but worth noting)
 
@@ -145,8 +145,8 @@ Pre-mainnet checklist:
 
 | Item | Cost |
 |------|------|
-| 2 engineers × 9 weeks | (G's call) |
-| Designer × ~20 hrs total | (G's call) |
+| 2 engineers × 9 weeks | (core team's call) |
+| Designer × ~20 hrs total | (core team's call) |
 | Security audit (TOB/OZ/Cure53 web-wallet engagement) | $30k - $80k |
 | Domain registrations (canonical + 4 defensive) | ~$25/yr |
 | small VPS (pearld + esplora) | €10/mo |

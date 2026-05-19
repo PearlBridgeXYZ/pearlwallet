@@ -141,4 +141,4 @@ Before mainnet bridge integration ships, an external audit is required, scoped t
 
 Preferred firms: Trail of Bits, OpenZeppelin, Cure53 (web-focused).
 
-Zero critical and zero high findings open = launch gate. Mediums require G sign-off.
+Zero critical and zero high findings open = launch gate. Mediums require core team sign-off.

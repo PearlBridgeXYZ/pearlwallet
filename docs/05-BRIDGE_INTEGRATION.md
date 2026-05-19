@@ -18,7 +18,7 @@ The wallet integrates this **natively** — meaning a "Bridge" button on the das
 
 ## What the build team needs from PearlBridge
 
-The PearlBridge project lives at `(PearlBridge repo)`. Pull these artifacts into `pearl-web-wallet/reference/`:
+The PearlBridge project artifacts are tracked separately by the bridge team. Pull these into `pearl-web-wallet/reference/`:
 
 1. **Mainnet deployment.json** — contract addresses (BridgeRouter, WPRL, lock address per chain).
 2. **WPRL ABI** — for ERC-20 ops + bridge-specific methods (`burn(uint256 amount, bytes32 pearlRecipient)` or similar).
@@ -227,7 +227,7 @@ Show "X / Y daily mint capacity remaining" as a info row on the bridge screen.
 
 ## Reference contract addresses
 
-To be filled by build team from `(PearlBridge repo)deployment*.json`:
+To be filled by build team from PearlBridge `deployment*.json`:
 
 ```ts
 // MAINNET (Ethereum chainId 1)

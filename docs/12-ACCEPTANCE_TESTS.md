@@ -6,7 +6,7 @@ A milestone is done when:
 1. Every checkbox in `docs/08-BUILD_PLAN.md` for that milestone is checked.
 2. All tests in this document for that milestone pass.
 3. CI green on `main` after the milestone PR(s) merge.
-4. G or Lead signs off.
+4. Core team or Lead signs off.
 
 ## Test categories
 
@@ -31,7 +31,7 @@ Per-module, mostly pure functions. Coverage targets:
 ### End-to-end (Playwright on Pearl testnet + Eth Sepolia)
 - Full user flows against live testnets.
 
-### Manual / human acceptance (G or Lead)
+### Manual / human acceptance (Core team or Lead)
 - Onboarding feels right.
 - Copy reads well.
 - No surprising motion.
@@ -150,7 +150,7 @@ Per-module, mostly pure functions. Coverage targets:
 - Best Practices = 100
 - SEO ≥ 90
 
-**Smoke test (manual, by G or Lead):**
+**Smoke test (manual, by Core team or Lead):**
 - Create wallet, receive mainnet PRL from a known source, send 0.01 PRL, bridge 0.01 PRL → WPRL, bridge WPRL → PRL. Whole flow in < 15 min on a phone.
 
 ## Regression tests (every PR)
@@ -200,14 +200,14 @@ Linked from `/about` in the wallet and `README.md` of the repo.
 
 - Scope: the wallet (web app + RPC proxy + indexer).
 - Out of scope: PearlBridge contracts (they have their own bounty), pearld upstream, browsers.
-- Severity / payout schedule TBD with G; modeled on Immunefi templates.
+- Severity / payout schedule TBD with the core team; modeled on Immunefi templates.
 - Reported via `bridgedev@mailbox.org` PGP-signed or via a secure submission form at `/security`.
 
 ## Sunset criteria
 
 We sunset the wallet only if:
 - PearlBridge is sunset.
-- A clearly better OSS Pearl wallet emerges and G blesses migration.
+- A clearly better OSS Pearl wallet emerges and the core team blesses migration.
 - Active vulnerability we can't patch within a quarter.
 
 If sunset: announce 3 months in advance; export tool for users to extract their data; redirect to chosen replacement.

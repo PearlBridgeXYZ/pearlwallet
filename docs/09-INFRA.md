@@ -206,7 +206,7 @@ At `status.pearlwallet.xyz`. Reads JSON updated by a cron on a VPS:
 - Bundle hash matches latest tagged release
 
 ### Alerts
-- Pearl RPC down 5min → Telegram alert to G via existing `tg-send-logged.sh` wrapper.
+- Pearl RPC down 5min → Telegram alert via existing `tg-send-logged.sh` wrapper.
 - Bundle hash drift → CRITICAL alert (possible compromise).
 - npm audit high/critical opened on a dep → notice via Renovate PR notifications.
 

@@ -21,13 +21,13 @@ Cloudflare Pages SPA + Cloudflare Worker RPC proxy + Primary pearld/esplora inde
 9 weeks to mainnet beta. Audit gate at week 7.
 
 ## Repo
-`PearlBridgeXYZ/pearl-web-wallet` (private until first audit).
+`PearlBridgeXYZ/pearlwallet` (private until first audit).
 
 ## First steps for the team
 
 **Day 1:**
 1. Read `README.md` and `docs/11-OPEN_QUESTIONS.md`.
-2. Get answers to **Q1** (SLIP-44 coin type) and **Q2** (testnet HRP) from G / Pearl chain leads.
+2. Get answers to **Q1** (SLIP-44 coin type) and **Q2** (testnet HRP) from the Pearl chain leads.
 3. Stand up the repo with the boilerplate described in `docs/02-ARCHITECTURE.md`.
 4. Provision a small VPS for testnet pearld + esplora.
 
@@ -39,9 +39,9 @@ Cloudflare Pages SPA + Cloudflare Worker RPC proxy + Primary pearld/esplora inde
 **Audit firm:** start procurement TODAY. 4-week lead time for TOB / Cure53.
 
 ## Who to contact
-- **Product / approvals:** G (handles in `~/CLAUDE.md`).
-- **Infra / context / vault:** Bridge Developer (`bridgedev@mailbox.org`).
-- **PearlBridge contracts / relayer:** PearlBridge team (Bernard can route).
+- **Product / approvals:** PearlBridge core team.
+- **Infra / context:** Bridge Developer (`bridgedev@mailbox.org`).
+- **PearlBridge contracts / relayer:** PearlBridge team (Bridge Developer can route).
 
 ## Definition of "good"
 You'd put your own keys in it. If you wouldn't, fix the thing that scares you before shipping.

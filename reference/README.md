@@ -2,7 +2,7 @@
 
 This directory holds external artifacts the build team needs to copy in (or symlink) before code starts. They're not committed by default — `.gitignore` may exclude them — but they're listed here so it's obvious what's needed.
 
-## From PearlBridge (`(PearlBridge repo)`)
+## From PearlBridge
 
 Required:
 - `deployment-mainnet.json` — mainnet contract addresses (WPRL, BridgeRouter, lock address).
@@ -13,15 +13,7 @@ Required:
 - `docs/eip712-domain.md` — domain + types for mint signature.
 - `relay/openapi.yaml` — relayer HTTP API spec.
 
-Pull command (run by build team):
-```bash
-cp (PearlBridge repo)deployment-mainnet.json reference/
-cp (PearlBridge repo)contracts/abi/BridgeRouter.json reference/
-cp (PearlBridge repo)contracts/abi/WPRL.json reference/
-cp (PearlBridge repo)docs/*.md reference/
-```
-
-If any of these don't exist yet, that's an **Open Question** — file it back to PearlBridge team.
+The Bridge Developer can route these from the PearlBridge repo; otherwise file an Open Question back to the bridge team.
 
 ## From Pearl L1 chain spec
 
@@ -32,14 +24,13 @@ Required:
 - Pearl SLIP-44 coin type (if assigned).
 - Pearl test vectors for taproot key-path spends (Pearl testnet).
 
-Source: Pearl chain leads (G to route).
+Source: Pearl chain leads.
 
-## From local tooling infra
+## Useful tooling
 
-Useful (not blocking):
-- `(crypto gas helper)` — tier-based EIP-1559 fee policy reference.
-- `(crypto skill docs)` — Pearl wallet ledger + policies.
-- `~/scripts/tg-send-logged.sh` — for status alerts integration.
+- A tier-based EIP-1559 fee policy reference (Bridge Developer can share).
+- Pearl wallet ledger + policies (Bridge Developer can share).
+- A status-alert webhook for ops integration.
 
 ## Test vectors needed (collect in `reference/test-vectors/`)
 

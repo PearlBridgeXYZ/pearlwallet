@@ -2,7 +2,7 @@
 
 **Status:** Spec only. No code yet.
 **Author of spec:** Bridge Developer, 2026-05-17.
-**Owner / final say:** G.
+**Owner / final say:** PearlBridge core team.
 
 A non-custodial, browser-based wallet for **Pearl L1 (PRL)** retail holders, with **PearlBridge** integration so users can hold/send PRL on Pearl L1 and WPRL on Ethereum, and move between the two without ever leaving the wallet.
 
@@ -36,7 +36,7 @@ Retail PRL holders. Not institutions. Not miners (we don't surface payout stream
 - Browser extension surface — v2
 - Mobile native app (iOS / Android) — v2
 - NFTs, DeFi positions, governance — never
-- Mining payout streams — explicitly out per G
+- Mining payout streams — explicitly out of scope
 - Fiat on/off-ramps — partnership, not v1 product
 
 ## Repo layout (proposed)
@@ -85,10 +85,10 @@ Read in this order:
 
 ## Build-vs-buy
 
-Before any code is written, the build team is expected to reread `docs/02-ARCHITECTURE.md §Build-vs-Buy` and confirm with G that forking an existing Bitcoin-Taproot browser wallet (Leather, Xverse) is NOT the right path. G's directive as of 2026-05-17 is to build custom; the spec proceeds on that basis but the alternative is documented so it doesn't get re-litigated mid-build.
+Before any code is written, the build team is expected to reread `docs/02-ARCHITECTURE.md §Build-vs-Buy` and confirm with the core team that forking an existing Bitcoin-Taproot browser wallet (Leather, Xverse) is NOT the right path. The team directive as of 2026-05-17 is to build custom; the spec proceeds on that basis but the alternative is documented so it doesn't get re-litigated mid-build.
 
 ## Contact
 
-- **Owner:** G (handles in CLAUDE.md)
+- **Owner:** PearlBridge core team
 - **Spec author:** Bridge Developer — `bridgedev@mailbox.org`
 - **Build-team comms channel:** TBD (likely a dedicated Telegram group + a GitHub repo under `PearlBridgeXYZ` org)
