@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
-import { useUI } from "../../state/ui-store";
 import { validEth } from "../../lib/validate";
 import { formatWei, parseWPRL } from "../../lib/format";
 
@@ -15,7 +14,6 @@ const GAS_BY_TIER: Record<GasTier, string> = {
 
 export default function SendWPRL() {
   const navigate = useNavigate();
-  const mockMode = useUI((s) => s.mockMode);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
@@ -23,7 +21,7 @@ export default function SendWPRL() {
   const [password, setPassword] = useState("");
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
-  const [txHash, setTxHash] = useState<string | null>(null);
+  const [txHash] = useState<string | null>(null);
 
   function validate(): { dest: string; wei: bigint } | null {
     if (!validEth(destination)) {
@@ -46,19 +44,9 @@ export default function SendWPRL() {
   }
 
   async function broadcast() {
-    if (!mockMode) {
-      setError("Live Eth send not wired yet (gated on Q4/Q5 in docs/11).");
-      return;
-    }
-    if (password.length < 1) {
-      setError("Enter your password to authorize the send.");
-      return;
-    }
-    await new Promise((r) => setTimeout(r, 800));
-    const bytes = new Uint8Array(32);
-    crypto.getRandomValues(bytes);
-    setTxHash("0x" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join(""));
-    setStage("sent");
+    setError(
+      "Live WPRL send from this wallet UI is not yet enabled. Use your existing Ethereum wallet to transfer WPRL.",
+    );
   }
 
   if (stage === "sent") {

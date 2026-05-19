@@ -1,0 +1,13 @@
+{
+  "name": "PearlWallet",
+  "short_name": "PearlWallet",
+  "description": "Non-custodial browser wallet for Pearl L1 and WPRL with native PearlBridge integration.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#040711",
+  "theme_color": "#1f2940",
+  "icons": [
+    { "src": "/logo-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/logo-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

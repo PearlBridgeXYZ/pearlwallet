@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
-import { useUI } from "../../state/ui-store";
 import { formatGrains, formatWei, parsePRL, parseWPRL, shortAddr } from "../../lib/format";
 import { readBridgeFees, type BridgeFees } from "../../services/bridge";
 import { MINT_FEE_BPS_DEFAULT, BURN_FEE_BPS_DEFAULT } from "../../chains/ethereum/network";
@@ -13,14 +12,13 @@ type Step = "compose" | "preview" | "status";
 export default function Bridge() {
   const navigate = useNavigate();
   const addresses = useWallet((s) => s.addresses);
-  const mockMode = useUI((s) => s.mockMode);
 
   const [direction, setDirection] = useState<Direction>("prl-to-wprl");
   const [amount, setAmount] = useState("");
   const [password, setPassword] = useState("");
   const [step, setStep] = useState<Step>("compose");
   const [error, setError] = useState<string | null>(null);
-  const [statusStep, setStatusStep] = useState<0 | 1 | 2 | 3>(0);
+  const [statusStep] = useState<0 | 1 | 2 | 3>(0);
   const [fees, setFees] = useState<BridgeFees>({
     mintFeeBps: MINT_FEE_BPS_DEFAULT,
     burnFeeBps: BURN_FEE_BPS_DEFAULT,
@@ -30,12 +28,11 @@ export default function Bridge() {
   // Read live fees from the BridgeController on mount. Falls back to defaults.
   useEffect(() => {
     let cancelled = false;
-    if (mockMode) return;
     readBridgeFees("mainnet")
       .then((f) => { if (!cancelled) setFees(f); })
       .catch(() => { /* fee defaults already set */ });
     return () => { cancelled = true; };
-  }, [mockMode]);
+  }, []);
 
   const isPrlSide = direction === "prl-to-wprl";
   const symbol = isPrlSide ? "PRL" : "WPRL";
@@ -57,21 +54,9 @@ export default function Bridge() {
   }, [amount, isPrlSide, activeFeeBps]);
 
   async function bridge() {
-    if (!mockMode) {
-      setError("Live bridge integration gated on docs/11 Q6 (relayer API) and Q4 (contract addresses).");
-      return;
-    }
-    if (!password) {
-      setError("Enter your password to authorize.");
-      return;
-    }
-    setStep("status");
-    // Mock the 3-step progression.
-    setStatusStep(1);
-    await new Promise((r) => setTimeout(r, 1500));
-    setStatusStep(2);
-    await new Promise((r) => setTimeout(r, 1500));
-    setStatusStep(3);
+    setError(
+      "Bridging from this wallet UI is not yet enabled. Use https://pearlbridge.xyz directly.",
+    );
   }
 
   if (step === "status") {

@@ -18,7 +18,6 @@ const FEE_BY_TIER: Record<FeeTier, bigint> = {
 export default function SendPRL() {
   const navigate = useNavigate();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
-  const mockMode = useUI((s) => s.mockMode);
   const tipEnabledGlobal = useUI((s) => s.tipEnabled);
 
   const [destination, setDestination] = useState("");
@@ -27,7 +26,7 @@ export default function SendPRL() {
   const [password, setPassword] = useState("");
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
-  const [txHash, setTxHash] = useState<string | null>(null);
+  const [txHash] = useState<string | null>(null);
   // Per-transaction override: starts at the global preference so the
   // user can turn this off for a single send without changing settings.
   const [tipThisTx, setTipThisTx] = useState(tipEnabledGlobal);
@@ -53,22 +52,10 @@ export default function SendPRL() {
   }
 
   async function broadcast() {
-    if (!mockMode) {
-      setError("Live Pearl RPC not wired yet (gated on Q3/Q4 in docs/11).");
-      return;
-    }
-    if (password.length < 1) {
-      setError("Enter your password to authorize the send.");
-      return;
-    }
-    // Mock: pretend we built + signed + broadcast. Use a real CSPRNG
-    // so the placeholder hash doesn't look like attacker-predictable noise.
-    await new Promise((r) => setTimeout(r, 800));
-    const bytes = new Uint8Array(8);
-    crypto.getRandomValues(bytes);
-    const fakeHash = "mock_" + Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-    setTxHash(fakeHash);
-    setStage("sent");
+    setError(
+      "Live PRL send from this wallet UI is in progress. Tx construction is wired " +
+        "and tested; broadcast UI lands in v0.2. Balances + receive work normally.",
+    );
   }
 
   if (stage === "sent") {

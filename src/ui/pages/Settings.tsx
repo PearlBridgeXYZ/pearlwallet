@@ -14,8 +14,6 @@ export default function Settings() {
   const changePassword = useWallet((s) => s.changePassword);
   const theme = useUI((s) => s.theme);
   const setTheme = useUI((s) => s.setTheme);
-  const mockMode = useUI((s) => s.mockMode);
-  const setMockMode = useUI((s) => s.setMockMode);
   const pearlRpcOverride = useUI((s) => s.pearlRpcOverride);
   const setPearlRpcOverride = useUI((s) => s.setPearlRpcOverride);
   const tipEnabled = useUI((s) => s.tipEnabled);
@@ -274,18 +272,6 @@ export default function Settings() {
             </label>
           ))}
         </div>
-      </section>
-
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Developer</h2>
-        <label className="mt-3 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={mockMode}
-            onChange={(e) => setMockMode(e.target.checked)}
-          />
-          Mock mode (balances + send + bridge are simulated until live RPCs are wired)
-        </label>
       </section>
 
       <section className="card mb-4 border-red-200 dark:border-red-900/40">

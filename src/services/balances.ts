@@ -3,37 +3,21 @@
 // searchrawtransactions (UTXO walk). On RPC failure the UI surfaces
 // `error` rather than showing a stale or fabricated value.
 
-import { useUI } from "../state/ui-store";
 import { readWprlBalance } from "./bridge";
 import { fetchPrlBalanceGrains } from "./pearl-rpc";
+import { fetchPrlPriceUsd } from "./prices";
 
 export interface Balances {
   prl: bigint;        // grains (10^8)
   wprl: bigint;       // wei (10^18)
   prlUsd: number;
   wprlUsd: number;
-  prlSource: "live" | "mock" | "error";
-  wprlSource: "live" | "mock" | "error";
+  prlSource: "live" | "error";
+  wprlSource: "live" | "error";
+  priceSource: "live" | "error";
 }
 
-const MOCK_BALANCES: Pick<Balances, "prl" | "wprl" | "prlUsd" | "wprlUsd"> = {
-  prl: 100_00000000n,
-  wprl: 100_000000000000000000n,
-  prlUsd: 6.20,
-  wprlUsd: 6.15,
-};
-
 export async function fetchBalances(pearlAddr: string, ethAddr: string): Promise<Balances> {
-  const mock = useUI.getState().mockMode;
-  if (mock) {
-    await new Promise((r) => setTimeout(r, 250));
-    return {
-      ...MOCK_BALANCES,
-      prlSource: "mock",
-      wprlSource: "mock",
-    };
-  }
-
   let prl = 0n;
   let prlSource: Balances["prlSource"] = "live";
   try {
@@ -50,13 +34,22 @@ export async function fetchBalances(pearlAddr: string, ethAddr: string): Promise
     wprlSource = "error";
   }
 
-  // USD prices: not wired yet — leave 0; UI hides USD col when missing.
+  let price = 0;
+  let priceSource: Balances["priceSource"] = "live";
+  try {
+    price = await fetchPrlPriceUsd();
+  } catch {
+    priceSource = "error";
+  }
+
   return {
     prl,
     wprl,
-    prlUsd: 0,
-    wprlUsd: 0,
+    // WPRL is 1:1 wrapped PRL — same USD price.
+    prlUsd: price,
+    wprlUsd: price,
     prlSource,
     wprlSource,
+    priceSource,
   };
 }
