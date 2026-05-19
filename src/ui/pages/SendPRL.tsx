@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { validPearl } from "../../lib/validate";
 import { formatGrains, parsePRL } from "../../lib/format";
+import { computeTipGrains, tipAddressFor } from "../../chains/pearl/tip";
 
 type FeeTier = "low" | "normal" | "high";
 
@@ -18,6 +19,7 @@ export default function SendPRL() {
   const navigate = useNavigate();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
   const mockMode = useUI((s) => s.mockMode);
+  const tipEnabledGlobal = useUI((s) => s.tipEnabled);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
@@ -26,6 +28,9 @@ export default function SendPRL() {
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
+  // Per-transaction override: starts at the global preference so the
+  // user can turn this off for a single send without changing settings.
+  const [tipThisTx, setTipThisTx] = useState(tipEnabledGlobal);
 
   function validate(): { dest: string; grains: bigint } | null {
     if (!validPearl(destination, pearlNetwork)) {
@@ -90,6 +95,8 @@ export default function SendPRL() {
   if (stage === "preview") {
     const v = validate();
     const feeFor = FEE_BY_TIER[tier];
+    const tipGrains = v && tipThisTx ? computeTipGrains(v.grains) : 0n;
+    const totalGrains = v ? v.grains + feeFor + tipGrains : 0n;
     return (
       <Page title="Send PRL">
         <div className="card">
@@ -107,11 +114,41 @@ export default function SendPRL() {
               <dt className="text-ink-500">Fee ({tier})</dt>
               <dd>{formatGrains(feeFor)} PRL</dd>
             </div>
+            {tipThisTx && (
+              <div className="flex justify-between">
+                <dt className="text-ink-500">
+                  Tip to PearlBridge (10 bps, min 1 PRL)
+                </dt>
+                <dd>{formatGrains(tipGrains)} PRL</dd>
+              </div>
+            )}
             <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
               <dt className="font-medium">Total</dt>
-              <dd className="font-medium">{v ? formatGrains(v.grains + feeFor) : "—"} PRL</dd>
+              <dd className="font-medium">{formatGrains(totalGrains)} PRL</dd>
             </div>
           </dl>
+
+          <label className="mt-4 flex items-start gap-2 rounded-xl border border-ink-200 p-3 text-sm dark:border-ink-700">
+            <input
+              type="checkbox"
+              checked={tipThisTx}
+              onChange={(e) => setTipThisTx(e.target.checked)}
+              className="mt-1"
+            />
+            <span>
+              Tip the PearlBridge dev team{" "}
+              <span className="font-medium">10 bps</span> (min{" "}
+              <span className="font-medium">1 PRL</span>) on this transaction.
+              <span className="ml-1 text-xs text-ink-500">
+                You can turn this off permanently in{" "}
+                <Link to="/settings" className="underline">Settings</Link>
+                {" "}— the wallet is free to use.
+              </span>
+            </span>
+          </label>
+          <p className="mt-2 break-all text-xs text-ink-500">
+            Tip goes to <span className="font-mono">{tipAddressFor(pearlNetwork)}</span>.
+          </p>
           <p className="mt-4 text-sm text-amber-700 dark:text-amber-400">
             This cannot be undone.
           </p>

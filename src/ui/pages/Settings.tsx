@@ -20,6 +20,8 @@ export default function Settings() {
   const setMockMode = useUI((s) => s.setMockMode);
   const pearlRpcOverride = useUI((s) => s.pearlRpcOverride);
   const setPearlRpcOverride = useUI((s) => s.setPearlRpcOverride);
+  const tipEnabled = useUI((s) => s.tipEnabled);
+  const setTipEnabled = useUI((s) => s.setTipEnabled);
 
   const defaultRpcUrl = pearlParams(pearlNetwork).rpcUrl;
   const [rpcDraft, setRpcDraft] = useState(pearlRpcOverride);
@@ -251,6 +253,35 @@ export default function Settings() {
           </button>
         </div>
         {rpcStatus && <p className="mt-2 text-xs text-ink-500">{rpcStatus}</p>}
+      </section>
+
+      <section className="card mb-4">
+        <h2 className="text-sm font-semibold">Tip the PearlBridge devs</h2>
+        <p className="mt-2 text-xs text-ink-500">
+          When you send PRL, the wallet can add a small tip output to the
+          PearlBridge developer fees address — <span className="font-medium">10 bps</span>{" "}
+          of the send amount, with a <span className="font-medium">1 PRL</span> floor for
+          small transactions. The tip helps keep the project running.
+        </p>
+        <p className="mt-1 text-xs text-ink-500">
+          <span className="font-medium">It's fully optional.</span> Uncheck this box, save,
+          and the wallet will never add a tip output — using the wallet is free
+          beyond on-chain fees.
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={tipEnabled}
+            onChange={(e) => setTipEnabled(e.target.checked)}
+          />
+          Enable tip on outgoing PRL transactions (default on)
+        </label>
+        <p className="mt-2 text-xs text-ink-500">
+          Status:{" "}
+          {tipEnabled
+            ? "tip ON — 10 bps / 1 PRL min will appear in send previews"
+            : "tip OFF — no extra output is added to your transactions"}
+        </p>
       </section>
 
       <section className="card mb-4">

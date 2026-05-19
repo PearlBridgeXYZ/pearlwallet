@@ -7,9 +7,13 @@ interface UIState {
   mockMode: boolean;
   // Empty string = use the built-in default for the current network.
   pearlRpcOverride: string;
+  // PearlBridge developer tip — opt-in by default. Disabling sends no
+  // extra output and costs nothing beyond on-chain fees.
+  tipEnabled: boolean;
   setTheme(t: Theme): void;
   setMockMode(v: boolean): void;
   setPearlRpcOverride(url: string): void;
+  setTipEnabled(v: boolean): void;
 }
 
 const STORAGE_KEY = "pearl-wallet-ui";
@@ -18,9 +22,15 @@ interface PersistedUI {
   theme: Theme;
   mockMode: boolean;
   pearlRpcOverride: string;
+  tipEnabled: boolean;
 }
 
-const DEFAULT_UI: PersistedUI = { theme: "system", mockMode: true, pearlRpcOverride: "" };
+const DEFAULT_UI: PersistedUI = {
+  theme: "system",
+  mockMode: true,
+  pearlRpcOverride: "",
+  tipEnabled: true,
+};
 
 function loadUI(): PersistedUI {
   if (typeof localStorage === "undefined") return DEFAULT_UI;
@@ -45,6 +55,7 @@ export const useUI = create<UIState>((set, get) => ({
   theme: initial.theme,
   mockMode: initial.mockMode,
   pearlRpcOverride: initial.pearlRpcOverride,
+  tipEnabled: initial.tipEnabled,
   setTheme(t) {
     set({ theme: t });
     saveUI({ ...persistedSnapshot(get()), theme: t });
@@ -57,8 +68,17 @@ export const useUI = create<UIState>((set, get) => ({
     set({ pearlRpcOverride: url });
     saveUI({ ...persistedSnapshot(get()), pearlRpcOverride: url });
   },
+  setTipEnabled(v) {
+    set({ tipEnabled: v });
+    saveUI({ ...persistedSnapshot(get()), tipEnabled: v });
+  },
 }));
 
 function persistedSnapshot(s: UIState): PersistedUI {
-  return { theme: s.theme, mockMode: s.mockMode, pearlRpcOverride: s.pearlRpcOverride };
+  return {
+    theme: s.theme,
+    mockMode: s.mockMode,
+    pearlRpcOverride: s.pearlRpcOverride,
+    tipEnabled: s.tipEnabled,
+  };
 }
