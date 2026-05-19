@@ -3,14 +3,30 @@ import { BUILD_GIT_SHA, BUILD_TIME, BUILD_VERSION } from "../../build-info";
 
 export default function About() {
   return (
-    <Page title="About this wallet">
+    <Page title="About PearlWallet">
       <div className="card space-y-4 text-sm">
         <section>
           <h2 className="font-semibold">What is this?</h2>
           <p className="mt-1 text-ink-600 dark:text-ink-300">
-            Pearl Web Wallet is a non-custodial browser wallet for Pearl L1 (PRL) and the
+            PearlWallet is a non-custodial browser wallet for Pearl L1 (PRL) and the
             Ethereum-side wrapper (WPRL). Your keys are generated, encrypted, and used entirely
             in your browser. We never see them.
+          </p>
+        </section>
+
+        <section>
+          <h2 className="font-semibold">Open source</h2>
+          <p className="mt-1 text-ink-600 dark:text-ink-300">
+            Every line of code that touches your keys is auditable. The repository lives at{" "}
+            <a
+              href="https://github.com/PearlBridgeXYZ/pearlwallet"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2"
+            >
+              github.com/PearlBridgeXYZ/pearlwallet
+            </a>
+            . Reproducible builds: the build SHA shown below matches the public commit.
           </p>
         </section>
 

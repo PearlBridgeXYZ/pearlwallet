@@ -1,15 +1,14 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { formatGrains, formatWei, parsePRL, parseWPRL, shortAddr } from "../../lib/format";
+import { readBridgeFees, type BridgeFees } from "../../services/bridge";
+import { MINT_FEE_BPS_DEFAULT, BURN_FEE_BPS_DEFAULT } from "../../chains/ethereum/network";
 
 type Direction = "prl-to-wprl" | "wprl-to-prl";
 type Step = "compose" | "preview" | "status";
-
-const MINT_FEE_BPS = 50; // 0.5% — placeholder until contracts.ts populated.
-const BURN_FEE_BPS = 50;
 
 export default function Bridge() {
   const navigate = useNavigate();
@@ -22,23 +21,40 @@ export default function Bridge() {
   const [step, setStep] = useState<Step>("compose");
   const [error, setError] = useState<string | null>(null);
   const [statusStep, setStatusStep] = useState<0 | 1 | 2 | 3>(0);
+  const [fees, setFees] = useState<BridgeFees>({
+    mintFeeBps: MINT_FEE_BPS_DEFAULT,
+    burnFeeBps: BURN_FEE_BPS_DEFAULT,
+    source: "fallback",
+  });
+
+  // Read live fees from the BridgeController on mount. Falls back to defaults.
+  useEffect(() => {
+    let cancelled = false;
+    if (mockMode) return;
+    readBridgeFees("mainnet")
+      .then((f) => { if (!cancelled) setFees(f); })
+      .catch(() => { /* fee defaults already set */ });
+    return () => { cancelled = true; };
+  }, [mockMode]);
 
   const isPrlSide = direction === "prl-to-wprl";
   const symbol = isPrlSide ? "PRL" : "WPRL";
   const recvSymbol = isPrlSide ? "WPRL" : "PRL";
 
+  const activeFeeBps = isPrlSide ? fees.mintFeeBps : fees.burnFeeBps;
+
   const preview = useMemo(() => {
     try {
       if (!amount.trim()) return null;
       const native = isPrlSide ? parsePRL(amount) : parseWPRL(amount);
-      const feeBps = BigInt(isPrlSide ? MINT_FEE_BPS : BURN_FEE_BPS);
+      const feeBps = BigInt(activeFeeBps);
       const fee = (native * feeBps) / 10000n;
       const recv = native - fee;
       return { native, fee, recv };
     } catch {
       return null;
     }
-  }, [amount, isPrlSide]);
+  }, [amount, isPrlSide, activeFeeBps]);
 
   async function bridge() {
     if (!mockMode) {
@@ -110,7 +126,12 @@ export default function Bridge() {
               <dd>{isPrlSide ? formatGrains(preview.native) : formatWei(preview.native)} {symbol}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Bridge fee ({(isPrlSide ? MINT_FEE_BPS : BURN_FEE_BPS) / 100}%)</dt>
+              <dt className="text-ink-500">
+                Bridge fee ({activeFeeBps / 100}%)
+                {fees.source === "fallback" && (
+                  <span className="ml-1 text-xs text-amber-600">· est.</span>
+                )}
+              </dt>
               <dd>{isPrlSide ? formatGrains(preview.fee) : formatWei(preview.fee)} {symbol}</dd>
             </div>
             <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">

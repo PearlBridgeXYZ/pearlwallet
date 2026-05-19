@@ -10,7 +10,7 @@ export default function Splash() {
     <div className="flex min-h-full items-center justify-center px-6 py-10">
       <div className="w-full max-w-md text-center">
         <div className="mx-auto mb-6 h-20 w-20 rounded-full bg-gradient-to-br from-pearl-100 via-pearl-300 to-pearl-800 shadow-lg" />
-        <h1 className="text-3xl font-semibold tracking-tight">Pearl Web Wallet</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">PearlWallet</h1>
         <p className="mt-2 text-sm text-ink-500 dark:text-ink-400">
           Non-custodial. PRL and WPRL in one place.
         </p>
@@ -29,8 +29,16 @@ export default function Splash() {
           )}
         </div>
 
-        <footer className="mt-12 text-xs text-ink-400">
-          v{BUILD_VERSION} · build {BUILD_GIT_SHA}
+        <footer className="mt-12 flex flex-col items-center gap-1 text-xs text-ink-400">
+          <a
+            href="https://github.com/PearlBridgeXYZ/pearlwallet"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline-offset-2 hover:underline"
+          >
+            Open source · github.com/PearlBridgeXYZ/pearlwallet
+          </a>
+          <span>v{BUILD_VERSION} · build {BUILD_GIT_SHA}</span>
         </footer>
       </div>
     </div>
