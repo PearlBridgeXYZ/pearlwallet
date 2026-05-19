@@ -186,7 +186,7 @@ export default function SendPRL() {
           <span className="label">Destination address</span>
           <input
             className="input mono"
-            placeholder={`${pearlNetwork === "mainnet" ? "prl1p..." : "tprl1p..."}`}
+            placeholder="prl1p..."
             value={destination}
             autoComplete="off"
             autoCapitalize="off"

@@ -12,8 +12,6 @@ export default function Settings() {
   const wipe = useWallet((s) => s.wipe);
   const exportMnemonic = useWallet((s) => s.exportMnemonic);
   const changePassword = useWallet((s) => s.changePassword);
-  const pearlNetwork = useWallet((s) => s.pearlNetwork);
-  const setPearlNetwork = useWallet((s) => s.setPearlNetwork);
   const theme = useUI((s) => s.theme);
   const setTheme = useUI((s) => s.setTheme);
   const mockMode = useUI((s) => s.mockMode);
@@ -23,7 +21,7 @@ export default function Settings() {
   const tipEnabled = useUI((s) => s.tipEnabled);
   const setTipEnabled = useUI((s) => s.setTipEnabled);
 
-  const defaultRpcUrl = pearlParams(pearlNetwork).rpcUrl;
+  const defaultRpcUrl = pearlParams().rpcUrl;
   const [rpcDraft, setRpcDraft] = useState(pearlRpcOverride);
   const [rpcStatus, setRpcStatus] = useState<string | null>(null);
 
@@ -200,29 +198,6 @@ export default function Settings() {
             </button>
           </div>
         )}
-      </section>
-
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Network</h2>
-        <div className="mt-3 flex items-center gap-3 text-sm">
-          <span>Pearl L1:</span>
-          <label className="flex items-center gap-1">
-            <input
-              type="radio"
-              checked={pearlNetwork === "mainnet"}
-              onChange={() => setPearlNetwork("mainnet")}
-            />
-            Mainnet
-          </label>
-          <label className="flex items-center gap-1">
-            <input
-              type="radio"
-              checked={pearlNetwork === "testnet"}
-              onChange={() => setPearlNetwork("testnet")}
-            />
-            Testnet
-          </label>
-        </div>
       </section>
 
       <section className="card mb-4">

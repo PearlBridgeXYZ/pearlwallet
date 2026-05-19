@@ -1,7 +1,6 @@
-// Pearl L1 network params. Default HRPs follow docs/06 + Q2 in docs/11.
-// Testnet HRP "tprl" is provisional; verify against Pearl chain spec before mainnet ship.
+// Pearl L1 network params. Mainnet-only — Pearl has no testnet.
 
-export type PearlNetwork = "mainnet" | "testnet";
+export type PearlNetwork = "mainnet";
 
 export interface PearlNetworkParams {
   name: PearlNetwork;
@@ -10,7 +9,7 @@ export interface PearlNetworkParams {
   rpcUrl: string;
   rpcLabel: string;
   explorerUrl: string;
-  // Network magic — provisional values pending Pearl spec confirmation.
+  // Network magic — provisional value pending Pearl spec confirmation.
   magic: number;
 }
 
@@ -29,25 +28,14 @@ export const PEARL_MAINNET: PearlNetworkParams = {
   magic: 0xd9b4bef9,
 };
 
-export const PEARL_TESTNET: PearlNetworkParams = {
-  name: "testnet",
-  hrp: "tprl",
-  decimals: 8,
-  rpcUrl: "https://rpc-testnet.pearlwallet.xyz/",
-  rpcLabel: "rpc-testnet.pearlwallet.xyz",
-  explorerUrl: "https://testnet-explorer.pearlbridge.xyz",
-  magic: 0x0b110907,
-};
-
 /**
  * Default network params. If a non-empty override is supplied (from
  * Settings → custom RPC), the rpcUrl + rpcLabel are replaced; all other
  * fields stay canonical so the address codec / explorer / magic don't
  * silently change when a user points at a third-party node.
  */
-export function pearlParams(net: PearlNetwork, override?: string): PearlNetworkParams {
-  const base = net === "mainnet" ? PEARL_MAINNET : PEARL_TESTNET;
+export function pearlParams(_net: PearlNetwork = "mainnet", override?: string): PearlNetworkParams {
   const trimmed = override?.trim();
-  if (!trimmed) return base;
-  return { ...base, rpcUrl: trimmed, rpcLabel: "custom" };
+  if (!trimmed) return PEARL_MAINNET;
+  return { ...PEARL_MAINNET, rpcUrl: trimmed, rpcLabel: "custom" };
 }

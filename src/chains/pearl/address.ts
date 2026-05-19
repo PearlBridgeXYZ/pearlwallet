@@ -2,7 +2,7 @@
 // Pearl is a btcd fork using SegWit v1 (Taproot, BIP-340 Schnorr).
 //
 // Encoding: bech32m, witness version 1, 32-byte x-only public key.
-// HRP: "prl" mainnet, "tprl" testnet (provisional — see docs/11 Q2).
+// HRP: "prl" (mainnet only — Pearl has no testnet).
 
 import { bech32m } from "@scure/base";
 import { secp256k1 } from "@noble/curves/secp256k1";

@@ -41,7 +41,6 @@ interface WalletState {
   exportMnemonic(password: string): Promise<string>;
   changePassword(oldPw: string, newPw: string): Promise<void>;
   touch(): void;
-  setPearlNetwork(net: PearlNetwork): Promise<void>;
   setEthNetwork(net: EthNetwork): void;
 }
 
@@ -60,7 +59,7 @@ export const useWallet = create<WalletState>((set, get) => ({
         status: "locked",
         blob: rec.blob,
         addresses: { pearl: rec.publicData.pearlAddress, eth: rec.publicData.ethAddress },
-        pearlNetwork: rec.publicData.pearlNetwork,
+        pearlNetwork: "mainnet",
         ethNetwork: rec.publicData.ethNetwork,
       });
     } else {
@@ -179,15 +178,6 @@ export const useWallet = create<WalletState>((set, get) => ({
 
   touch() {
     set({ lastActivity: Date.now() });
-  },
-
-  async setPearlNetwork(net) {
-    set({ pearlNetwork: net });
-    const rec = await loadKeystore();
-    if (rec) {
-      rec.publicData.pearlNetwork = net;
-      await db.keystore.put(rec);
-    }
   },
 
   setEthNetwork(net) {

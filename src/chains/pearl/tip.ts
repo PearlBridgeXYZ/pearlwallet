@@ -10,12 +10,10 @@ import type { PearlNetwork } from "./network";
 
 const PRL_GRAINS_PER_COIN = 100_000_000n;
 
-// Tip recipient addresses are public — only the receive side is in
+// Tip recipient address is public — only the receive side is in
 // the repo; the spending key is held by the PearlBridge core team.
-export const TIP_ADDRESSES: Record<PearlNetwork, string> = {
-  mainnet: "prl1ptzrunj28tua9uklxa3ses9nsl7g22s2qx2fdu9gf7wgvup58s94q9ldnxh",
-  testnet: "tprl1ptzrunj28tua9uklxa3ses9nsl7g22s2qx2fdu9gf7wgvup58s94qwsfdez",
-};
+export const TIP_ADDRESS_MAINNET =
+  "prl1ptzrunj28tua9uklxa3ses9nsl7g22s2qx2fdu9gf7wgvup58s94q9ldnxh";
 
 // 10 basis points = 0.1% = amount / 1000.
 export const TIP_BPS = 10n;
@@ -31,6 +29,6 @@ export function computeTipGrains(sendAmountGrains: bigint): bigint {
   return bpsTip > TIP_MIN_GRAINS ? bpsTip : TIP_MIN_GRAINS;
 }
 
-export function tipAddressFor(net: PearlNetwork): string {
-  return TIP_ADDRESSES[net];
+export function tipAddressFor(_net: PearlNetwork = "mainnet"): string {
+  return TIP_ADDRESS_MAINNET;
 }
