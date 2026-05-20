@@ -12,10 +12,8 @@ describe("pearlParams", () => {
   });
 
   it("applies an allowlisted RPC override without touching other params", () => {
-    // Allowlist (state/ui-store.ts): rpc.pearlwallet.xyz,
-    // ethereum-rpc.publicnode.com, eth.drpc.org, pearlbridge.xyz.
-    // Use a different allowlisted host than the default so we can prove
-    // the override path is exercised.
+    // v0.2.0 split: Pearl-side allowlist is rpc.pearlwallet.xyz + pearlbridge.xyz
+    // (ETH-side hosts moved to the dedicated ethRpcOverride allowlist).
     const p = pearlParams("mainnet", "https://pearlbridge.xyz/rpc");
     expect(p.rpcUrl).toBe("https://pearlbridge.xyz/rpc");
     expect(p.rpcLabel).toBe("custom");
@@ -39,7 +37,7 @@ describe("pearlParams", () => {
   });
 
   it("trims whitespace on override (allowlisted host)", () => {
-    const p = pearlParams("mainnet", "  https://eth.drpc.org/  ");
-    expect(p.rpcUrl).toBe("https://eth.drpc.org/");
+    const p = pearlParams("mainnet", "  https://pearlbridge.xyz/rpc  ");
+    expect(p.rpcUrl).toBe("https://pearlbridge.xyz/rpc");
   });
 });

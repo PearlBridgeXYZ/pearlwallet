@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { passwordAcceptable } from "../src/lib/validate";
 import { monotonicNow, __resetMonotonicForTests } from "../src/lib/monotonic";
 import { pearlParams, PEARL_MAINNET } from "../src/chains/pearl/network";
-import { isAllowedRpcOverride } from "../src/state/ui-store";
+import { isAllowedRpcOverride, isAllowedEthRpcOverride } from "../src/state/ui-store";
 import {
   evaluateGasCoverage,
 } from "../src/services/eth-tx";
@@ -62,11 +62,12 @@ describe("v0.1.9 / pearlParams allowlist re-validation (v0.1.8 Opus2 H-2)", () =
     expect(pearlParams("mainnet", "javascript:void(0)")).toBe(PEARL_MAINNET);
   });
 
-  it("accepts allowlisted hosts as overrides", () => {
+  it("accepts allowlisted Pearl hosts as overrides", () => {
+    // v0.2.0 narrowed the Pearl allowlist to Pearl-protocol hosts only.
+    // ETH-protocol hosts (drpc, publicnode) moved to the dedicated
+    // ethRpcOverride allowlist — see isAllowedEthRpcOverride.
     for (const host of [
       "https://rpc.pearlwallet.xyz/",
-      "https://ethereum-rpc.publicnode.com/",
-      "https://eth.drpc.org/",
       "https://pearlbridge.xyz/rpc",
     ]) {
       expect(isAllowedRpcOverride(host)).toBe(true);
@@ -74,6 +75,32 @@ describe("v0.1.9 / pearlParams allowlist re-validation (v0.1.8 Opus2 H-2)", () =
       expect(p.rpcUrl).toBe(host);
       expect(p.rpcLabel).toBe("custom");
     }
+  });
+
+  it("rejects ETH-protocol hosts on the Pearl override (v0.2.0 split)", () => {
+    expect(isAllowedRpcOverride("https://eth.drpc.org/")).toBe(false);
+    expect(isAllowedRpcOverride("https://ethereum-rpc.publicnode.com/")).toBe(false);
+  });
+});
+
+describe("v0.2.0 / isAllowedEthRpcOverride", () => {
+  it("accepts ETH-protocol hosts", () => {
+    expect(isAllowedEthRpcOverride("https://ethereum-rpc.publicnode.com/")).toBe(true);
+    expect(isAllowedEthRpcOverride("https://eth.drpc.org/")).toBe(true);
+  });
+
+  it("rejects Pearl-protocol hosts and unknown hosts", () => {
+    expect(isAllowedEthRpcOverride("https://rpc.pearlwallet.xyz/")).toBe(false);
+    expect(isAllowedEthRpcOverride("https://pearlbridge.xyz/rpc")).toBe(false);
+    expect(isAllowedEthRpcOverride("https://attacker.example/")).toBe(false);
+  });
+
+  it("rejects non-https schemes and the empty allow-zero case mirrors pearl", () => {
+    expect(isAllowedEthRpcOverride("http://eth.drpc.org/")).toBe(false);
+    expect(isAllowedEthRpcOverride("javascript:void(0)")).toBe(false);
+    // Empty string is the "no override, use defaults" sentinel and
+    // must always be accepted.
+    expect(isAllowedEthRpcOverride("")).toBe(true);
   });
 });
 

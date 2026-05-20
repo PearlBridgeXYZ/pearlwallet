@@ -2,17 +2,23 @@ import { create } from "zustand";
 
 export type Theme = "system" | "light" | "dark";
 
-// RPC override allowlist. CSP `connect-src` already restricts which hosts
-// the browser can fetch from, but the override field is persisted to
-// localStorage — a stray bookmarklet or malicious extension could write
-// arbitrary URLs there. Validating at the store boundary makes the
+// Pearl RPC override allowlist. CSP `connect-src` already restricts which
+// hosts the browser can fetch from, but the override field is persisted
+// to localStorage — a stray bookmarklet or malicious extension could
+// write arbitrary URLs there. Validating at the store boundary makes the
 // allowlist single-sourced (CSP + here) and gives the Settings UI a
 // machine-readable rejection reason. Empty string = use the default.
-const RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
+const PEARL_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "rpc.pearlwallet.xyz",
+  "pearlbridge.xyz",
+];
+
+// Ethereum RPC override allowlist. Same model as Pearl side. Restricted
+// to hosts CSP allows so a saved override never points at something the
+// browser would refuse to load (silent breakage = worst UX).
+const ETH_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "ethereum-rpc.publicnode.com",
   "eth.drpc.org",
-  "pearlbridge.xyz",
 ];
 
 export function isAllowedRpcOverride(url: string): boolean {
@@ -20,7 +26,18 @@ export function isAllowedRpcOverride(url: string): boolean {
   try {
     const u = new URL(url);
     if (u.protocol !== "https:") return false;
-    return RPC_OVERRIDE_ALLOWED_HOSTS.includes(u.host);
+    return PEARL_RPC_OVERRIDE_ALLOWED_HOSTS.includes(u.host);
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedEthRpcOverride(url: string): boolean {
+  if (url === "") return true;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    return ETH_RPC_OVERRIDE_ALLOWED_HOSTS.includes(u.host);
   } catch {
     return false;
   }
@@ -30,38 +47,54 @@ interface UIState {
   theme: Theme;
   // Empty string = use the built-in default sentry RPC.
   pearlRpcOverride: string;
+  // Empty string = use the built-in default Ethereum RPC (publicnode +
+  // drpc fallback). v0.2.0 surfaces this so a user running their own
+  // archive node can point the wallet at it.
+  ethRpcOverride: string;
   // PearlBridge developer tip — opt-in by default. Disabling sends no
   // extra output and costs nothing beyond on-chain fees.
   tipEnabled: boolean;
   // Experimental multisig surface. Default OFF — flips on a Vaults entry
   // in the nav and exposes the multisig flows behind it. Off means the
-  // wallet behaves exactly as singlesig has shipped since v0.1.x. We
-  // gate the surface (not the build) so users can flip the toggle to
-  // help test before the v0.2.0 audit lands.
+  // wallet behaves exactly as singlesig has shipped since v0.1.x. v0.2.0
+  // ships the full user flows behind this toggle.
   multisigEnabled: boolean;
+  // Ethereum surface (WPRL + ETH gas + PearlBridge). Default OFF in
+  // v0.2.0 — a Pearl-native user who never touches Eth shouldn't be
+  // forced to look at WPRL/ETH columns. Off hides the WPRL/ETH balance
+  // tiles, the Send WPRL / Send ETH / Bridge buttons, the Eth address
+  // line on Dashboard, and bounces the corresponding routes back to
+  // /dashboard. Singlesig PRL only stays the default-on experience.
+  ethEnabled: boolean;
   setTheme(t: Theme): void;
   setPearlRpcOverride(url: string): void;
+  setEthRpcOverride(url: string): void;
   setTipEnabled(v: boolean): void;
   setMultisigEnabled(v: boolean): void;
+  setEthEnabled(v: boolean): void;
 }
 
 // Bump the storage key whenever the shape changes so a stale persisted
 // blob doesn't carry forward a field that no longer exists (or worse,
-// is type-different).
-const STORAGE_KEY = "pearl-wallet-ui-v4";
+// is type-different). v4 → v5 in v0.2.0 for ethEnabled + ethRpcOverride.
+const STORAGE_KEY = "pearl-wallet-ui-v5";
 
 interface PersistedUI {
   theme: Theme;
   pearlRpcOverride: string;
+  ethRpcOverride: string;
   tipEnabled: boolean;
   multisigEnabled: boolean;
+  ethEnabled: boolean;
 }
 
 const DEFAULT_UI: PersistedUI = {
   theme: "system",
   pearlRpcOverride: "",
+  ethRpcOverride: "",
   tipEnabled: true,
   multisigEnabled: false,
+  ethEnabled: false,
 };
 
 function loadUI(): PersistedUI {
@@ -75,6 +108,9 @@ function loadUI(): PersistedUI {
     // bookmarklet) bypasses the setter's allowlist. Re-validate on load.
     if (!isAllowedRpcOverride(merged.pearlRpcOverride)) {
       merged.pearlRpcOverride = "";
+    }
+    if (!isAllowedEthRpcOverride(merged.ethRpcOverride)) {
+      merged.ethRpcOverride = "";
     }
     return merged;
   } catch {
@@ -92,8 +128,10 @@ const initial = loadUI();
 export const useUI = create<UIState>((set, get) => ({
   theme: initial.theme,
   pearlRpcOverride: initial.pearlRpcOverride,
+  ethRpcOverride: initial.ethRpcOverride,
   tipEnabled: initial.tipEnabled,
   multisigEnabled: initial.multisigEnabled,
+  ethEnabled: initial.ethEnabled,
   setTheme(t) {
     set({ theme: t });
     saveUI({ ...persistedSnapshot(get()), theme: t });
@@ -109,6 +147,13 @@ export const useUI = create<UIState>((set, get) => ({
     set({ pearlRpcOverride: url });
     saveUI({ ...persistedSnapshot(get()), pearlRpcOverride: url });
   },
+  setEthRpcOverride(url) {
+    if (!isAllowedEthRpcOverride(url)) {
+      throw new Error("E_ETH_RPC_OVERRIDE_NOT_ALLOWED");
+    }
+    set({ ethRpcOverride: url });
+    saveUI({ ...persistedSnapshot(get()), ethRpcOverride: url });
+  },
   setTipEnabled(v) {
     set({ tipEnabled: v });
     saveUI({ ...persistedSnapshot(get()), tipEnabled: v });
@@ -117,13 +162,19 @@ export const useUI = create<UIState>((set, get) => ({
     set({ multisigEnabled: v });
     saveUI({ ...persistedSnapshot(get()), multisigEnabled: v });
   },
+  setEthEnabled(v) {
+    set({ ethEnabled: v });
+    saveUI({ ...persistedSnapshot(get()), ethEnabled: v });
+  },
 }));
 
 function persistedSnapshot(s: UIState): PersistedUI {
   return {
     theme: s.theme,
     pearlRpcOverride: s.pearlRpcOverride,
+    ethRpcOverride: s.ethRpcOverride,
     tipEnabled: s.tipEnabled,
     multisigEnabled: s.multisigEnabled,
+    ethEnabled: s.ethEnabled,
   };
 }

@@ -79,16 +79,27 @@ export interface Balances {
   //   surface a warning so the user doesn't act on a low number.
   // "error" = whole walk failed.
   prlSource: "live" | "partial" | "error";
-  wprlSource: "live" | "error";
-  ethSource: "live" | "error";
+  wprlSource: "live" | "error" | "off";
+  ethSource: "live" | "error" | "off";
   priceSource: "live" | "error";
+}
+
+export interface FetchBalancesOpts {
+  /** v0.2.0: when the Ethereum surface is off in Settings the wallet
+   *  must not even reach for the Eth RPC — saves network calls, avoids
+   *  CSP-blocked requests showing up as errors in devtools, and keeps a
+   *  Pearl-only user fully off-eth. The Eth/WPRL fields are returned as
+   *  0n with `ethSource: "off"`/`wprlSource: "off"`. */
+  ethEnabled?: boolean;
 }
 
 export async function fetchBalances(
   pearlAddrs: string | string[],
   ethAddr: string,
+  opts: FetchBalancesOpts = {},
 ): Promise<Balances> {
   const pool = Array.isArray(pearlAddrs) ? pearlAddrs : [pearlAddrs];
+  const ethEnabled = opts.ethEnabled ?? true;
 
   let prl = 0n;
   let prlSource: Balances["prlSource"] = "live";
@@ -104,19 +115,23 @@ export async function fetchBalances(
   }
 
   let wprl = 0n;
-  let wprlSource: Balances["wprlSource"] = "live";
-  try {
-    wprl = await readWprlBalance(ethAddr as `0x${string}`, "mainnet");
-  } catch {
-    wprlSource = "error";
+  let wprlSource: Balances["wprlSource"] = ethEnabled ? "live" : "off";
+  if (ethEnabled) {
+    try {
+      wprl = await readWprlBalance(ethAddr as `0x${string}`, "mainnet");
+    } catch {
+      wprlSource = "error";
+    }
   }
 
   let eth = 0n;
-  let ethSource: Balances["ethSource"] = "live";
-  try {
-    eth = await fetchEthBalanceWei(ethAddr as `0x${string}`, "mainnet");
-  } catch {
-    ethSource = "error";
+  let ethSource: Balances["ethSource"] = ethEnabled ? "live" : "off";
+  if (ethEnabled) {
+    try {
+      eth = await fetchEthBalanceWei(ethAddr as `0x${string}`, "mainnet");
+    } catch {
+      ethSource = "error";
+    }
   }
 
   let price = 0;

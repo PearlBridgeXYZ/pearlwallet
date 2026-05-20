@@ -1,13 +1,23 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
+import { useUI } from "../../state/ui-store";
 import { dataUrl } from "../../lib/qr";
 
 type Tab = "prl" | "wprl";
 
 export default function Receive() {
   const addresses = useWallet((s) => s.addresses);
+  const ethEnabled = useUI((s) => s.ethEnabled);
   const [tab, setTab] = useState<Tab>("prl");
+
+  // If the user turns the Ethereum surface off while sitting on the
+  // WPRL tab, snap back to PRL so we don't try to render a tab that's
+  // hidden anyway. The state is cheap to flip; no need to bounce the
+  // whole page.
+  useEffect(() => {
+    if (!ethEnabled && tab === "wprl") setTab("prl");
+  }, [ethEnabled, tab]);
   const [qr, setQr] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -72,30 +82,32 @@ export default function Receive() {
 
   return (
     <Page title="Receive">
-      <div className="mb-4 inline-flex rounded-xl border border-ink-200 p-1 text-sm dark:border-ink-800">
-        <button
-          type="button"
-          onClick={() => setTab("prl")}
-          className={
-            tab === "prl"
-              ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
-              : "rounded-lg px-3 py-1 text-ink-500"
-          }
-        >
-          PRL
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("wprl")}
-          className={
-            tab === "wprl"
-              ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
-              : "rounded-lg px-3 py-1 text-ink-500"
-          }
-        >
-          WPRL
-        </button>
-      </div>
+      {ethEnabled && (
+        <div className="mb-4 inline-flex rounded-xl border border-ink-200 p-1 text-sm dark:border-ink-800">
+          <button
+            type="button"
+            onClick={() => setTab("prl")}
+            className={
+              tab === "prl"
+                ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
+                : "rounded-lg px-3 py-1 text-ink-500"
+            }
+          >
+            PRL
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("wprl")}
+            className={
+              tab === "wprl"
+                ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
+                : "rounded-lg px-3 py-1 text-ink-500"
+            }
+          >
+            WPRL
+          </button>
+        </div>
+      )}
 
       <div className="card flex flex-col items-center">
         {qr ? (

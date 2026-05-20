@@ -48,6 +48,19 @@ export interface VaultDescriptor {
   leafVersion: number;
   /** NUMS internal key (provably unspendable via key-path). Constant — see TAPROOT_UNSPENDABLE_KEY. */
   internalKey: Uint8Array;
+  /**
+   * Raw PSBT-shape tapLeafScript field as @scure/btc-signer's `Transaction.addInput`
+   * accepts it: an array of `[ControlBlock, script || leafVer]` tuples. For our
+   * single-leaf NUMS-bound vault this array always has length 1. Passing this
+   * through verbatim keeps the spend-compose path from reaching into btc-signer
+   * internals to reconstruct the control block.
+   */
+  tapLeafScript: Array<
+    [
+      { version: number; internalKey: Uint8Array; merklePath: Uint8Array[] },
+      Uint8Array,
+    ]
+  >;
   /** Network the address was encoded for. Carrying it stops a mainnet vault from being silently misread under a future testnet HRP. */
   network: "mainnet";
 }
@@ -143,6 +156,7 @@ export function vaultDescriptorFromPubkeys(
     leafScript,
     leafVersion,
     internalKey: TAPROOT_UNSPENDABLE_KEY,
+    tapLeafScript: tls as VaultDescriptor["tapLeafScript"],
     network: params.name,
   };
 }

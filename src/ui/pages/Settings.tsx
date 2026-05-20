@@ -24,14 +24,21 @@ export default function Settings() {
   const setTheme = useUI((s) => s.setTheme);
   const pearlRpcOverride = useUI((s) => s.pearlRpcOverride);
   const setPearlRpcOverride = useUI((s) => s.setPearlRpcOverride);
+  const ethRpcOverride = useUI((s) => s.ethRpcOverride);
+  const setEthRpcOverride = useUI((s) => s.setEthRpcOverride);
   const tipEnabled = useUI((s) => s.tipEnabled);
   const setTipEnabled = useUI((s) => s.setTipEnabled);
   const multisigEnabled = useUI((s) => s.multisigEnabled);
   const setMultisigEnabled = useUI((s) => s.setMultisigEnabled);
+  const ethEnabled = useUI((s) => s.ethEnabled);
+  const setEthEnabled = useUI((s) => s.setEthEnabled);
 
   const defaultRpcUrl = pearlParams().rpcUrl;
+  const defaultEthRpcUrl = "https://ethereum-rpc.publicnode.com";
   const [rpcDraft, setRpcDraft] = useState(pearlRpcOverride);
   const [rpcStatus, setRpcStatus] = useState<string | null>(null);
+  const [ethRpcDraft, setEthRpcDraft] = useState(ethRpcOverride);
+  const [ethRpcStatus, setEthRpcStatus] = useState<string | null>(null);
 
   const [showMnemonic, setShowMnemonic] = useState(false);
   const [mnemonicValue, setMnemonicValue] = useState<string | null>(null);
@@ -194,6 +201,51 @@ export default function Settings() {
     saveRpc("");
   }
 
+  function saveEthRpc(rawValue?: string) {
+    setEthRpcStatus(null);
+    const trimmed = (rawValue ?? ethRpcDraft).trim();
+    if (trimmed === "") {
+      try {
+        setEthRpcOverride("");
+      } catch (e) {
+        setEthRpcStatus(e instanceof Error ? e.message : "Failed to clear override.");
+        return;
+      }
+      setEthRpcStatus(`Using default (${defaultEthRpcUrl} → eth.drpc.org fallback).`);
+      return;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      setEthRpcStatus("That's not a valid URL.");
+      return;
+    }
+    if (parsed.protocol !== "https:") {
+      setEthRpcStatus("RPC URL must use https://.");
+      return;
+    }
+    try {
+      setEthRpcOverride(parsed.toString());
+    } catch (e) {
+      if (e instanceof Error && e.message === "E_ETH_RPC_OVERRIDE_NOT_ALLOWED") {
+        setEthRpcStatus(
+          "That host isn't on the wallet's Ethereum RPC allowlist. Use one of: ethereum-rpc.publicnode.com, eth.drpc.org.",
+        );
+      } else {
+        setEthRpcStatus(e instanceof Error ? e.message : "Failed to save RPC override.");
+      }
+      return;
+    }
+    setEthRpcDraft(parsed.toString());
+    setEthRpcStatus(`Using custom: ${parsed.toString()}`);
+  }
+
+  function resetEthRpc() {
+    setEthRpcDraft("");
+    saveEthRpc("");
+  }
+
   async function doWipe() {
     setError(null);
     if (wipePhrase.trim().toLowerCase() !== "wipe my wallet") {
@@ -343,6 +395,83 @@ export default function Settings() {
         </div>
         {rpcStatus && <p className="mt-2 text-xs text-ink-500">{rpcStatus}</p>}
       </section>
+
+      <section className="card mb-4 border-pearl-200 dark:border-pearl-900/40">
+        <h2 className="text-sm font-semibold">Ethereum surface (WPRL + ETH + Bridge)</h2>
+        <p className="mt-2 text-xs text-ink-500">
+          The Ethereum side of the wallet — Wrapped PRL on Ethereum, native
+          ETH for gas, and the PearlBridge mint/burn flow — is{" "}
+          <span className="font-medium">off by default</span> in v0.2.0.
+          If you only hold PRL on Pearl L1, leave it off and the wallet
+          stays Pearl-only: no Eth RPC calls, no WPRL/ETH tiles, no
+          Bridge button. Turning it on exposes the Send WPRL, Send ETH,
+          and Bridge surfaces and starts polling the Eth chain for
+          balances.
+        </p>
+        <p className="mt-1 text-xs text-ink-500">
+          Same BIP-39 seed, same Eth address (BIP-44{" "}
+          <span className="font-mono">m/44'/60'/0'/0/0</span>) — the
+          toggle is purely a UI gate, not a key change. Your Eth address
+          is identical whether the surface is on or off.
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={ethEnabled}
+            onChange={(e) => setEthEnabled(e.target.checked)}
+          />
+          Enable Ethereum surface (WPRL, ETH, Bridge)
+        </label>
+        <p className="mt-2 text-xs text-ink-500">
+          Status:{" "}
+          {ethEnabled
+            ? "Eth surface ON — WPRL, ETH, and Bridge are visible"
+            : "Eth surface OFF — Pearl-only wallet"}
+        </p>
+      </section>
+
+      {ethEnabled && (
+        <section className="card mb-4">
+          <h2 className="text-sm font-semibold">Ethereum RPC endpoint</h2>
+          <p className="mt-2 text-xs text-ink-500">
+            Defaults to{" "}
+            <span className="font-mono">{defaultEthRpcUrl}</span> with{" "}
+            <span className="font-mono">eth.drpc.org</span> as fallback
+            {ethRpcOverride && " (currently overridden — see below)"}.
+            Point at any Ethereum JSON-RPC endpoint you trust, or leave
+            blank to use the defaults.
+          </p>
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+            A malicious RPC can lie about your balance, gas market, and tx
+            state, and can see your address. It cannot move funds (your
+            keys never leave this browser) but only point at endpoints
+            you trust.
+          </p>
+          <p className="mt-1 text-xs text-ink-500">
+            Note: the wallet&apos;s strict Content Security Policy only
+            permits requests to the default Eth RPC hosts. A custom RPC
+            URL on a different host will be blocked by the browser unless
+            you&apos;re running the wallet from source with an adjusted
+            CSP.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <input
+              className="input mono flex-1"
+              placeholder={defaultEthRpcUrl}
+              value={ethRpcDraft}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              onChange={(e) => setEthRpcDraft(e.target.value)}
+            />
+            <button onClick={() => saveEthRpc()} className="btn-primary">Save</button>
+            <button onClick={resetEthRpc} className="btn-secondary" disabled={!ethRpcOverride && !ethRpcDraft}>
+              Reset
+            </button>
+          </div>
+          {ethRpcStatus && <p className="mt-2 text-xs text-ink-500">{ethRpcStatus}</p>}
+        </section>
+      )}
 
       <section className="card mb-4">
         <h2 className="text-sm font-semibold">Tip the PearlWallet devs</h2>

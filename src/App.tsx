@@ -17,6 +17,11 @@ import History from "./ui/pages/History";
 import Settings from "./ui/pages/Settings";
 import About from "./ui/pages/About";
 import Vaults from "./ui/pages/Vaults";
+import CreateVault from "./ui/pages/CreateVault";
+import VaultDetail from "./ui/pages/VaultDetail";
+import SendFromVault from "./ui/pages/SendFromVault";
+import SignMultisigPsbt from "./ui/pages/SignMultisigPsbt";
+import VaultPendingTxDetail from "./ui/pages/VaultPendingTxDetail";
 import Footer from "./ui/components/Footer";
 
 export default function App() {
@@ -25,6 +30,8 @@ export default function App() {
   const lock = useWallet((s) => s.lock);
   const touch = useWallet((s) => s.touch);
   const theme = useUI((s) => s.theme);
+  const ethEnabled = useUI((s) => s.ethEnabled);
+  const multisigEnabled = useUI((s) => s.multisigEnabled);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -123,6 +130,37 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
+  // v0.2.0: bounce eth-only routes when the user has the Ethereum
+  // surface turned off in Settings. Deep links, stale bookmarks, and
+  // back-button from a session that flipped the toggle off all land on
+  // /dashboard rather than presenting a half-broken surface. The toggle
+  // is also re-checked inside each individual eth-only page as
+  // belt-and-braces (the SendETH / SendWPRL / Bridge pages each
+  // useEffect-bounce on !ethEnabled).
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    if (ethEnabled) return;
+    const path = location.pathname;
+    if (
+      path === "/send/wprl" ||
+      path === "/send/eth" ||
+      path === "/bridge"
+    ) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [ethEnabled, status, location.pathname, navigate]);
+
+  // Same belt-and-braces for the multisig surface. Each multisig page
+  // already useEffect-bounces on !multisigEnabled, but catching it here
+  // prevents a brief render flash of the wrong page on a deep-link.
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    if (multisigEnabled) return;
+    if (location.pathname.startsWith("/vaults")) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [multisigEnabled, status, location.pathname, navigate]);
+
   return (
     <div className="flex min-h-full flex-col">
       <div className="flex-1">
@@ -141,6 +179,11 @@ export default function App() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/about" element={<About />} />
           <Route path="/vaults" element={<Vaults />} />
+          <Route path="/vaults/new" element={<CreateVault />} />
+          <Route path="/vaults/sign" element={<SignMultisigPsbt />} />
+          <Route path="/vaults/:id" element={<VaultDetail />} />
+          <Route path="/vaults/:id/send" element={<SendFromVault />} />
+          <Route path="/vaults/:id/tx/:txid" element={<VaultPendingTxDetail />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
