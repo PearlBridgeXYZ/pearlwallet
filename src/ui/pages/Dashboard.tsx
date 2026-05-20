@@ -53,11 +53,6 @@ export default function Dashboard() {
             <div className="text-xs text-ink-500">
               {balances ? `≈ ${formatUSD(balances.prlUsd * Number(balances.prl) / 1e8)}` : ""}
             </div>
-            {balances?.prlSource === "partial" && (
-              <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-                Partial — sentry errors on some addresses.
-              </div>
-            )}
             {balances?.prlSource === "error" && (
               <div className="mt-1 text-xs text-red-600 dark:text-red-400">
                 Pearl RPC unreachable.
