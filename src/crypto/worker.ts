@@ -6,17 +6,28 @@ import {
   validateMnemonic,
   mnemonicToSeed,
 } from "./mnemonic";
-import { masterFromSeed, DEFAULT_PEARL_PATH, DEFAULT_ETH_PATH } from "./hd";
+import {
+  masterFromSeed,
+  DEFAULT_ETH_PATH,
+  RECEIVE_GAP_LIMIT,
+  pearlReceivePath,
+} from "./hd";
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { secp256k1 } from "@noble/curves/secp256k1";
 
+interface PearlReceiveKey {
+  index: number;
+  privKey: Uint8Array;
+  pubKey: Uint8Array;
+}
+
 interface WorkerSession {
   mnemonic: string;
-  pearlPrivKey: Uint8Array;
-  pearlPubKey: Uint8Array;
+  // External receive pool — RECEIVE_GAP_LIMIT entries, index 0..N-1.
+  pearlReceive: PearlReceiveKey[];
   ethPrivKey: Uint8Array;
   ethPubKey: Uint8Array;
 }
@@ -25,7 +36,7 @@ let session: WorkerSession | null = null;
 
 function wipeSession(): void {
   if (!session) return;
-  session.pearlPrivKey.fill(0);
+  for (const k of session.pearlReceive) k.privKey.fill(0);
   session.ethPrivKey.fill(0);
   session = null;
 }
@@ -68,30 +79,43 @@ function toChecksumAddress(address: string): string {
 }
 
 async function seedFromMnemonic(mnemonic: string): Promise<{
-  pearlPrivKey: Uint8Array;
-  pearlPubKey: Uint8Array;
+  pearlReceive: PearlReceiveKey[];
   ethPrivKey: Uint8Array;
   ethPubKey: Uint8Array;
 }> {
   const seed = await mnemonicToSeed(mnemonic);
   const master = masterFromSeed(seed);
 
-  const pearlNode = master.derive(DEFAULT_PEARL_PATH);
+  const pearlReceive: PearlReceiveKey[] = [];
+  for (let i = 0; i < RECEIVE_GAP_LIMIT; i++) {
+    const node = master.derive(pearlReceivePath(i));
+    if (!node.privateKey || !node.publicKey) {
+      throw new Error(`HD derivation failed at pearl receive index ${i}`);
+    }
+    pearlReceive.push({
+      index: i,
+      privKey: node.privateKey,
+      pubKey: node.publicKey,
+    });
+  }
+
   const ethNode = master.derive(DEFAULT_ETH_PATH);
-  if (
-    !pearlNode.privateKey ||
-    !pearlNode.publicKey ||
-    !ethNode.privateKey ||
-    !ethNode.publicKey
-  ) {
-    throw new Error("HD derivation failed");
+  if (!ethNode.privateKey || !ethNode.publicKey) {
+    throw new Error("HD derivation failed at eth path");
   }
   return {
-    pearlPrivKey: pearlNode.privateKey,
-    pearlPubKey: pearlNode.publicKey,
+    pearlReceive,
     ethPrivKey: ethNode.privateKey,
     ethPubKey: ethNode.publicKey,
   };
+}
+
+function pearlAddressesFromSession(
+  s: WorkerSession,
+  network: PearlNetwork,
+): string[] {
+  const params = pearlParams(network);
+  return s.pearlReceive.map((k) => pearlAddressFromCompressedPubkey(k.pubKey, params));
 }
 
 interface BlobJSON {
@@ -147,7 +171,11 @@ export type WorkerResp =
   | { id: string; ok: false; error: string };
 
 interface Addresses {
+  // Primary (index 0). Kept for compatibility with code that just needs one
+  // address (e.g. legacy publicData on the keystore record).
   pearl: string;
+  // External receive pool, ordered by index 0..RECEIVE_GAP_LIMIT-1.
+  pearlPool: string[];
   eth: string;
 }
 
@@ -173,15 +201,14 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       const mnemonic = generateMnemonic(msg.strength);
       const keys = await seedFromMnemonic(mnemonic);
       session = { mnemonic, ...keys };
-      const params = pearlParams(msg.network);
-      const pearl = pearlAddressFromCompressedPubkey(keys.pearlPubKey, params);
+      const pool = pearlAddressesFromSession(session, msg.network);
       const eth = ethAddressFromPubkey(keys.ethPubKey);
       const plaintext = new TextEncoder().encode(JSON.stringify({ mnemonic }));
       const blob = await encryptPlaintext(plaintext, msg.password);
       const out: CreatedWallet = {
         mnemonic,
         blob: blobToJSON(blob),
-        addresses: { pearl, eth },
+        addresses: { pearl: pool[0]!, pearlPool: pool, eth },
       };
       return out;
     }
@@ -193,15 +220,14 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       const mnemonic = msg.mnemonic.trim().toLowerCase();
       const keys = await seedFromMnemonic(mnemonic);
       session = { mnemonic, ...keys };
-      const params = pearlParams(msg.network);
-      const pearl = pearlAddressFromCompressedPubkey(keys.pearlPubKey, params);
+      const pool = pearlAddressesFromSession(session, msg.network);
       const eth = ethAddressFromPubkey(keys.ethPubKey);
       const plaintext = new TextEncoder().encode(JSON.stringify({ mnemonic }));
       const blob = await encryptPlaintext(plaintext, msg.password);
       const out: CreatedWallet = {
         mnemonic,
         blob: blobToJSON(blob),
-        addresses: { pearl, eth },
+        addresses: { pearl: pool[0]!, pearlPool: pool, eth },
       };
       return out;
     }
@@ -213,10 +239,11 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       };
       const keys = await seedFromMnemonic(mnemonic);
       session = { mnemonic, ...keys };
-      const params = pearlParams(msg.network);
-      const pearl = pearlAddressFromCompressedPubkey(keys.pearlPubKey, params);
+      const pool = pearlAddressesFromSession(session, msg.network);
       const eth = ethAddressFromPubkey(keys.ethPubKey);
-      const out: UnlockedResult = { addresses: { pearl, eth } };
+      const out: UnlockedResult = {
+        addresses: { pearl: pool[0]!, pearlPool: pool, eth },
+      };
       return out;
     }
 
@@ -226,10 +253,9 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
 
     case "deriveAddresses": {
       if (!session) throw new Error("E_LOCKED");
-      const params = pearlParams(msg.network);
-      const pearl = pearlAddressFromCompressedPubkey(session.pearlPubKey, params);
+      const pool = pearlAddressesFromSession(session, msg.network);
       const eth = ethAddressFromPubkey(session.ethPubKey);
-      const out: Addresses = { pearl, eth };
+      const out: Addresses = { pearl: pool[0]!, pearlPool: pool, eth };
       return out;
     }
 

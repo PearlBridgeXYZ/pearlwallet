@@ -21,7 +21,11 @@ export interface KeystoreRecord {
   version: 1;
   blob: KeystoreBlobJSON;
   publicData: {
+    // Primary (index 0) — kept as a flat field so v0.1.2 records still load.
     pearlAddress: string;
+    // External receive pool. Optional for forward-compat with v0.1.2 records
+    // saved before multi-address support; missing → re-derived on next unlock.
+    pearlAddressPool?: string[];
     ethAddress: string;
     pearlNetwork: PearlNetwork;
     ethNetwork: EthNetwork;

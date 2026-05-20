@@ -21,7 +21,9 @@ import { pearlParams } from "../src/chains/pearl/network";
 import {
   DEFAULT_PEARL_PATH,
   PEARL_COIN_TYPE,
+  RECEIVE_GAP_LIMIT,
   masterFromSeed,
+  pearlReceivePath,
 } from "../src/crypto/hd";
 
 const params = pearlParams("mainnet");
@@ -113,3 +115,38 @@ describe("Wallet self round-trip", () => {
 // btcd-oyster compatibility: confirmed bit-exact in
 // "derives the first 5 addresses bit-exact against oyster mainnet"
 // above. Wallets created by oyster restore cleanly via mnemonic.
+
+// Multi-address receive pool — Pearl L1 is UTXO so an HD wallet may hold
+// balances at any of its derived receive indexes (oyster advances the
+// index per `getnewaddress`). We derive RECEIVE_GAP_LIMIT addresses on
+// every create/restore/unlock and aggregate balances across all of them.
+describe("Pearl receive pool", () => {
+  it("RECEIVE_GAP_LIMIT is at least 20 (BIP-44 convention)", () => {
+    expect(RECEIVE_GAP_LIMIT).toBeGreaterThanOrEqual(20);
+  });
+
+  it("pearlReceivePath rejects bad input", () => {
+    expect(() => pearlReceivePath(-1)).toThrow();
+    expect(() => pearlReceivePath(1.5)).toThrow();
+  });
+
+  it("derives RECEIVE_GAP_LIMIT unique addresses from one seed", async () => {
+    const seed = await bip39.mnemonicToSeed(BIP86_MNEMONIC);
+    const master = masterFromSeed(seed);
+    const addrs: string[] = [];
+    for (let i = 0; i < RECEIVE_GAP_LIMIT; i++) {
+      const child = master.derive(pearlReceivePath(i));
+      addrs.push(pearlAddressFromInternalKey(child.publicKey!.slice(1), params));
+    }
+    expect(addrs).toHaveLength(RECEIVE_GAP_LIMIT);
+    expect(new Set(addrs).size).toBe(RECEIVE_GAP_LIMIT);
+    // First five must still match oyster mainnet.
+    for (let i = 0; i < OYSTER_MAINNET_ADDRESSES.length; i++) {
+      expect(addrs[i]).toBe(OYSTER_MAINNET_ADDRESSES[i]);
+    }
+  });
+
+  it("pearlReceivePath(0) equals DEFAULT_PEARL_PATH", () => {
+    expect(pearlReceivePath(0)).toBe(DEFAULT_PEARL_PATH);
+  });
+});

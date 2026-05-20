@@ -14,7 +14,12 @@ import {
 export type WalletStatus = "no-wallet" | "locked" | "unlocked";
 
 interface Addresses {
+  // Primary Pearl receive address (index 0).
   pearl: string;
+  // Full external receive pool — RECEIVE_GAP_LIMIT entries, index 0..N-1.
+  // Funds discovered at any of these is "ours" because the seed derives them
+  // all. UTXO scans aggregate balances across this pool.
+  pearlPool: string[];
   eth: string;
 }
 
@@ -58,7 +63,11 @@ export const useWallet = create<WalletState>((set, get) => ({
       set({
         status: "locked",
         blob: rec.blob,
-        addresses: { pearl: rec.publicData.pearlAddress, eth: rec.publicData.ethAddress },
+        addresses: {
+          pearl: rec.publicData.pearlAddress,
+          pearlPool: rec.publicData.pearlAddressPool ?? [rec.publicData.pearlAddress],
+          eth: rec.publicData.ethAddress,
+        },
         pearlNetwork: "mainnet",
         ethNetwork: rec.publicData.ethNetwork,
       });
@@ -81,6 +90,7 @@ export const useWallet = create<WalletState>((set, get) => ({
       blob: out.blob,
       publicData: {
         pearlAddress: out.addresses.pearl,
+        pearlAddressPool: out.addresses.pearlPool,
         ethAddress: out.addresses.eth,
         pearlNetwork,
         ethNetwork,
@@ -111,6 +121,7 @@ export const useWallet = create<WalletState>((set, get) => ({
       blob: out.blob,
       publicData: {
         pearlAddress: out.addresses.pearl,
+        pearlAddressPool: out.addresses.pearlPool,
         ethAddress: out.addresses.eth,
         pearlNetwork,
         ethNetwork,
@@ -135,6 +146,21 @@ export const useWallet = create<WalletState>((set, get) => ({
       password,
       network: pearlNetwork,
     });
+    // Persist the freshly-derived pool back to the keystore so a record
+    // saved by an older build (without pearlAddressPool) gets upgraded
+    // without requiring a wipe-and-restore.
+    const rec = await loadKeystore();
+    if (rec) {
+      const needsUpdate =
+        !Array.isArray(rec.publicData.pearlAddressPool) ||
+        rec.publicData.pearlAddressPool.length !== out.addresses.pearlPool.length ||
+        rec.publicData.pearlAddressPool.some((a, i) => a !== out.addresses.pearlPool[i]);
+      if (needsUpdate) {
+        rec.publicData.pearlAddressPool = out.addresses.pearlPool;
+        rec.publicData.pearlAddress = out.addresses.pearl;
+        await saveKeystore(rec);
+      }
+    }
     set({ status: "unlocked", addresses: out.addresses, lastActivity: Date.now() });
     return { addresses: out.addresses };
   },

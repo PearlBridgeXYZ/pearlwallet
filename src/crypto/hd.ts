@@ -13,6 +13,21 @@ export const ETH_COIN_TYPE = 60;
 export const DEFAULT_PEARL_PATH = `m/86'/${PEARL_COIN_TYPE}'/0'/0/0`;
 export const DEFAULT_ETH_PATH = `m/44'/${ETH_COIN_TYPE}'/0'/0/0`;
 
+// Number of external receive addresses to derive and track per wallet.
+// Pearl L1 is UTXO-based: a user funding their wallet from oyster (or any
+// HD wallet that advances the receive index per `getnewaddress` call) will
+// hold balances across multiple addresses. Mirroring BIP-44's standard
+// gap-limit convention, we derive RECEIVE_GAP_LIMIT external addresses on
+// every create/restore/unlock and aggregate balances across all of them.
+export const RECEIVE_GAP_LIMIT = 20;
+
+export function pearlReceivePath(index: number): string {
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`pearlReceivePath: bad index ${index}`);
+  }
+  return `m/86'/${PEARL_COIN_TYPE}'/0'/0/${index}`;
+}
+
 export function masterFromSeed(seed: Uint8Array): HDKey {
   return HDKey.fromMasterSeed(seed);
 }

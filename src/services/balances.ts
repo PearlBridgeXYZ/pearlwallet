@@ -2,13 +2,48 @@
 // Pearl-side (PRL) reads live from the configured sentry RPC via
 // searchrawtransactions (UTXO walk). On RPC failure the UI surfaces
 // `error` rather than showing a stale or fabricated value.
+//
+// Pearl L1 is UTXO-based and an HD wallet may hold balances at any of its
+// derived receive indexes (oyster advances the index per `getnewaddress`).
+// So we accept a *pool* of pearl addresses and aggregate balances across
+// all of them. The first address in the pool is the primary receive
+// address that the UI displays; the rest let restored wallets discover
+// funds that were sent to a non-zero index.
 
 import { readWprlBalance } from "./bridge";
 import { fetchPrlBalanceGrains } from "./pearl-rpc";
 import { fetchPrlPriceUsd } from "./prices";
 
+// Serialized pool walk with a 300ms inter-request gap. The public
+// sentry behind rpc.pearlwallet.xyz is fronted by Cloudflare and rate
+// limits burst traffic from a single IP at ~10 req/s. Strict
+// serialization at ~3 req/s keeps us comfortably under the threshold.
+// 20 zero-activity addresses (which return JSON-RPC code -5 quickly)
+// finish in ~6s; once cached by react-query, only the 30s refetch
+// repays that cost. To keep a single transient 503 from turning the
+// whole balance into "error", we tolerate a per-address failure and
+// surface the total as the sum of the addresses we DID see — the
+// alternative (all-or-nothing) hides real funds when the sentry has
+// even a tiny hiccup.
+async function fetchPoolBalances(pool: string[]): Promise<bigint[]> {
+  const out: bigint[] = new Array(pool.length).fill(0n);
+  let failures = 0;
+  for (let i = 0; i < pool.length; i++) {
+    if (i > 0) await new Promise((r) => setTimeout(r, 300));
+    try {
+      out[i] = await fetchPrlBalanceGrains(pool[i]!);
+    } catch {
+      failures++;
+    }
+  }
+  // If MORE than half the pool failed we treat the whole walk as a
+  // bust — the visible balance would be too suspect to show.
+  if (failures > pool.length / 2) throw new Error("pool walk failed");
+  return out;
+}
+
 export interface Balances {
-  prl: bigint;        // grains (10^8)
+  prl: bigint;        // grains (10^8), summed across the pool
   wprl: bigint;       // wei (10^18)
   prlUsd: number;
   wprlUsd: number;
@@ -17,11 +52,17 @@ export interface Balances {
   priceSource: "live" | "error";
 }
 
-export async function fetchBalances(pearlAddr: string, ethAddr: string): Promise<Balances> {
+export async function fetchBalances(
+  pearlAddrs: string | string[],
+  ethAddr: string,
+): Promise<Balances> {
+  const pool = Array.isArray(pearlAddrs) ? pearlAddrs : [pearlAddrs];
+
   let prl = 0n;
   let prlSource: Balances["prlSource"] = "live";
   try {
-    prl = await fetchPrlBalanceGrains(pearlAddr);
+    const grains = await fetchPoolBalances(pool);
+    prl = grains.reduce((acc, g) => acc + g, 0n);
   } catch {
     prlSource = "error";
   }

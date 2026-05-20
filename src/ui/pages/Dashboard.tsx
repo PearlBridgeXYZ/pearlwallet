@@ -9,8 +9,8 @@ export default function Dashboard() {
   const addresses = useWallet((s) => s.addresses);
 
   const balancesQ = useQuery({
-    queryKey: ["balances", addresses?.pearl, addresses?.eth],
-    queryFn: () => fetchBalances(addresses!.pearl, addresses!.eth),
+    queryKey: ["balances", addresses?.pearlPool?.join(",") ?? addresses?.pearl, addresses?.eth],
+    queryFn: () => fetchBalances(addresses!.pearlPool ?? [addresses!.pearl], addresses!.eth),
     enabled: !!addresses,
     refetchInterval: 30_000,
   });

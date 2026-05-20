@@ -41,20 +41,36 @@ function rpcUrl(): string {
 }
 
 async function call<T>(method: string, params: unknown[]): Promise<T> {
-  const res = await fetch(rpcUrl(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
-  });
-  if (!res.ok) throw new Error(`rpc http ${res.status}`);
-  const body = (await res.json()) as RpcResult<T>;
-  if (body.error) {
-    // -5 "No information available about address" = zero-activity address.
-    // Caller catches and converts to empty result.
-    throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
+  // Single retry on transient sentry overload (5xx). Pool walks fire
+  // multiple heavyweight searchrawtransactions calls in flight and a
+  // brief 503 burst from the sentry would otherwise mark the whole
+  // balance as "error" for the user.
+  const maxAttempts = 3;
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 250 * attempt));
+    }
+    const res = await fetch(rpcUrl(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
+    });
+    if (!res.ok) {
+      lastErr = new Error(`rpc http ${res.status}`);
+      if (res.status >= 500 && res.status < 600) continue;
+      throw lastErr;
+    }
+    const body = (await res.json()) as RpcResult<T>;
+    if (body.error) {
+      // -5 "No information available about address" = zero-activity address.
+      // Caller catches and converts to empty result.
+      throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
+    }
+    if (body.result === null) throw new Error("rpc null result");
+    return body.result;
   }
-  if (body.result === null) throw new Error("rpc null result");
-  return body.result;
+  throw lastErr ?? new Error("rpc exhausted retries");
 }
 
 // PRL float → grains. Round via toFixed(8) string to dodge float drift.
