@@ -24,6 +24,10 @@ export default function OnboardingCreate() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [addresses, setAddresses] = useState<{ pearl: string; eth: string } | null>(null);
+  // See OnboardingRestore for the rationale — a user creating a fresh wallet
+  // may also hit E_WALLET_EXISTS, and the only Settings → Danger Zone path
+  // out requires being unlocked. (v0.1.10.)
+  const [overwriteOpen, setOverwriteOpen] = useState(false);
 
   // Generate mnemonic on mount (and on strength change).
   // Timer ref lives outside the async IIFE so the useEffect cleanup can
@@ -67,7 +71,7 @@ export default function OnboardingCreate() {
     );
   }
 
-  async function submit() {
+  async function submit(allowOverwrite = false) {
     const pw = passwordAcceptable(password);
     if (!pw.ok) {
       setError(pw.reason);
@@ -85,15 +89,21 @@ export default function OnboardingCreate() {
     setError(null);
     try {
       // We already have a mnemonic from step 1 — use restoreWallet path to preserve it.
-      // But useWallet.createWallet generates a fresh one. To use the user-displayed mnemonic,
-      // we call restoreWallet (which accepts a mnemonic).
+      // createWallet would generate a fresh one; restoreWallet accepts the user-displayed
+      // mnemonic so the words shown in step 1 are the words backing the keystore.
       const out = await useWallet
         .getState()
-        .restoreWallet(mnemonic, password);
+        .restoreWallet(mnemonic, password, allowOverwrite ? { allowOverwrite: true } : undefined);
       setAddresses(out.addresses);
+      setOverwriteOpen(false);
       setStep("done");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === "E_WALLET_EXISTS") {
+        setOverwriteOpen(true);
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -263,12 +273,46 @@ export default function OnboardingCreate() {
           <button
             type="button"
             disabled={busy}
-            onClick={submit}
+            onClick={() => submit(false)}
             className="btn-primary flex-1"
           >
             {busy ? "Creating..." : "Create wallet"}
           </button>
         </div>
+
+        {overwriteOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="card max-w-md">
+              <h2 className="text-lg font-semibold">Replace the wallet on this device?</h2>
+              <p className="mt-2 text-sm text-ink-500">
+                A wallet is already stored in this browser. Creating a new one
+                will overwrite it. Anything currently on this device will be
+                unreachable unless you have its recovery phrase saved elsewhere.
+              </p>
+              <p className="mt-2 text-sm text-ink-500">
+                If you're not sure, cancel and unlock the existing wallet first.
+              </p>
+              <div className="mt-4 flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setOverwriteOpen(false)}
+                  disabled={busy}
+                  className="btn-secondary flex-1"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => submit(true)}
+                  disabled={busy}
+                  className="btn-primary flex-1"
+                >
+                  {busy ? "Replacing..." : "Replace existing wallet"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

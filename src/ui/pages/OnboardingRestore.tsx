@@ -15,6 +15,14 @@ export default function OnboardingRestore() {
   const [acknowledged, setAcknowledged] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // If an encrypted keystore already lives in IndexedDB, the store throws
+  // E_WALLET_EXISTS. The only way to reach Settings → Danger Zone is to be
+  // unlocked, which a "I forgot my password" user by definition cannot do
+  // — so we surface an explicit overwrite confirm right here. The seed
+  // phrase the user is typing IS the recovery for the wallet they're
+  // restoring; the wallet that gets erased is whichever was in this
+  // browser before. (v0.1.10 — bug reported on first deploy.)
+  const [overwriteOpen, setOverwriteOpen] = useState(false);
   const pwStrength = useMemo(() => passwordStrength(password), [password]);
 
   function setLen(n: 12 | 24) {
@@ -34,7 +42,7 @@ export default function OnboardingRestore() {
     });
   }
 
-  async function submit() {
+  async function submit(allowOverwrite = false) {
     setError(null);
     const mnemonic = words.join(" ").trim();
     const v = await cryptoWorker.call<"validateMnemonic", { valid: boolean }>(
@@ -60,10 +68,16 @@ export default function OnboardingRestore() {
     }
     setBusy(true);
     try {
-      await restore(mnemonic, password);
+      await restore(mnemonic, password, allowOverwrite ? { allowOverwrite: true } : undefined);
+      setOverwriteOpen(false);
       navigate("/dashboard");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === "E_WALLET_EXISTS") {
+        setOverwriteOpen(true);
+      } else {
+        setError(msg);
+      }
     } finally {
       setBusy(false);
     }
@@ -144,12 +158,48 @@ export default function OnboardingRestore() {
 
       <button
         type="button"
-        onClick={submit}
+        onClick={() => submit(false)}
         disabled={busy}
         className="btn-primary mt-6 w-full"
       >
         {busy ? "Restoring..." : "Restore wallet"}
       </button>
+
+      {overwriteOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="card max-w-md">
+            <h2 className="text-lg font-semibold">Replace the wallet on this device?</h2>
+            <p className="mt-2 text-sm text-ink-500">
+              A different wallet is already stored in this browser. Restoring
+              will overwrite it. Anything currently on this device will be
+              unreachable unless you also have its recovery phrase saved
+              elsewhere.
+            </p>
+            <p className="mt-2 text-sm text-ink-500">
+              If you don't know what the existing wallet is, cancel and check
+              with whoever uses this browser first.
+            </p>
+            <div className="mt-4 flex gap-3">
+              <button
+                type="button"
+                onClick={() => setOverwriteOpen(false)}
+                disabled={busy}
+                className="btn-secondary flex-1"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => submit(true)}
+                disabled={busy}
+                className="btn-primary flex-1"
+              >
+                {busy ? "Replacing..." : "Replace existing wallet"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
