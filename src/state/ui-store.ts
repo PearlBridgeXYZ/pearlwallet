@@ -33,23 +33,35 @@ interface UIState {
   // PearlBridge developer tip — opt-in by default. Disabling sends no
   // extra output and costs nothing beyond on-chain fees.
   tipEnabled: boolean;
+  // Experimental multisig surface. Default OFF — flips on a Vaults entry
+  // in the nav and exposes the multisig flows behind it. Off means the
+  // wallet behaves exactly as singlesig has shipped since v0.1.x. We
+  // gate the surface (not the build) so users can flip the toggle to
+  // help test before the v0.2.0 audit lands.
+  multisigEnabled: boolean;
   setTheme(t: Theme): void;
   setPearlRpcOverride(url: string): void;
   setTipEnabled(v: boolean): void;
+  setMultisigEnabled(v: boolean): void;
 }
 
-const STORAGE_KEY = "pearl-wallet-ui-v3";
+// Bump the storage key whenever the shape changes so a stale persisted
+// blob doesn't carry forward a field that no longer exists (or worse,
+// is type-different).
+const STORAGE_KEY = "pearl-wallet-ui-v4";
 
 interface PersistedUI {
   theme: Theme;
   pearlRpcOverride: string;
   tipEnabled: boolean;
+  multisigEnabled: boolean;
 }
 
 const DEFAULT_UI: PersistedUI = {
   theme: "system",
   pearlRpcOverride: "",
   tipEnabled: true,
+  multisigEnabled: false,
 };
 
 function loadUI(): PersistedUI {
@@ -81,6 +93,7 @@ export const useUI = create<UIState>((set, get) => ({
   theme: initial.theme,
   pearlRpcOverride: initial.pearlRpcOverride,
   tipEnabled: initial.tipEnabled,
+  multisigEnabled: initial.multisigEnabled,
   setTheme(t) {
     set({ theme: t });
     saveUI({ ...persistedSnapshot(get()), theme: t });
@@ -100,6 +113,10 @@ export const useUI = create<UIState>((set, get) => ({
     set({ tipEnabled: v });
     saveUI({ ...persistedSnapshot(get()), tipEnabled: v });
   },
+  setMultisigEnabled(v) {
+    set({ multisigEnabled: v });
+    saveUI({ ...persistedSnapshot(get()), multisigEnabled: v });
+  },
 }));
 
 function persistedSnapshot(s: UIState): PersistedUI {
@@ -107,5 +124,6 @@ function persistedSnapshot(s: UIState): PersistedUI {
     theme: s.theme,
     pearlRpcOverride: s.pearlRpcOverride,
     tipEnabled: s.tipEnabled,
+    multisigEnabled: s.multisigEnabled,
   };
 }

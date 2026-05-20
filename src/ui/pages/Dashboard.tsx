@@ -4,11 +4,13 @@ import Page from "../components/Page";
 import ActivityList from "../components/ActivityList";
 import CopyAddress from "../components/CopyAddress";
 import { useWallet } from "../../state/wallet-store";
+import { useUI } from "../../state/ui-store";
 import { fetchBalances } from "../../services/balances";
 import { formatGrains, formatWei, formatUSD } from "../../lib/format";
 
 export default function Dashboard() {
   const addresses = useWallet((s) => s.addresses);
+  const multisigEnabled = useUI((s) => s.multisigEnabled);
 
   const balancesQ = useQuery({
     queryKey: ["balances", addresses?.pearlPool?.join(",") ?? addresses?.pearl, addresses?.eth],
@@ -93,6 +95,13 @@ export default function Dashboard() {
           <Link to="/receive" className="btn-secondary">Receive</Link>
           <Link to="/bridge" className="btn-primary">Bridge</Link>
         </div>
+        {multisigEnabled && (
+          <div className="mt-2">
+            <Link to="/vaults" className="btn-secondary block w-full text-center">
+              Vaults <span className="text-xs text-amber-700 dark:text-amber-400">(experimental)</span>
+            </Link>
+          </div>
+        )}
       </div>
 
       <div className="card mt-4">

@@ -26,6 +26,8 @@ export default function Settings() {
   const setPearlRpcOverride = useUI((s) => s.setPearlRpcOverride);
   const tipEnabled = useUI((s) => s.tipEnabled);
   const setTipEnabled = useUI((s) => s.setTipEnabled);
+  const multisigEnabled = useUI((s) => s.multisigEnabled);
+  const setMultisigEnabled = useUI((s) => s.setMultisigEnabled);
 
   const defaultRpcUrl = pearlParams().rpcUrl;
   const [rpcDraft, setRpcDraft] = useState(pearlRpcOverride);
@@ -368,6 +370,42 @@ export default function Settings() {
           {tipEnabled
             ? "tip ON — 10 bps / 1 PRL min will appear in send previews"
             : "tip OFF — no extra output is added to your transactions"}
+        </p>
+      </section>
+
+      <section className="card mb-4 border-amber-200 dark:border-amber-900/40">
+        <h2 className="text-sm font-semibold">
+          Experimental: multisig vaults
+        </h2>
+        <p className="mt-2 text-xs text-ink-500">
+          Multisig vaults are an opt-in experimental feature. Turning
+          this on adds a <span className="font-medium">Vaults</span>{" "}
+          surface to the wallet that exposes the on-chain primitives —
+          BIP-342 tapscript m-of-n under a NUMS-bound P2TR output,
+          BIP-67-sorted cosigner pubkeys, and the cosigner pubkey
+          descriptor format — so the construction can be independently
+          audited.
+        </p>
+        <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+          The user-facing flows (create vault, exchange cosigner
+          descriptors, draft and co-sign transactions) are{" "}
+          <span className="font-medium">in development</span> and not
+          yet shipped. Don't move funds into a vault until those
+          flows land. Off by default.
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={multisigEnabled}
+            onChange={(e) => setMultisigEnabled(e.target.checked)}
+          />
+          Enable Vaults surface (experimental, default off)
+        </label>
+        <p className="mt-2 text-xs text-ink-500">
+          Status:{" "}
+          {multisigEnabled
+            ? "Vaults surface ON — primitives are visible at /vaults"
+            : "Vaults surface OFF — wallet behaves exactly as singlesig"}
         </p>
       </section>
 

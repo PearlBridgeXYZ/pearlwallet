@@ -16,6 +16,7 @@ import Bridge from "./ui/pages/Bridge";
 import History from "./ui/pages/History";
 import Settings from "./ui/pages/Settings";
 import About from "./ui/pages/About";
+import Vaults from "./ui/pages/Vaults";
 import Footer from "./ui/components/Footer";
 
 export default function App() {
@@ -139,6 +140,7 @@ export default function App() {
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/about" element={<About />} />
+          <Route path="/vaults" element={<Vaults />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

@@ -28,6 +28,29 @@ export function pearlReceivePath(index: number): string {
   return `m/86'/${PEARL_COIN_TYPE}'/0'/0/${index}`;
 }
 
+// Multisig pubkey derivation. We use a dedicated `account'` of 100 to
+// keep multisig cosigner keys in a different subtree from the
+// singlesig receive pool — sharing the pool would (a) collide with
+// RECEIVE_GAP_LIMIT walks and (b) let an observer who saw one
+// cosigner's vault membership link it back to their singlesig
+// receive addresses. The {vaultAccount}'/{index} sub-path is a
+// Sparrow-compatible shape: one hardened account per vault the
+// user participates in, one index per cosigner-slot within that
+// vault. This sub-path is *only* used as a cosigner pubkey export
+// — the on-chain output is a tapscript m-of-n leaf, not a P2TR
+// key-path spend of this child key.
+export const PEARL_MULTISIG_ACCOUNT_PREFIX = 100;
+
+export function pearlMultisigPath(vaultAccount: number, index: number): string {
+  if (!Number.isInteger(vaultAccount) || vaultAccount < 0 || vaultAccount > 0x7fffffff) {
+    throw new Error(`pearlMultisigPath: bad vaultAccount ${vaultAccount}`);
+  }
+  if (!Number.isInteger(index) || index < 0 || index > 0x7fffffff) {
+    throw new Error(`pearlMultisigPath: bad index ${index}`);
+  }
+  return `m/86'/${PEARL_COIN_TYPE}'/${PEARL_MULTISIG_ACCOUNT_PREFIX}'/${vaultAccount}'/${index}`;
+}
+
 export function masterFromSeed(seed: Uint8Array): HDKey {
   return HDKey.fromMasterSeed(seed);
 }

@@ -1,0 +1,3 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Pearl multisig golden vector > 2-of-3 of the canonical BIP-86 cosigner pubkeys produces a stable address 1`] = `"prl1phqh2clmzr0a5n2jl0m7txg0z8m6xqqweuldl5t3j5spjlutxuunqz8u44z"`;
