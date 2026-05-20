@@ -78,8 +78,31 @@ export async function saveKeystore(record: KeystoreRecord): Promise<void> {
   await db.keystore.put(record);
 }
 
+// localStorage keys this wallet persists. Kept here (next to wipeKeystore)
+// rather than in ui-store so a "wipe everything from this browser"
+// command stays the single source of truth — if a future feature stashes
+// state under a new key, adding it here keeps wipe complete.
+const LOCAL_STORAGE_KEYS: readonly string[] = [
+  "pearl-wallet-ui-v3", // theme, RPC override, tip preference
+];
+
 export async function wipeKeystore(): Promise<void> {
-  await db.keystore.delete("primary");
-  await db.addressBook.clear();
-  await db.txCache.clear();
+  // try/finally: a Dexie failure (quota exhaustion, corrupted IDB, locked
+  // store) must NOT prevent the localStorage scrub. Otherwise a "wipe"
+  // can leave the user's prior RPC override behind on the device.
+  try {
+    await db.keystore.delete("primary");
+    await db.addressBook.clear();
+    await db.txCache.clear();
+  } finally {
+    if (typeof localStorage !== "undefined") {
+      for (const k of LOCAL_STORAGE_KEYS) {
+        try {
+          localStorage.removeItem(k);
+        } catch {
+          // localStorage can be partitioned/quota-exhausted; swallow.
+        }
+      }
+    }
+  }
 }

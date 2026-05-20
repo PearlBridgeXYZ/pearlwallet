@@ -89,20 +89,38 @@ export function normalizeRelayerMintSig(raw: unknown): RelayerMintSig {
   if (typeof sdiHash !== "string" || !sdiHash.startsWith("0x")) {
     throw new Error("E_SIGNATURE_MALFORMED");
   }
-  // BigInt() rejects fractional strings + throws on NaN, but quietly
-  // coerces "" → 0n. An empty-string deadline would slide through as
-  // 0n and then fail `deadline <= nowSec` — making it look like a stale
-  // signature instead of a malformed one. Reject empty / missing fields
-  // explicitly before the coercion attempt.
+  // Wire format MUST be a decimal string for uint256 fields.
+  //
+  // - JSON `number` is rejected: amount above 2^53-1 loses precision at
+  //   parse time. A relayer returning amount=12345678901234567890 as a
+  //   number would arrive here as 12345678901234567000 and the binding
+  //   check `sig.amount === expected.amount` would erroneously fail
+  //   (or, worse, succeed with a *different* attacker-chosen amount if
+  //   they crafted the truncation). Opus v0.1.7 audit M-1.
+  // - Hex strings ("0x10") are rejected: BigInt() accepts them but the
+  //   relay contract spec says decimal. A future malicious relay could
+  //   use hex to slip a payload past visual inspection of intercepted
+  //   responses. Minimax v0.1.7 audit M-3.
+  // - Leading zeros are rejected for the same reason (canonical form).
+  // - `0` alone is allowed; deadline=0 will still fail the expiry check.
   function coerceUint(field: unknown): bigint {
     if (field === null || field === undefined) throw new Error("E_SIGNATURE_MALFORMED");
-    if (typeof field === "string" && field.trim() === "") throw new Error("E_SIGNATURE_MALFORMED");
-    if (typeof field === "number" && !Number.isFinite(field)) throw new Error("E_SIGNATURE_MALFORMED");
-    if (typeof field !== "string" && typeof field !== "number" && typeof field !== "bigint") {
+    if (typeof field === "bigint") {
+      if (field < 0n) throw new Error("E_SIGNATURE_MALFORMED");
+      return field;
+    }
+    if (typeof field !== "string") {
+      // number, boolean, object, array — all rejected. JSON numbers can
+      // lose precision; everything else is nonsense for a uint256 field.
+      throw new Error("E_SIGNATURE_MALFORMED");
+    }
+    // Strict canonical decimal: "0" or "[1-9]\d*". No leading zeros, no
+    // sign, no whitespace, no 0x prefix, no fraction, no exponent.
+    if (!/^(0|[1-9]\d*)$/.test(field)) {
       throw new Error("E_SIGNATURE_MALFORMED");
     }
     try {
-      return BigInt(field as string | number | bigint);
+      return BigInt(field);
     } catch {
       throw new Error("E_SIGNATURE_MALFORMED");
     }

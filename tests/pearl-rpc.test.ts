@@ -30,7 +30,8 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
       jsonrpc: "2.0", id: 1, result: [], error: null,
     })));
     const bal = await fetchPrlBalanceGrains(ADDR);
-    expect(bal).toBe(0n);
+    expect(bal.grains).toBe(0n);
+    expect(bal.degraded).toBe(false);
   });
 
   it("returns 0 when RPC reports -5 'No information available about address'", async () => {
@@ -38,7 +39,7 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
       jsonrpc: "2.0", id: 1, result: null,
       error: { code: -5, message: "No information available about address" },
     })));
-    expect(await fetchPrlBalanceGrains(ADDR)).toBe(0n);
+    expect((await fetchPrlBalanceGrains(ADDR)).grains).toBe(0n);
   });
 
   it("sums a single unspent output", async () => {
@@ -56,7 +57,8 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
     }));
     const bal = await fetchPrlBalanceGrains(ADDR);
     // 12.34567891 PRL = 1234567891 grains
-    expect(bal).toBe(1_234_567_891n);
+    expect(bal.grains).toBe(1_234_567_891n);
+    expect(bal.degraded).toBe(false);
   });
 
   it("subtracts spent UTXOs", async () => {
@@ -78,7 +80,7 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
       return jsonResp({ result: [], error: null });
     }));
     // Remaining UTXO: tx2:0 = 5 PRL = 500_000_000 grains
-    expect(await fetchPrlBalanceGrains(ADDR)).toBe(500_000_000n);
+    expect((await fetchPrlBalanceGrains(ADDR)).grains).toBe(500_000_000n);
   });
 
   it("handles addresses[] (multisig-shape) on the scriptPubKey", async () => {
@@ -92,7 +94,7 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
       }], error: null });
       return jsonResp({ result: [], error: null });
     }));
-    expect(await fetchPrlBalanceGrains(ADDR)).toBe(100_000_000n);
+    expect((await fetchPrlBalanceGrains(ADDR)).grains).toBe(100_000_000n);
   });
 
   it("paginates through multiple pages of 100 txs", async () => {
@@ -112,7 +114,7 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
       // empty page → loop terminates
       return jsonResp({ result: [], error: null });
     }));
-    expect(await fetchPrlBalanceGrains(ADDR)).toBe(100n * 100_000_000n);
+    expect((await fetchPrlBalanceGrains(ADDR)).grains).toBe(100n * 100_000_000n);
   });
 
   it("throws on non-recoverable RPC errors", async () => {
@@ -135,13 +137,16 @@ describe("rpcUrl override settability", () => {
     vi.restoreAllMocks();
   });
 
-  it("a custom override is used for subsequent calls", async () => {
-    useUI.getState().setPearlRpcOverride("https://custom.example/rpc");
+  it("a custom override (allowlisted host) is used for subsequent calls", async () => {
+    // v0.1.8 added an allowlist to setPearlRpcOverride. The override
+    // path is still settable for users who run their own sentry on the
+    // allowlisted host with a path prefix.
+    useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/v2");
     const mock = vi.fn(async () => jsonResp({ result: [], error: null }));
     vi.stubGlobal("fetch", mock);
     await fetchPrlBalanceGrains(ADDR);
     const url = (mock.mock.calls[0]![0] as string);
-    expect(url).toBe("https://custom.example/rpc");
+    expect(url).toBe("https://rpc.pearlwallet.xyz/v2");
     // Reset for other tests.
     useUI.getState().setPearlRpcOverride("");
     vi.restoreAllMocks();

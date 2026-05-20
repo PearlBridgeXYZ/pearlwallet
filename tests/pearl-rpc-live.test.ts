@@ -41,15 +41,15 @@ describe("Live Pearl RPC", () => {
 
   it.skipIf(!LIVE)("balance lookup against a real address returns a non-negative bigint", async () => {
     const bal = await fetchPrlBalanceGrains(TEST_ADDR);
-    expect(typeof bal).toBe("bigint");
-    expect(bal >= 0n).toBe(true);
+    expect(typeof bal.grains).toBe("bigint");
+    expect(bal.grains >= 0n).toBe(true);
   }, 60_000);
 
   it.skipIf(!LIVE)("balance lookup against a fresh/empty address returns 0", async () => {
     // Generated locally, never funded.
     const emptyAddr = "prl1p" + "q".repeat(58);
     // ^ valid bech32m surface; might fail decode on sentry side → treated as 0n.
-    const bal = await fetchPrlBalanceGrains(emptyAddr).catch(() => 0n);
-    expect(bal).toBeGreaterThanOrEqual(0n);
+    const bal = await fetchPrlBalanceGrains(emptyAddr).catch(() => ({ grains: 0n, degraded: false }));
+    expect(bal.grains).toBeGreaterThanOrEqual(0n);
   }, 30_000);
 });

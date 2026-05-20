@@ -26,8 +26,15 @@ export default function OnboardingCreate() {
   const [addresses, setAddresses] = useState<{ pearl: string; eth: string } | null>(null);
 
   // Generate mnemonic on mount (and on strength change).
+  // Timer ref lives outside the async IIFE so the useEffect cleanup can
+  // actually clear it. Previously the inner `return () => clearTimeout(t)`
+  // was the IIFE's return value, NOT useEffect's — so toggling between
+  // 12-word / 24-word during the 5s wait stacked timers (each one would
+  // still fire and flip canContinue to true even after unmount). Flagged
+  // in v0.1.7 audit (opus1 M-5).
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
     (async () => {
       try {
         const out = await cryptoWorker.call<"generateMnemonic", { mnemonic: string }>(
@@ -37,16 +44,15 @@ export default function OnboardingCreate() {
         if (!cancelled) {
           setMnemonic(out.mnemonic);
           setCanContinue(false);
-          const t = setTimeout(() => setCanContinue(true), 5000);
-          return () => clearTimeout(t);
+          timer = setTimeout(() => setCanContinue(true), 5000);
         }
       } catch (e) {
-        setError(String(e));
+        if (!cancelled) setError(String(e));
       }
-      return undefined;
     })();
     return () => {
       cancelled = true;
+      if (timer !== null) clearTimeout(timer);
     };
   }, [strength]);
 

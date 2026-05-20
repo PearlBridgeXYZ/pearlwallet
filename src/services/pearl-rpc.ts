@@ -101,6 +101,21 @@ function voutPaysAddress(vout: RawTxVout, address: string): boolean {
 // well past the point where we should stop trusting the RPC anyway.
 export const MAX_UTXO_WALK_PAGES = 20;
 
+// Per-page item cap. A sentry that returns 50k entries in a single page
+// (intentional flood, JSON-RPC misconfig) would blow the worker heap
+// even before we hit MAX_UTXO_WALK_PAGES. Hard-reject anything 5×
+// the requested page size — that's a server bug, not a tx history.
+export const MAX_RPC_PAGE_LENGTH = 500;
+
+export interface PrlBalanceResult {
+  grains: bigint;
+  // `true` when the walk hit MAX_UTXO_WALK_PAGES / MAX_RPC_PAGE_LENGTH
+  // before exhausting the address history. The returned grain total is
+  // a best-effort partial sum; the caller should surface a "partial"
+  // label so the user doesn't act on under-reported funds.
+  degraded: boolean;
+}
+
 /**
  * Returns the confirmed + mempool balance (in grains) for `address`,
  * by walking searchrawtransactions in pages and tracking a UTXO set.
@@ -111,8 +126,14 @@ export const MAX_UTXO_WALK_PAGES = 20;
  * uncredited UTXO and the later vout credit would survive, leaving
  * a spent UTXO in the running total. Two-pass guarantees every vin
  * sees the page's full vout set before deleting.
+ *
+ * On hitting the pagination/page-length caps we return `degraded:true`
+ * instead of throwing. A throw caused a single hostile-sentry-tarpitted
+ * address to flip the entire pool walk to `error` (failures >= 1 was
+ * enough on a 20-address pool where most other addresses returned
+ * empty), masking real funds. v0.1.7 audit (opus1 M-3 + minimax cross).
  */
-export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
+export async function fetchPrlBalanceGrains(address: string): Promise<PrlBalanceResult> {
   const PAGE = 100;
   let skip = 0;
   const utxo = new Map<string, bigint>();
@@ -123,12 +144,12 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
   // already credited in an earlier page.
   const seenOutputs = new Set<string>();
   let pageCount = 0;
+  let degraded = false;
 
   while (true) {
     if (pageCount >= MAX_UTXO_WALK_PAGES) {
-      // Best-effort cap — return the partial total rather than hang the
-      // tab. Caller can surface this as a degraded-balance label later.
-      throw new Error("E_UTXO_WALK_EXCEEDED");
+      degraded = true;
+      break;
     }
     let page: RawTx[];
     try {
@@ -136,10 +157,19 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       // Zero-activity addresses come back as -5; treat as empty wallet.
-      if (msg.includes("No information available about address")) return 0n;
+      if (msg.includes("No information available about address")) {
+        return { grains: 0n, degraded: false };
+      }
       throw err;
     }
     if (!page || page.length === 0) break;
+    if (page.length > MAX_RPC_PAGE_LENGTH) {
+      // Server returned a flood. Don't iterate further — that page
+      // alone is already past the policy ceiling — but still process
+      // up to the cap so we surface a partial total rather than 0.
+      degraded = true;
+      page = page.slice(0, MAX_RPC_PAGE_LENGTH);
+    }
 
     // Pass 1: credit every vout that pays this address.
     for (const tx of page) {
@@ -162,11 +192,12 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
     }
 
     pageCount++;
+    if (degraded) break;
     if (page.length < PAGE) break;
     skip += page.length;
   }
 
   let total = 0n;
   for (const amt of utxo.values()) total += amt;
-  return total;
+  return { grains: total, degraded };
 }

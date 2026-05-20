@@ -32,10 +32,13 @@ describe("C1: MAX_UTXO_WALK_PAGES cap", () => {
     expect(MAX_UTXO_WALK_PAGES).toBeLessThanOrEqual(50);
   });
 
-  it("throws E_UTXO_WALK_EXCEEDED when the sentry returns a full page forever", async () => {
-    // Hostile sentry: returns PAGE-length results indefinitely. The
-    // walker MUST stop after MAX_UTXO_WALK_PAGES pages — otherwise
-    // we spin the tab at 100% CPU.
+  it("returns degraded:true (not throw) when the sentry returns a full page forever", async () => {
+    // v0.1.8 changed behavior: hostile-sentry tarpit no longer throws
+    // E_UTXO_WALK_EXCEEDED. Throwing flipped a single bad pool address
+    // into a `failures++` and the partial-pool sum could be marked
+    // "error" (over-aggressive). We now return the partial total with
+    // degraded:true so the caller can label "partial" and the rest of
+    // the pool isn't poisoned.
     const PAGE = 100;
     let calls = 0;
     vi.stubGlobal("fetch", vi.fn(async () => {
@@ -49,9 +52,11 @@ describe("C1: MAX_UTXO_WALK_PAGES cap", () => {
       return jsonResp({ result: txs, error: null });
     }));
 
-    await expect(fetchPrlBalanceGrains(ADDR)).rejects.toThrow("E_UTXO_WALK_EXCEEDED");
-    // Sanity: walker called fetch at most MAX_UTXO_WALK_PAGES times
-    // before bailing.
+    const result = await fetchPrlBalanceGrains(ADDR);
+    expect(result.degraded).toBe(true);
+    // Total = MAX_UTXO_WALK_PAGES * PAGE * 1 grain.
+    expect(result.grains).toBe(BigInt(MAX_UTXO_WALK_PAGES) * BigInt(PAGE));
+    // Sanity: walker called fetch at most MAX_UTXO_WALK_PAGES times.
     expect(calls).toBeLessThanOrEqual(MAX_UTXO_WALK_PAGES + 1);
   });
 
@@ -66,7 +71,8 @@ describe("C1: MAX_UTXO_WALK_PAGES cap", () => {
       error: null,
     })));
     const bal = await fetchPrlBalanceGrains(ADDR);
-    expect(bal).toBe(100_000_000n);
+    expect(bal.grains).toBe(100_000_000n);
+    expect(bal.degraded).toBe(false);
   });
 });
 
@@ -115,7 +121,7 @@ describe("C1: two-pass per-page walk (hostile vin-before-vout ordering)", () => 
     // Remaining UTXO: tx2:0 (7 PRL). tx1:0 (10 PRL) was funded then
     // spent on the same page. Two-pass walk must yield 7 PRL, NOT 17.
     const bal = await fetchPrlBalanceGrains(ADDR);
-    expect(bal).toBe(700_000_000n);
+    expect(bal.grains).toBe(700_000_000n);
   });
 
   it("vouts that appear AFTER their spending vins on the same page are not double-spent", async () => {
@@ -143,7 +149,7 @@ describe("C1: two-pass per-page walk (hostile vin-before-vout ordering)", () => 
       }
       return jsonResp({ result: [], error: null });
     }));
-    expect(await fetchPrlBalanceGrains(ADDR)).toBe(200_000_000n);
+    expect((await fetchPrlBalanceGrains(ADDR)).grains).toBe(200_000_000n);
   });
 
   it("multi-tx per page: every vout in the page is credited before any vin debits", async () => {
@@ -182,6 +188,6 @@ describe("C1: two-pass per-page walk (hostile vin-before-vout ordering)", () => 
       }
       return jsonResp({ result: [], error: null });
     }));
-    expect(await fetchPrlBalanceGrains(ADDR)).toBe(0n);
+    expect((await fetchPrlBalanceGrains(ADDR)).grains).toBe(0n);
   });
 });

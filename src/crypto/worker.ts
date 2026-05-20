@@ -24,8 +24,15 @@ interface PearlReceiveKey {
   pubKey: Uint8Array;
 }
 
+// WorkerSession deliberately does NOT carry the mnemonic past derivation.
+// The mnemonic is in scope only inside the createWallet/restoreWallet/
+// unlock handlers, just long enough to derive the HD keys. Keeping it
+// resident here would make a worker-memory snapshot (DevTools heap dump,
+// crash report, attacker with browser process access) leak the seed
+// phrase — flagged by the v0.1.7 audit (opus2 H4). Re-export of the
+// mnemonic still requires the password (exportMnemonic decrypts the
+// stored blob), so we lose nothing by dropping it after derive.
 interface WorkerSession {
-  mnemonic: string;
   // External receive pool — RECEIVE_GAP_LIMIT entries, index 0..N-1.
   pearlReceive: PearlReceiveKey[];
   ethPrivKey: Uint8Array;
@@ -209,9 +216,14 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       return { valid: validateMnemonic(msg.mnemonic) };
 
     case "createWallet": {
+      // Wipe any prior session before reassigning so a previously
+      // unlocked wallet's private keys are zeroed before the new ones
+      // replace the binding. Without this, the orphaned Uint8Arrays
+      // can sit in worker heap until GC.
+      wipeSession();
       const mnemonic = generateMnemonic(msg.strength);
       const keys = await seedFromMnemonic(mnemonic);
-      session = { mnemonic, ...keys };
+      session = { ...keys };
       const pool = pearlAddressesFromSession(session, msg.network);
       const eth = ethAddressFromPubkey(keys.ethPubKey);
       const plaintext = new TextEncoder().encode(JSON.stringify({ mnemonic }));
@@ -228,9 +240,10 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       if (!validateMnemonic(msg.mnemonic)) {
         throw new Error("E_INVALID_MNEMONIC");
       }
+      wipeSession();
       const mnemonic = msg.mnemonic.trim().toLowerCase();
       const keys = await seedFromMnemonic(mnemonic);
-      session = { mnemonic, ...keys };
+      session = { ...keys };
       const pool = pearlAddressesFromSession(session, msg.network);
       const eth = ethAddressFromPubkey(keys.ethPubKey);
       const plaintext = new TextEncoder().encode(JSON.stringify({ mnemonic }));
@@ -244,12 +257,13 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
     }
 
     case "unlock": {
+      wipeSession();
       const plaintext = await decryptBlob(blobFromJSON(msg.blob), msg.password);
       const { mnemonic } = JSON.parse(new TextDecoder().decode(plaintext)) as {
         mnemonic: string;
       };
       const keys = await seedFromMnemonic(mnemonic);
-      session = { mnemonic, ...keys };
+      session = { ...keys };
       const pool = pearlAddressesFromSession(session, msg.network);
       const eth = ethAddressFromPubkey(keys.ethPubKey);
       const out: UnlockedResult = {
@@ -288,6 +302,19 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
 }
 
 self.onmessage = async (ev: MessageEvent<WorkerCmd>) => {
+  // Origin guard. A same-origin worker spawned via `new Worker(url)` only
+  // accepts messages from the spawning Window, so ev.origin should match
+  // self.location.origin. A `""` origin appears under file:// loads and
+  // some legacy test runners — accept those too (the wallet's threat
+  // model assumes an active attacker would need cross-origin posting to
+  // matter here). Flagged by minimax2 v0.1.7 audit as defense-in-depth.
+  // We accept "" (file:// / Node test env) and the exact self.location
+  // origin. Reject anything else — including a sibling iframe whose
+  // origin happens to be a substring of ours.
+  const expected = (self as unknown as { location?: { origin?: string } }).location?.origin;
+  if (ev.origin && expected && ev.origin !== expected) {
+    return;
+  }
   const msg = ev.data;
   try {
     const result = await handle(msg);

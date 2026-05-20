@@ -51,11 +51,36 @@ describe("normalizeRelayerMintSig — JSON boundary coercion (H1)", () => {
     expect(out.payload.deadline).toBe(9_999_999_999n);
   });
 
-  it("accepts uint256 fields as JSON numbers (small)", () => {
-    const out = normalizeRelayerMintSig(rawWire({ amount: 7, nonce: 1, deadline: 2_000_000_000 }));
-    expect(out.payload.amount).toBe(7n);
-    expect(out.payload.nonce).toBe(1n);
-    expect(out.payload.deadline).toBe(2_000_000_000n);
+  it("REJECTS uint256 fields encoded as JSON numbers (M-1 precision loss)", () => {
+    // v0.1.8 tightened coerceUint to decimal-string only. JSON numbers
+    // above 2^53-1 silently lose precision at JSON.parse time — a
+    // malicious relayer could exploit the truncation to swap a 1e20
+    // amount for the wallet's canonical value. The v0.1.7 contract
+    // accepted them as a "small-number convenience"; we no longer do.
+    expect(() => normalizeRelayerMintSig(rawWire({ amount: 7 }))).toThrow("E_SIGNATURE_MALFORMED");
+    expect(() => normalizeRelayerMintSig(rawWire({ nonce: 1 }))).toThrow("E_SIGNATURE_MALFORMED");
+    expect(() => normalizeRelayerMintSig(rawWire({ deadline: 2_000_000_000 }))).toThrow("E_SIGNATURE_MALFORMED");
+  });
+
+  it("REJECTS hex-string uint256 fields (non-canonical encoding)", () => {
+    // BigInt("0x10") evaluates to 16n, but the contract is decimal.
+    // Hex would let a hostile relayer encode the same value two ways,
+    // confusing visual inspection of intercepted responses.
+    expect(() => normalizeRelayerMintSig(rawWire({ amount: "0x10" }))).toThrow("E_SIGNATURE_MALFORMED");
+    expect(() => normalizeRelayerMintSig(rawWire({ deadline: "0xff" }))).toThrow("E_SIGNATURE_MALFORMED");
+  });
+
+  it("REJECTS uint256 with leading zeros (non-canonical decimal)", () => {
+    // "007" is not canonical. Reject so a sniffing tool sees one
+    // representation per value.
+    expect(() => normalizeRelayerMintSig(rawWire({ amount: "007" }))).toThrow("E_SIGNATURE_MALFORMED");
+  });
+
+  it("accepts '0' (canonical zero)", () => {
+    const out = normalizeRelayerMintSig(rawWire({ amount: "0", nonce: "0", deadline: "0" }));
+    expect(out.payload.amount).toBe(0n);
+    expect(out.payload.nonce).toBe(0n);
+    expect(out.payload.deadline).toBe(0n);
   });
 
   it("rejects non-object inputs", () => {

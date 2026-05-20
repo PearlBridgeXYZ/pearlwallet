@@ -2,6 +2,30 @@ import { create } from "zustand";
 
 export type Theme = "system" | "light" | "dark";
 
+// RPC override allowlist. CSP `connect-src` already restricts which hosts
+// the browser can fetch from, but the override field is persisted to
+// localStorage — a stray bookmarklet or malicious extension could write
+// arbitrary URLs there. Validating at the store boundary makes the
+// allowlist single-sourced (CSP + here) and gives the Settings UI a
+// machine-readable rejection reason. Empty string = use the default.
+const RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
+  "rpc.pearlwallet.xyz",
+  "ethereum-rpc.publicnode.com",
+  "eth.drpc.org",
+  "pearlbridge.xyz",
+];
+
+export function isAllowedRpcOverride(url: string): boolean {
+  if (url === "") return true;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    return RPC_OVERRIDE_ALLOWED_HOSTS.includes(u.host);
+  } catch {
+    return false;
+  }
+}
+
 interface UIState {
   theme: Theme;
   // Empty string = use the built-in default sentry RPC.
@@ -34,7 +58,13 @@ function loadUI(): PersistedUI {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_UI;
     const parsed = JSON.parse(raw) as Partial<PersistedUI>;
-    return { ...DEFAULT_UI, ...parsed };
+    const merged = { ...DEFAULT_UI, ...parsed };
+    // Defense in depth: a stale localStorage value (or one tampered by a
+    // bookmarklet) bypasses the setter's allowlist. Re-validate on load.
+    if (!isAllowedRpcOverride(merged.pearlRpcOverride)) {
+      merged.pearlRpcOverride = "";
+    }
+    return merged;
   } catch {
     return DEFAULT_UI;
   }
@@ -56,6 +86,13 @@ export const useUI = create<UIState>((set, get) => ({
     saveUI({ ...persistedSnapshot(get()), theme: t });
   },
   setPearlRpcOverride(url) {
+    // Reject non-allowlisted hosts at the boundary. The Settings UI
+    // should validate before calling, but a programmatic call (devtools,
+    // legacy migration, future deeplink handler) must not silently
+    // persist a sentry URL that CSP will block at runtime anyway.
+    if (!isAllowedRpcOverride(url)) {
+      throw new Error("E_RPC_OVERRIDE_NOT_ALLOWED");
+    }
     set({ pearlRpcOverride: url });
     saveUI({ ...persistedSnapshot(get()), pearlRpcOverride: url });
   },

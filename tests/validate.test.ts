@@ -22,15 +22,25 @@ describe("passwordAcceptable — L8 floor", () => {
     if (!out.ok) expect(out.reason).toMatch(/at least/);
   });
 
-  it("rejects a long-but-mono-class password (only lowercase)", () => {
-    const out = passwordAcceptable("aaaaaaaaaaaaaaaa");
+  it("rejects a mid-length mono-class password (10–15 chars, one class only)", () => {
+    // 10 chars (= MIN_PASSWORD_LENGTH) all lowercase → still rejected.
+    // v0.1.8 only opens an escape hatch at PASSPHRASE_MIN_LENGTH (16+).
+    const out = passwordAcceptable("aaaaaaaaaa");
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toMatch(/two of/);
   });
 
-  it("rejects a long-but-mono-class password (only digits)", () => {
-    const out = passwordAcceptable("1234567890123456");
+  it("rejects a 15-char mono-class digits password", () => {
+    const out = passwordAcceptable("123456789012345");
     expect(out.ok).toBe(false);
+  });
+
+  it("accepts a long mono-class passphrase (16+ chars, one class)", () => {
+    // v0.1.8 (opus2 cross-Low): a 16-char all-lowercase string draws
+    // its entropy from length, not class diversity. The classic XKCD
+    // passphrase shape should not be rejected.
+    expect(passwordAcceptable("correcthorsebatterystaple").ok).toBe(true);
+    expect(passwordAcceptable("aaaaaaaaaaaaaaaa").ok).toBe(true); // 16 a's
   });
 
   it("accepts a passphrase mixing lower and digits", () => {

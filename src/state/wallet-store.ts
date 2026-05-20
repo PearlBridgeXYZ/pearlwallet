@@ -71,7 +71,22 @@ interface WalletState {
 // changePassword). Other tabs reload the on-disk record so a subsequent
 // changePassword-from-Tab-B doesn't race-overwrite Tab-A's new password.
 const KEYSTORE_BROADCAST_CHANNEL = "pearl-wallet-keystore";
-type KeystoreEvent = { type: "blob-updated" } | { type: "wiped" };
+
+// Per-tab sender id. Every KeystoreEvent we broadcast carries this id so
+// the persistent receive handler can ignore our own messages — without
+// it, a `changePassword` in Tab A broadcasts `blob-updated`, the same
+// tab's listener receives it back, force-locks the freshly-rotated
+// session, and the user sees "wallet locked itself after I changed my
+// password" as flagged by the v0.1.7 audit (opus2 H3). crypto.randomUUID
+// is fine here — it's a tag, not a secret.
+const SENDER_ID: string =
+  typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+type KeystoreEvent =
+  | { type: "blob-updated"; sender: string }
+  | { type: "wiped"; sender: string };
 
 // Module-scope channel handle. Owned by init() to make BroadcastChannel
 // allocation idempotent across React.StrictMode double-effects, and so a
@@ -79,15 +94,33 @@ type KeystoreEvent = { type: "blob-updated" } | { type: "wiped" };
 let keystoreChannel: BroadcastChannel | null = null;
 let storeInitialized = false;
 
-function broadcastKeystoreEvent(ev: KeystoreEvent): void {
+function broadcastKeystoreEvent(ev: Omit<KeystoreEvent, "sender">): void {
   if (typeof BroadcastChannel === "undefined") return;
   try {
+    const payload = { ...ev, sender: SENDER_ID } as KeystoreEvent;
+    // Reuse the persistent channel if init() has wired it; otherwise
+    // fall through to an ephemeral channel (covers wipe() called before
+    // init() resolves in edge cases).
+    if (keystoreChannel) {
+      keystoreChannel.postMessage(payload);
+      return;
+    }
     const ch = new BroadcastChannel(KEYSTORE_BROADCAST_CHANNEL);
-    ch.postMessage(ev);
+    ch.postMessage(payload);
     ch.close();
   } catch {
     // BroadcastChannel unsupported (older Safari) — silent fallback.
   }
+}
+
+/** Test-only export of the per-tab sender id. */
+export function __broadcastSenderIdForTests(): string {
+  return SENDER_ID;
+}
+
+/** Test-only export of the broadcast channel name. */
+export function __broadcastChannelNameForTests(): string {
+  return KEYSTORE_BROADCAST_CHANNEL;
 }
 
 // Test-only reset hook. The Zustand store is process-global so a vitest
@@ -164,6 +197,13 @@ export const useWallet = create<WalletState>((set, get) => ({
       try {
         keystoreChannel = new BroadcastChannel(KEYSTORE_BROADCAST_CHANNEL);
         keystoreChannel.onmessage = (ev: MessageEvent<KeystoreEvent>) => {
+          // Ignore our own broadcasts. BroadcastChannel delivers to every
+          // listener bound to the channel name in the same origin —
+          // including the very tab that posted the message. Without this
+          // self-filter, Tab A's own `changePassword` would trigger Tab
+          // A's force-lock handler. SENDER_ID is unique per tab so this
+          // discriminator is exact (no false positives across tabs).
+          if (ev.data && (ev.data as KeystoreEvent).sender === SENDER_ID) return;
           // Wrap inside the async lock so we cannot interleave with an
           // in-flight unlock/restoreWallet/changePassword. Without this,
           // a peer-tab wipe between `cryptoWorker.call("unlock")` resolving

@@ -28,15 +28,22 @@ import { fetchPrlPriceUsd } from "./prices";
 interface PoolWalkResult {
   grains: bigint[];
   failures: number;
+  // `true` if ANY address in the pool returned a partial (page-cap-hit)
+  // result. The total is still summed but under-reports — UI surfaces
+  // a "partial" label so the user doesn't trust the visible balance.
+  degraded: boolean;
 }
 
 async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
   const grains: bigint[] = new Array(pool.length).fill(0n);
   let failures = 0;
+  let degraded = false;
   for (let i = 0; i < pool.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, 300));
     try {
-      grains[i] = await fetchPrlBalanceGrains(pool[i]!);
+      const r = await fetchPrlBalanceGrains(pool[i]!);
+      grains[i] = r.grains;
+      if (r.degraded) degraded = true;
     } catch {
       failures++;
     }
@@ -44,7 +51,7 @@ async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
   // If MORE than half the pool failed we treat the whole walk as a
   // bust — the visible balance would be too suspect to show.
   if (failures > pool.length / 2) throw new Error("pool walk failed");
-  return { grains, failures };
+  return { grains, failures, degraded };
 }
 
 export interface Balances {
@@ -72,7 +79,10 @@ export async function fetchBalances(
   try {
     const result = await fetchPoolBalances(pool);
     prl = result.grains.reduce((acc, g) => acc + g, 0n);
-    if (result.failures > 0) prlSource = "partial";
+    // Either a per-address failure OR a page-cap hit makes the sum
+    // a lower bound rather than a true balance — both surface as
+    // "partial" so the UI can warn the user.
+    if (result.failures > 0 || result.degraded) prlSource = "partial";
   } catch {
     prlSource = "error";
   }

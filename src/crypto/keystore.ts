@@ -11,7 +11,13 @@ export const SUPPORTED_BLOB_VERSION = 1 as const;
 // decrypt against a future v2 blob that swaps cipher or iterations —
 // the GCM auth check fails before we even attempt password-derived
 // decryption. Pre-v0.1.7 AAD was a static "pearl-web-wallet-v1"
-// label that carried zero context binding; this version is stricter.
+// label that carried zero context binding; v0.1.7 stored AAD as a
+// JSON.stringify({...}) which relied on V8 insertion-order key
+// ordering; v0.1.8 (this) switches to a fixed pipe-delimited string
+// so the bytes are stable across runtimes (Bun/Deno/older Safari).
+// The blob itself stores its own AAD bytes, so already-encrypted
+// records continue to decrypt — we only need the byte sequence to
+// be deterministic for new encrypts.
 export function computeAAD(
   version: number,
   kdf: string,
@@ -19,7 +25,7 @@ export function computeAAD(
   cipher: string,
 ): Uint8Array {
   return new TextEncoder().encode(
-    JSON.stringify({ v: version, kdf, iter: kdfIterations, c: cipher }),
+    `pearl-wallet/aad|v=${version}|kdf=${kdf}|iter=${kdfIterations}|cipher=${cipher}`,
   );
 }
 

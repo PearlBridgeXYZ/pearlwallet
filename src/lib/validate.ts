@@ -33,6 +33,15 @@ export function passwordStrength(password: string): PasswordStrength {
 
 export const MIN_PASSWORD_LENGTH = 10;
 
+// Above this length we relax the class-mix requirement. A 16-char
+// all-lowercase string ("correcthorsebatterystaple") has ~70 bits of
+// entropy when drawn from a 7k-word list — substantially stronger
+// than "Aa1!aaaa" (8 chars, 4 classes, ~25 bits). The class rule was
+// a proxy for entropy that hurt non-Latin-script users (a CJK
+// passphrase is "symbol class only" by our regex) and rejected the
+// XKCD passphrase pattern. v0.1.7 audit cross-Low.
+export const PASSPHRASE_MIN_LENGTH = 16;
+
 /**
  * Single source of truth for "can this password protect a keystore?".
  * Used by both create and changePassword flows so the bar can't drift
@@ -45,17 +54,19 @@ export function passwordAcceptable(password: string): { ok: true } | { ok: false
   if (password.length < MIN_PASSWORD_LENGTH) {
     return { ok: false, reason: `Password must be at least ${MIN_PASSWORD_LENGTH} characters.` };
   }
-  // Reject mono-class passwords. Two or more of: lowercase, uppercase,
-  // digit, symbol. This is a floor, not a ceiling — users are still free
-  // to choose a passphrase ("correct horse battery staple") which satisfies
-  // both lower and length without forcing them through ridiculous chars.
   const classes =
     Number(/[a-z]/.test(password)) +
     Number(/[A-Z]/.test(password)) +
     Number(/\d/.test(password)) +
     Number(/[^A-Za-z0-9]/.test(password));
+  // Long enough → entropy from length carries it; class mix not required.
+  if (password.length >= PASSPHRASE_MIN_LENGTH) {
+    return { ok: true };
+  }
+  // Shorter passwords (10–15 chars) still need two classes — the floor
+  // hasn't moved, only the passphrase escape hatch is new.
   if (classes < 2) {
-    return { ok: false, reason: "Password must mix at least two of: lowercase, uppercase, digit, symbol." };
+    return { ok: false, reason: `Use at least two of lowercase / uppercase / digit / symbol, or make it ${PASSPHRASE_MIN_LENGTH}+ characters.` };
   }
   return { ok: true };
 }
