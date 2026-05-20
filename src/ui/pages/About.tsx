@@ -48,6 +48,32 @@ export default function About() {
         </section>
 
         <section>
+          <h2 className="font-semibold">Offline / air-gapped use</h2>
+          <p className="mt-1 text-ink-600 dark:text-ink-300">
+            Every GitHub release attaches a single-file HTML build —
+            {" "}
+            <span className="font-mono">pearlwallet-offline-vX.Y.Z.html</span>
+            {" "}
+            — that runs entirely from
+            {" "}
+            <span className="font-mono">file://</span>
+            {" "}
+            with no external fetches. Save it to a USB stick, audit the
+            SHA-256, and sign transactions on a machine that never
+            touches the network. Broadcasting still needs an online
+            relay, but key material and signing stay air-gapped.{" "}
+            <a
+              href="https://github.com/PearlBridgeXYZ/pearlwallet/releases/latest"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2"
+            >
+              Latest release ↗
+            </a>
+          </p>
+        </section>
+
+        <section>
           <h2 className="font-semibold">How the bridge works</h2>
           <p className="mt-1 text-ink-600 dark:text-ink-300">
             PearlBridge locks PRL on Pearl L1 and mints an equivalent amount of WPRL on Ethereum
