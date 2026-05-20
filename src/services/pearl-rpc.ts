@@ -74,12 +74,17 @@ async function call<T>(method: string, params: unknown[]): Promise<T> {
 }
 
 // PRL float → grains. Round via toFixed(8) string to dodge float drift.
+// A malicious or buggy sentry could send NaN/Infinity (toFixed throws),
+// or a negative value (would poison the running total in the pool walk).
+// Reject those at the boundary so a single bad vout can't crash a 20-
+// address walk or under-report balance.
 function prlToGrains(value: number): bigint {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("E_INVALID_RPC_VALUE");
+  }
   const [whole, frac = ""] = value.toFixed(8).split(".");
   const fracPadded = (frac + "00000000").slice(0, 8);
-  const sign = whole.startsWith("-") ? -1n : 1n;
-  const wholeAbs = whole.replace("-", "");
-  return sign * (BigInt(wholeAbs) * 100_000_000n + BigInt(fracPadded));
+  return BigInt(whole) * 100_000_000n + BigInt(fracPadded);
 }
 
 function voutPaysAddress(vout: RawTxVout, address: string): boolean {
@@ -96,6 +101,12 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
   const PAGE = 100;
   let skip = 0;
   const utxo = new Map<string, bigint>();
+  // Some sentry paginators have been observed to re-emit a tx across
+  // page boundaries during a reorg, or skip-then-replay during cursor
+  // drift. Deduping outputs by `${txid}:${vout}` across the whole walk
+  // — not just within a page — prevents double-counting a UTXO that we
+  // already credited in an earlier page.
+  const seenOutputs = new Set<string>();
 
   while (true) {
     let page: RawTx[];
@@ -111,9 +122,11 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
 
     for (const tx of page) {
       for (const vout of tx.vout) {
-        if (voutPaysAddress(vout, address)) {
-          utxo.set(`${tx.txid}:${vout.n}`, prlToGrains(vout.value));
-        }
+        if (!voutPaysAddress(vout, address)) continue;
+        const key = `${tx.txid}:${vout.n}`;
+        if (seenOutputs.has(key)) continue;
+        seenOutputs.add(key);
+        utxo.set(key, prlToGrains(vout.value));
       }
       for (const vin of tx.vin) {
         if (!vin.txid || vin.vout === undefined) continue;

@@ -20,7 +20,7 @@ export default function App() {
   const init = useWallet((s) => s.init);
   const status = useWallet((s) => s.status);
   const lock = useWallet((s) => s.lock);
-  const lastActivity = useWallet((s) => s.lastActivity);
+  const touch = useWallet((s) => s.touch);
   const theme = useUI((s) => s.theme);
   const navigate = useNavigate();
   const location = useLocation();
@@ -37,26 +37,56 @@ export default function App() {
     else if (theme === "light") root.classList.add("light");
   }, [theme]);
 
-  // Auto-lock after AUTO_LOCK_MS of idle. Poll once per second so the
-  // observed lock time matches the countdown the user sees in TopBar
-  // (was 30s before — created up to a 30s "phantom unlocked" window).
+  // Activity-based idle tracking. Before v0.1.6 the auto-lock was fixed:
+  // 5 min after unlock, regardless of whether the user was actively
+  // using the wallet. Now real user input (pointer, key, touch, focus,
+  // visibility-change) bumps lastActivity, so an active typing/clicking
+  // user never auto-locks mid-flow. Throttled to once per second to
+  // avoid thrashing the Zustand store on mousemove.
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    let lastBump = 0;
+    const bump = () => {
+      const now = Date.now();
+      if (now - lastBump < 1000) return;
+      lastBump = now;
+      touch();
+    };
+    const events = ["pointerdown", "pointermove", "keydown", "touchstart", "wheel", "focus"];
+    for (const ev of events) window.addEventListener(ev, bump, { passive: true });
+    const onVis = () => { if (!document.hidden) bump(); };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      for (const ev of events) window.removeEventListener(ev, bump);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [status, touch]);
+
+  // Auto-lock poll. Reads lastActivity from the store each tick so we
+  // don't need the effect to re-run on every bump (which would tear
+  // down/restore the activity listeners 60×/min).
   useEffect(() => {
     if (status !== "unlocked") return;
     const timer = setInterval(() => {
-      if (Date.now() - lastActivity > AUTO_LOCK_MS) {
+      const since = Date.now() - useWallet.getState().lastActivity;
+      if (since > AUTO_LOCK_MS) {
         void lock();
         navigate("/unlock");
       }
     }, 1000);
     return () => clearInterval(timer);
-  }, [status, lastActivity, lock, navigate]);
+  }, [status, lock, navigate]);
 
   // Auto-route on status change.
   useEffect(() => {
     const path = location.pathname;
     if (status === "no-wallet" && !path.startsWith("/onboarding") && path !== "/") {
       navigate("/", { replace: true });
-    } else if (status === "locked" && path !== "/unlock" && !path.startsWith("/onboarding")) {
+    } else if (status === "locked" && path !== "/unlock") {
+      // v0.1.6: also bounce locked users off /onboarding/*. Pre-fix, a
+      // locked user could deep-link to /onboarding/create and overwrite
+      // the existing keystore. The store-level E_WALLET_EXISTS guard now
+      // catches that, but it's cleaner to never present the form at all.
       navigate("/unlock", { replace: true });
     } else if (
       status === "unlocked" &&

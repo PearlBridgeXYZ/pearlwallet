@@ -17,14 +17,18 @@ export const ETH_RPC_FALLBACK: Record<EthNetwork, string> = {
 };
 
 // PearlBridge RC5 mainnet — UUPS proxies; addresses survive impl upgrades.
-// Source: PearlBridgeXYZ/frontend src/lib/contracts.ts (mainnet).
+// Verified against PearlBridgeXYZ/frontend src/lib/contracts.ts on 2026-05-20.
+// RC3 (0x5b2C/0xbE0D) and earlier are deprecated and dead. Wallet builds
+// shipping RC3 will silently read 0 balance from the dead WPRL proxy and
+// would broadcast mints to a deactivated controller — flagged Critical in
+// the v0.1.5 audit and corrected here.
 export const WPRL_ADDRESS: Record<EthNetwork, `0x${string}`> = {
-  mainnet: "0xbE0DDDD4d064Ae941EA379b651fEF0317af5387e",
+  mainnet: "0x07696DcaB55E62cfef953666b29Fe1970518cB00",
   sepolia: "0x0000000000000000000000000000000000000000",
 };
 
 export const BRIDGE_ROUTER_ADDRESS: Record<EthNetwork, `0x${string}`> = {
-  mainnet: "0x5b2C49f1B253dFbD404CeEe2843979a977ba4009",
+  mainnet: "0xA6571B73489d4eBFA269a107208665dF7C80Aef5",
   sepolia: "0x0000000000000000000000000000000000000000",
 };
 

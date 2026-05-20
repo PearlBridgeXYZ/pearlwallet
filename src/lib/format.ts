@@ -28,16 +28,18 @@ export function parseWPRL(amount: string): bigint {
 
 export function parseDecimal(amount: string, decimals: number): bigint {
   const trimmed = amount.trim();
-  if (!/^-?\d*(\.\d*)?$/.test(trimmed) || trimmed === "" || trimmed === ".") {
+  // Reject negative and empty/dot-only inputs at the boundary. Every caller
+  // (SendPRL/SendWPRL/Bridge amount fields) is a positive transfer amount;
+  // a negative value silently coerced past validation would underflow the
+  // balance check (`amount <= balance` passes for negatives) and could be
+  // mis-rendered by formatGrains downstream.
+  if (!/^\d*(\.\d*)?$/.test(trimmed) || trimmed === "" || trimmed === ".") {
     throw new Error("E_INVALID_AMOUNT");
   }
-  const neg = trimmed.startsWith("-");
-  const clean = neg ? trimmed.slice(1) : trimmed;
-  const [whole, frac = ""] = clean.split(".");
+  const [whole, frac = ""] = trimmed.split(".");
   if (frac.length > decimals) throw new Error("E_TOO_MANY_DECIMALS");
   const fracPadded = frac.padEnd(decimals, "0");
-  const result = BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(fracPadded || "0");
-  return neg ? -result : result;
+  return BigInt(whole || "0") * 10n ** BigInt(decimals) + BigInt(fracPadded || "0");
 }
 
 export function formatUSD(value: number): string {

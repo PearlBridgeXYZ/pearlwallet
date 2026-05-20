@@ -25,6 +25,11 @@ export const TIP_MIN_GRAINS = PRL_GRAINS_PER_COIN; // 1 PRL
 
 export function computeTipGrains(sendAmountGrains: bigint): bigint {
   if (sendAmountGrains <= 0n) return 0n;
+  // Skip the tip entirely when the send is smaller than the floor.
+  // Without this guard, a 0.01 PRL send would carry a 1 PRL tip — 100×
+  // the principal — and the user's "Total" line would silently balloon.
+  // The bps rate already produces a meaningful tip at >= 1 PRL sends.
+  if (sendAmountGrains < TIP_MIN_GRAINS) return 0n;
   const bpsTip = (sendAmountGrains * TIP_BPS) / TIP_DIVISOR;
   return bpsTip > TIP_MIN_GRAINS ? bpsTip : TIP_MIN_GRAINS;
 }

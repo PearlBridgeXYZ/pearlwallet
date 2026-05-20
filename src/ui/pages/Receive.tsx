@@ -26,12 +26,28 @@ export default function Receive() {
     void dataUrl(addr).then(setQr);
   }, [addr]);
 
+  // Auto-clear the clipboard 60s after copy so an address (not as
+  // sensitive as a key, but still a privacy/correlation signal) doesn't
+  // sit in the OS paste buffer indefinitely. Best-effort: a clipboard
+  // write that happened after this copy will be respected — we only
+  // clear if the clipboard *still* contains exactly our address.
   async function copy() {
     if (!addr) return;
     try {
       await navigator.clipboard.writeText(addr);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+      const copiedAddr = addr;
+      setTimeout(async () => {
+        try {
+          const current = await navigator.clipboard.readText();
+          if (current === copiedAddr) {
+            await navigator.clipboard.writeText("");
+          }
+        } catch {
+          // Permissions or focus restrictions — best-effort only.
+        }
+      }, 60_000);
     } catch {
       // ignore
     }

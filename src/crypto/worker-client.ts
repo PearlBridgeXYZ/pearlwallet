@@ -39,11 +39,19 @@ class WorkerClient {
     });
   }
 
-  /** Terminate and respawn — used on lock to wipe key material. */
+  /**
+   * Terminate and respawn — used on lock to wipe key material. Any calls
+   * in flight (e.g. an unlock racing with an idle auto-lock) had their
+   * worker killed mid-postMessage; we must reject the awaiters explicitly
+   * so they don't hang forever. Pre-fix, lock-during-unlock wedged the UI.
+   */
   reset(): void {
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
+    }
+    for (const { reject } of this.inflight.values()) {
+      reject(new Error("E_WORKER_RESET"));
     }
     this.inflight.clear();
   }

@@ -47,6 +47,17 @@ function bytesToHex(b: Uint8Array): string {
 
 function hexToBytes(hex: string): Uint8Array {
   const clean = hex.replace(/^0x/, "");
+  // Reject malformed hex at the boundary. parseInt silently coerces non-hex
+  // chars to NaN (which Uint8Array maps to 0), and integer division of an
+  // odd-length string truncates the trailing nibble. A manually edited
+  // keystore JSON with a one-char-off salt/iv would decrypt to garbage on
+  // an incorrect-but-valid-shaped key — fail loudly instead.
+  if (clean.length === 0 || clean.length % 2 !== 0) {
+    throw new Error("E_INVALID_HEX_LENGTH");
+  }
+  if (!/^[0-9a-fA-F]+$/.test(clean)) {
+    throw new Error("E_INVALID_HEX_CHARS");
+  }
   const out = new Uint8Array(clean.length / 2);
   for (let i = 0; i < out.length; i++) {
     out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);

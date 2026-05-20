@@ -50,13 +50,28 @@ export interface RelayerMintSig {
 }
 
 /**
- * Verify a relayer mint signature is well-formed AND signed by an address
- * holding the RELAYER role on BridgeController. The wallet MUST call this
- * before broadcasting any mint tx, or it accepts attacker-supplied recipients.
+ * The user's submitted bridge intent — what they ACTUALLY wanted to mint.
+ * verifyRelayerMintSig compares the relayer's signed payload to this. A
+ * compromised or MITM-attacked relay otherwise could substitute its own
+ * recipient/amount/sdiHash; this struct closes that loss-of-funds path.
+ */
+export interface IntentExpectation {
+  recipient: `0x${string}`;
+  amount: bigint;
+  sdiHash: `0x${string}`;
+}
+
+/**
+ * Verify a relayer mint signature is well-formed, NOT expired, signed by
+ * an address holding the RELAYER role on BridgeController, AND that the
+ * signed payload binds to the user's own submitted intent. The wallet
+ * MUST call this before broadcasting any mint tx, or it accepts attacker-
+ * supplied recipients/amounts/intents.
  */
 export async function verifyRelayerMintSig(
   sig: RelayerMintSig,
   network: EthNetwork = "mainnet",
+  expected?: IntentExpectation,
 ): Promise<{ signer: `0x${string}` }> {
   const cfg = bridgeConfig(network);
   const chainId = network === "mainnet" ? 1 : 11155111;
@@ -66,6 +81,23 @@ export async function verifyRelayerMintSig(
     chainId,
     verifyingContract: cfg.bridgeController,
   };
+  // Deadline check first — cheapest, no network. Reject a signature that
+  // already expired before we burn an RPC round-trip on role lookup.
+  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  if (sig.payload.deadline <= nowSec) {
+    throw new Error("E_SIGNATURE_EXPIRED");
+  }
+  if (expected) {
+    if (sig.payload.recipient.toLowerCase() !== expected.recipient.toLowerCase()) {
+      throw new Error("E_SIGNATURE_RECIPIENT_MISMATCH");
+    }
+    if (sig.payload.amount !== expected.amount) {
+      throw new Error("E_SIGNATURE_AMOUNT_MISMATCH");
+    }
+    if (sig.payload.sdiHash.toLowerCase() !== expected.sdiHash.toLowerCase()) {
+      throw new Error("E_SIGNATURE_SDI_HASH_MISMATCH");
+    }
+  }
   const signer = await recoverTypedDataAddress({
     domain,
     types: MINT_TYPES,
@@ -164,14 +196,21 @@ export async function postSdiIntent(network: EthNetwork, sdi: unknown): Promise<
 
 /**
  * GET signed mint payload for a deposited intent AND verify it against the
- * on-chain RELAYER role. Throws E_SIGNATURE_NOT_FROM_RELAYER if the signer
- * doesn't hold the role — protects against MITM/forged relayer responses.
+ * on-chain RELAYER role, the requested user intent, and that it has not
+ * expired. `expected` ties the relayer's payload to what the user actually
+ * submitted — a MITM relay otherwise could swap recipient/amount/sdiHash
+ * for its own address. Throws on any mismatch; broadcast path must not
+ * call this without `expected` in production.
  */
-export async function getMintSignature(network: EthNetwork, intentId: string): Promise<RelayerMintSig> {
+export async function getMintSignature(
+  network: EthNetwork,
+  intentId: string,
+  expected?: IntentExpectation,
+): Promise<RelayerMintSig> {
   const cfg = bridgeConfig(network);
   const res = await fetchWithTimeout(`${cfg.relayApiBase}/intents/${intentId}/mint-sig`);
   if (!res.ok) throw new Error(`relay /mint-sig: ${res.status}`);
   const raw = (await res.json()) as RelayerMintSig;
-  await verifyRelayerMintSig(raw, network);
+  await verifyRelayerMintSig(raw, network, expected);
   return raw;
 }

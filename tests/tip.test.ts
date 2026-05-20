@@ -8,7 +8,7 @@ import {
 } from "../src/chains/pearl/tip";
 
 describe("computeTipGrains", () => {
-  it("applies 1 PRL floor on small sends", () => {
+  it("applies 1 PRL floor when send is >= floor but bps tip is below it", () => {
     // 100 PRL × 10 bps = 0.1 PRL → below 1 PRL floor → 1 PRL
     expect(computeTipGrains(100n * 100_000_000n)).toBe(TIP_MIN_GRAINS);
   });
@@ -26,9 +26,17 @@ describe("computeTipGrains", () => {
     expect(computeTipGrains(-1n)).toBe(0n);
   });
 
-  it("never produces a sub-floor tip from a small but positive send", () => {
-    expect(computeTipGrains(1n)).toBe(TIP_MIN_GRAINS);
-    expect(computeTipGrains(100n)).toBe(TIP_MIN_GRAINS);
+  it("returns 0 when the send is smaller than the floor (don't tip 100× principal)", () => {
+    // v0.1.6 fix: a 0.01 PRL send carrying a 1 PRL tip would silently
+    // 100× the user's outgoing total. Skip the tip entirely when send
+    // is below the floor — bps-only tips kick in at >= 1 PRL.
+    expect(computeTipGrains(1n)).toBe(0n);
+    expect(computeTipGrains(100n)).toBe(0n);
+    expect(computeTipGrains(TIP_MIN_GRAINS - 1n)).toBe(0n);
+  });
+
+  it("applies the floor at exactly the floor amount", () => {
+    expect(computeTipGrains(TIP_MIN_GRAINS)).toBe(TIP_MIN_GRAINS);
   });
 
   it("monotonically increases with send amount once past the floor", () => {

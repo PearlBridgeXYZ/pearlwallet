@@ -53,8 +53,11 @@ describe("parseWPRL / formatWei", () => {
 });
 
 describe("parseDecimal sign handling", () => {
-  it("handles negatives", () => {
-    expect(parseDecimal("-1.5", 8)).toBe(-150_000_000n);
+  // v0.1.6 hardening: every caller (SendPRL/SendWPRL/Bridge amount fields)
+  // is a positive transfer amount. A silently-coerced negative would
+  // underflow downstream balance checks, so the boundary now rejects it.
+  it("rejects negatives", () => {
+    expect(() => parseDecimal("-1.5", 8)).toThrow(/E_INVALID_AMOUNT/);
   });
 });
 

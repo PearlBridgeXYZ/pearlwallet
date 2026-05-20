@@ -39,6 +39,7 @@ export default function Settings() {
   const [newPw, setNewPw] = useState("");
   const [newPw2, setNewPw2] = useState("");
   const [wipePhrase, setWipePhrase] = useState("");
+  const [wipePassword, setWipePassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -121,9 +122,9 @@ export default function Settings() {
     }
   }
 
-  function saveRpc() {
+  function saveRpc(rawValue?: string) {
     setRpcStatus(null);
-    const trimmed = rpcDraft.trim();
+    const trimmed = (rawValue ?? rpcDraft).trim();
     if (trimmed === "") {
       setPearlRpcOverride("");
       setRpcStatus(`Using default (${defaultRpcUrl}).`);
@@ -146,18 +147,33 @@ export default function Settings() {
   }
 
   function resetRpc() {
+    // Route the reset through saveRpc's validated path. setRpcDraft is
+    // async so we pass "" explicitly rather than relying on state having
+    // settled by the time saveRpc reads it.
     setRpcDraft("");
-    setPearlRpcOverride("");
-    setRpcStatus(`Using default (${defaultRpcUrl}).`);
+    saveRpc("");
   }
 
   async function doWipe() {
+    setError(null);
     if (wipePhrase.trim().toLowerCase() !== "wipe my wallet") {
       setError('Type "wipe my wallet" exactly to confirm.');
       return;
     }
-    await wipe();
-    navigate("/");
+    if (!wipePassword) {
+      setError("Enter your password to confirm the wipe.");
+      return;
+    }
+    try {
+      await wipe(wipePassword);
+      navigate("/");
+    } catch (e) {
+      setError(
+        e instanceof Error && e.message === "E_PASSWORD_WRONG"
+          ? "Incorrect password."
+          : e instanceof Error ? e.message : "Wipe failed.",
+      );
+    }
   }
 
   return (
@@ -264,6 +280,12 @@ export default function Settings() {
           A malicious RPC can lie about your balance and tx state, and can see your addresses.
           It cannot move funds (your keys never leave this browser), but only point at endpoints you trust.
         </p>
+        <p className="mt-1 text-xs text-ink-500">
+          Note: the wallet&apos;s strict Content Security Policy only permits
+          requests to the default RPC hosts. A custom RPC URL on a different
+          host will be blocked by the browser unless you&apos;re running the
+          wallet from source with an adjusted CSP.
+        </p>
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <input
             className="input mono flex-1"
@@ -274,7 +296,7 @@ export default function Settings() {
             spellCheck={false}
             onChange={(e) => setRpcDraft(e.target.value)}
           />
-          <button onClick={saveRpc} className="btn-primary">Save</button>
+          <button onClick={() => saveRpc()} className="btn-primary">Save</button>
           <button onClick={resetRpc} className="btn-secondary" disabled={!pearlRpcOverride && !rpcDraft}>
             Reset
           </button>
@@ -332,16 +354,25 @@ export default function Settings() {
         <h2 className="text-sm font-semibold text-red-700 dark:text-red-400">Danger zone</h2>
         <p className="mt-2 text-xs text-ink-500">
           Wiping the wallet from this browser deletes the encrypted keystore here.
-          You'll need your recovery phrase to restore.
+          You&apos;ll need your recovery phrase to restore. Password required so
+          a passer-by with brief device access can&apos;t nuke your keystore.
         </p>
-        <div className="mt-3 flex gap-2">
+        <div className="mt-3 flex flex-col gap-2">
           <input
             className="input"
             placeholder='Type "wipe my wallet"'
             value={wipePhrase}
             onChange={(e) => setWipePhrase(e.target.value)}
           />
-          <button onClick={doWipe} className="btn-danger">Wipe</button>
+          <input
+            className="input"
+            type="password"
+            placeholder="Your password"
+            value={wipePassword}
+            onChange={(e) => setWipePassword(e.target.value)}
+            autoComplete="current-password"
+          />
+          <button onClick={doWipe} className="btn-danger self-start">Wipe</button>
         </div>
       </section>
 
