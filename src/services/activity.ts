@@ -83,33 +83,53 @@ function rpcUrl(): string {
   return pearlParams("mainnet", override).rpcUrl;
 }
 
+// Sentry 5xx retry policy: mirror pearl-rpc.ts:call(). A pool walk fires
+// many heavyweight searchrawtransactions calls in sequence; the public
+// sentry has been observed to emit transient nginx-level 503s under
+// concurrent load (measured 2026-05-20: 9/20 parallel calls 503'd). A
+// single 503 on any pool address would otherwise flag the whole walk
+// as "partial" and surface a "sentry errors on some addresses" warning
+// to users with a perfectly healthy wallet. v0.1.14 hotfix.
+const ACTIVITY_RPC_ATTEMPTS = 3;
+
 async function searchrawtransactions(
   address: string,
   skip: number,
   count: number,
 ): Promise<RawTx[]> {
-  const res = await fetch(rpcUrl(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      method: "searchrawtransactions",
-      params: [address, 1, skip, count],
-      id: 1,
-    }),
-  });
-  if (!res.ok) throw new Error(`rpc http ${res.status}`);
-  const body = (await res.json()) as {
-    result: RawTx[] | null;
-    error: { code: number; message: string } | null;
-  };
-  if (body.error) {
-    if (body.error.message.includes("No information available about address")) {
-      return [];
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < ACTIVITY_RPC_ATTEMPTS; attempt++) {
+    if (attempt > 0) {
+      await new Promise((r) => setTimeout(r, 250 * attempt));
     }
-    throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
+    const res = await fetch(rpcUrl(), {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        method: "searchrawtransactions",
+        params: [address, 1, skip, count],
+        id: 1,
+      }),
+    });
+    if (!res.ok) {
+      lastErr = new Error(`rpc http ${res.status}`);
+      if (res.status >= 500 && res.status < 600) continue;
+      throw lastErr;
+    }
+    const body = (await res.json()) as {
+      result: RawTx[] | null;
+      error: { code: number; message: string } | null;
+    };
+    if (body.error) {
+      if (body.error.message.includes("No information available about address")) {
+        return [];
+      }
+      throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
+    }
+    return body.result ?? [];
   }
-  return body.result ?? [];
+  throw lastErr ?? new Error("rpc exhausted retries");
 }
 
 function voutPaysAnyOf(vout: RawTxVout, addresses: Set<string>): string | null {

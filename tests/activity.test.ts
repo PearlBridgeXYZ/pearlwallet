@@ -1,6 +1,6 @@
 // v0.1.13 — activity scanner. Classifies pool-touched Pearl txs as in/out
 // and pulls WPRL Transfer logs via viem. Covers:
-//   - Pearl: in / out / self-spend skip / cross-address dedupe / partial source on per-addr failure
+//   - Pearl: in / out / self-spend skip / cross-address dedupe / partial source on per-addr failure / 5xx retry succeeds (v0.1.14)
 //   - WPRL: in / out / self-transfer collapse to out / source error on RPC throw
 //   - Merge: combined items sorted by timeSec descending and trimmed to `limit`
 
@@ -23,11 +23,21 @@ type AddrResponses = Record<string, unknown[]>;
 
 let queued: AddrResponses = {};
 let pearlForceError: string | null = null;
+// Per-address transient 5xx counter. Used by the v0.1.14 retry test:
+// the mock returns 503 for the first N calls on a given address, then
+// flips back to normal. Proves the retry layer absorbs transient sentry
+// overload without flagging pearlSource='partial'.
+let pearlTransient5xx: Record<string, number> = {};
 let originalFetch: typeof globalThis.fetch;
 
-function mockFetchOnce(responses: AddrResponses, forceErrorAddr?: string) {
+function mockFetchOnce(
+  responses: AddrResponses,
+  forceErrorAddr?: string,
+  transient5xx: Record<string, number> = {},
+) {
   queued = responses;
   pearlForceError = forceErrorAddr ?? null;
+  pearlTransient5xx = { ...transient5xx };
 }
 
 beforeEach(() => {
@@ -41,6 +51,10 @@ beforeEach(() => {
     }
     const addr = body.params[0] as string;
     if (pearlForceError && addr === pearlForceError) {
+      return new Response("", { status: 503 });
+    }
+    if ((pearlTransient5xx[addr] ?? 0) > 0) {
+      pearlTransient5xx[addr] = (pearlTransient5xx[addr] ?? 0) - 1;
       return new Response("", { status: 503 });
     }
     const result = queued[addr] ?? [];
@@ -213,6 +227,34 @@ describe("v0.1.13 / activity — Pearl classification", () => {
     const result = await fetchActivity(POOL, ETH_ADDR, "mainnet", 10);
     expect(result.pearlSource).toBe("partial");
     expect(result.items.filter((i) => i.chain === "pearl")).toHaveLength(1);
+  });
+
+  // v0.1.14 hotfix: under concurrent load the public sentry emits
+  // transient nginx 503s on otherwise healthy pool addresses. Without
+  // the 3-attempt retry mirror, a single 503 would flip the pool walk
+  // to 'partial' and surface "sentry errors on some addresses" to users
+  // with a perfectly fine wallet. With the retry, 2 transient 5xx
+  // followed by a 200 must round-trip live without raising 'partial'.
+  it("retries transient 5xx and keeps pearlSource='live' when sentry recovers", async () => {
+    mockFetchOnce(
+      {
+        [POOL[0]!]: [rawTx("T_in", { vout: [{ value: 1.0, address: POOL[0]! }], time: 1 })],
+        [POOL[1]!]: [rawTx("T_in2", { vout: [{ value: 0.5, address: POOL[1]! }], time: 2 })],
+      },
+      undefined,
+      { [POOL[1]!]: 2 },  // POOL[1] flaps 503 twice then succeeds
+    );
+    vi.spyOn(ethRpc, "ethClient").mockReturnValue({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getBlockNumber: async () => 18_000_000n,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getLogs: async () => [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await fetchActivity(POOL, ETH_ADDR, "mainnet", 10);
+    expect(result.pearlSource).toBe("live");
+    expect(result.items.filter((i) => i.chain === "pearl")).toHaveLength(2);
   });
 });
 
