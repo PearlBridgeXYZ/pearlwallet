@@ -1,14 +1,16 @@
 import { useState } from "react";
 import Page from "../components/Page";
+import ActivityList from "../components/ActivityList";
 
-type Filter = "all" | "prl" | "wprl" | "bridge";
+type Filter = "all" | "prl" | "wprl";
 
 export default function History() {
   const [filter, setFilter] = useState<Filter>("all");
+
   return (
     <Page title="History">
       <div className="mb-4 flex gap-2 text-sm">
-        {(["all", "prl", "wprl", "bridge"] as Filter[]).map((f) => (
+        {(["all", "prl", "wprl"] as Filter[]).map((f) => (
           <button
             key={f}
             type="button"
@@ -23,8 +25,13 @@ export default function History() {
           </button>
         ))}
       </div>
-      <div className="card text-sm text-ink-500">
-        No transactions yet. Activity appears here once you send, receive, or bridge.
+      <div className="card">
+        <ActivityList filter={filter} limit={100} />
+        <p className="mt-4 text-xs text-ink-500">
+          Pearl is scanned via your configured sentry RPC; WPRL is scanned via
+          the last ~100k Ethereum blocks. Native ETH transfers are not listed
+          here — view your Ethereum address on Etherscan for the full picture.
+        </p>
       </div>
     </Page>
   );

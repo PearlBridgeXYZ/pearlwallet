@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
+import ActivityList from "../components/ActivityList";
 import { useWallet } from "../../state/wallet-store";
 import { fetchBalances } from "../../services/balances";
 import { formatGrains, formatWei, formatUSD, shortAddr } from "../../lib/format";
@@ -115,7 +116,7 @@ export default function Dashboard() {
           <h2 className="text-sm font-semibold">Recent activity</h2>
           <Link to="/history" className="text-xs text-pearl-700 hover:underline">See all</Link>
         </div>
-        <p className="mt-3 text-sm text-ink-500">No activity yet.</p>
+        <ActivityList limit={5} truncate />
       </div>
 
       <div className="mt-4 text-center text-xs text-ink-400">
