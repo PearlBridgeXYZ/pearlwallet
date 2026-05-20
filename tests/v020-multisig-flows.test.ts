@@ -50,6 +50,9 @@ import {
   wireDescriptorFromRecord,
   inspectPsbt,
   finalizeVaultPsbt,
+  psbtOutputsEqual,
+  feeSuspiciousReason,
+  assertPsbtMatchesPreview,
   PER_INPUT_VBYTES_MULTISIG,
   PER_P2TR_OUTPUT_VBYTES,
   FIXED_OVERHEAD_VBYTES,
@@ -543,6 +546,386 @@ describe("Vault determinism — independent reconstruction", () => {
       params,
     );
     expect(d1.address).not.toBe(d2.address);
+  });
+});
+
+describe("v0.2.1 — output parsing + foreign-signer partition (audit pass 2 Med #1/#2)", () => {
+  it("parses every PSBT output as { address, amountGrains, scriptHex }", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 200_000n }],
+      [
+        { address: rec.pearlAddress, amountGrains: 150_000n }, // destination back to vault
+        { address: rec.pearlAddress, amountGrains: 40_000n },  // "change" also to vault
+      ],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(info.outputs).toHaveLength(2);
+    expect(info.outputs[0]!.amountGrains).toBe(150_000n);
+    expect(info.outputs[0]!.address).toBe(rec.pearlAddress);
+    expect(info.outputs[1]!.amountGrains).toBe(40_000n);
+    expect(info.outputs[1]!.address).toBe(rec.pearlAddress);
+    expect(info.outputs[0]!.scriptHex.length).toBe(68); // OP_1 PUSH_32 <32B>
+  });
+
+  it("partitions tapScriptSig pubkeys into in-vault signersHex vs foreignSignersHex", async () => {
+    // Two distinct vaults sharing a single cosigner. Sign with cs[0] under
+    // vault A, then call inspectPsbt against vault B's cosigner set: cs[0]
+    // should show up as foreign there. This is the audit-pass-2 Med #2
+    // fix exposed end-to-end.
+    const cs = await cosigners(5);
+    const recA = recordFromCosigners(2, cs.slice(0, 3), 0);
+    let psbt = composeWorkerPsbt(
+      recA,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: recA.pearlAddress, amountGrains: 90_000n }],
+    );
+    psbt = signWith(psbt, cs[0]!.privateKey);
+
+    // Inspect with vault A's cosigner set: cs[0] is in-vault.
+    const inA = inspectPsbt(psbt, 2, recA.sortedPubkeysHex);
+    expect(inA.signersHex).toEqual([bytesToHex(cs[0]!.xOnlyPubkey)]);
+    expect(inA.foreignSignersHex).toEqual([]);
+    expect(inA.signerCount).toBe(1);
+
+    // Inspect with a DIFFERENT cosigner set (cs[2..4]) — cs[0] is foreign.
+    const foreignSet = [
+      bytesToHex(cs[2]!.xOnlyPubkey),
+      bytesToHex(cs[3]!.xOnlyPubkey),
+      bytesToHex(cs[4]!.xOnlyPubkey),
+    ];
+    const inB = inspectPsbt(psbt, 2, foreignSet);
+    expect(inB.signersHex).toEqual([]);
+    expect(inB.foreignSignersHex).toEqual([bytesToHex(cs[0]!.xOnlyPubkey)]);
+    expect(inB.signerCount).toBe(0);
+    expect(inB.thresholdMet).toBe(false);
+  });
+
+  it("when no validPubkeysHex is provided, every signer counts (back-compat)", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    let psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: rec.pearlAddress, amountGrains: 90_000n }],
+    );
+    psbt = signWith(psbt, cs[0]!.privateKey);
+    const info = inspectPsbt(psbt, 2); // no validPubkeysHex
+    expect(info.signerCount).toBe(1);
+    expect(info.foreignSignersHex).toEqual([]); // no partition → none flagged
+  });
+
+  it("psbtOutputsEqual returns true for identical output sets", () => {
+    const a = [
+      { address: "prl1abc", amountGrains: 100n, scriptHex: "51200000" },
+      { address: "prl1def", amountGrains: 50n, scriptHex: "51201111" },
+    ];
+    expect(psbtOutputsEqual(a, a)).toBe(true);
+    expect(psbtOutputsEqual(a, [...a])).toBe(true);
+  });
+
+  it("psbtOutputsEqual flags amount mutation", () => {
+    const a = [{ address: "prl1abc", amountGrains: 100n, scriptHex: "51200000" }];
+    const b = [{ address: "prl1abc", amountGrains: 99n, scriptHex: "51200000" }];
+    expect(psbtOutputsEqual(a, b)).toBe(false);
+  });
+
+  it("psbtOutputsEqual flags address (script) mutation", () => {
+    const a = [{ address: "prl1abc", amountGrains: 100n, scriptHex: "51200000" }];
+    const b = [{ address: "prl1xyz", amountGrains: 100n, scriptHex: "5120ffff" }];
+    expect(psbtOutputsEqual(a, b)).toBe(false);
+  });
+
+  it("psbtOutputsEqual flags appended drain output", () => {
+    const a = [{ address: "prl1abc", amountGrains: 100n, scriptHex: "51200000" }];
+    const b = [
+      { address: "prl1abc", amountGrains: 100n, scriptHex: "51200000" },
+      { address: "prl1drain", amountGrains: 5n, scriptHex: "51202222" },
+    ];
+    expect(psbtOutputsEqual(a, b)).toBe(false);
+  });
+});
+
+describe("v0.2.2 — fee parsing + suspicion + service-level preview assertion (audit pass 3)", () => {
+  it("inspectPsbt computes fee = sum(inputs) - sum(outputs)", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: rec.pearlAddress, amountGrains: 95_000n }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(info.feeUnknown).toBe(false);
+    expect(info.totalInputGrains).toBe(100_000n);
+    expect(info.totalOutputGrains).toBe(95_000n);
+    expect(info.feeGrains).toBe(5_000n);
+    expect(info.inputAmountsGrains).toEqual([100_000n]);
+  });
+
+  it("inspectPsbt aggregates fee across multiple inputs", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    const psbt = composeWorkerPsbt(
+      rec,
+      [
+        { txid: TXID_A, vout: 0, amountGrains: 100_000n },
+        { txid: TXID_B, vout: 1, amountGrains: 50_000n },
+      ],
+      [{ address: rec.pearlAddress, amountGrains: 140_000n }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(info.totalInputGrains).toBe(150_000n);
+    expect(info.feeGrains).toBe(10_000n);
+    expect(info.inputAmountsGrains).toEqual([100_000n, 50_000n]);
+  });
+
+  it("feeSuspiciousReason flags fee > 20% of inputs", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    // 100k in, 50k out → 50k fee = 50% of inputs. Hostile.
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: rec.pearlAddress, amountGrains: 50_000n }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    const reason = feeSuspiciousReason(info);
+    expect(reason).not.toBeNull();
+    expect(reason).toMatch(/50%/);
+  });
+
+  it("feeSuspiciousReason returns null for normal fee (≤ 20% of inputs)", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    // 100k in, 95k out → 5k fee = 5%. Sane.
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: rec.pearlAddress, amountGrains: 95_000n }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(feeSuspiciousReason(info)).toBeNull();
+  });
+
+  it("assertPsbtMatchesPreview passes when PSBT matches the preview", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    const destAddr = rec.pearlAddress; // self-send for simplicity
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: destAddr, amountGrains: 95_000n }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(() =>
+      assertPsbtMatchesPreview(
+        info,
+        {
+          destination: destAddr,
+          amountGrains: "95000",
+          feeGrains: "5000",
+          changeGrains: "0",
+          inputCount: 1,
+        },
+        rec.pearlAddress,
+      ),
+    ).not.toThrow();
+  });
+
+  it("assertPsbtMatchesPreview throws on destination amount mutation", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    const destAddr = rec.pearlAddress;
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: destAddr, amountGrains: 95_000n }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(() =>
+      assertPsbtMatchesPreview(
+        info,
+        {
+          destination: destAddr,
+          amountGrains: "90000", // mutated
+          feeGrains: "10000",
+          changeGrains: "0",
+          inputCount: 1,
+        },
+        rec.pearlAddress,
+      ),
+    ).toThrow(/E_MULTISIG_OUTPUT_MISMATCH/);
+  });
+
+  it("assertPsbtMatchesPreview throws on fee mutation", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    const destAddr = rec.pearlAddress;
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [{ address: destAddr, amountGrains: 95_000n }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(() =>
+      assertPsbtMatchesPreview(
+        info,
+        {
+          destination: destAddr,
+          amountGrains: "95000",
+          feeGrains: "1", // claims tiny fee but actual is 5000
+          changeGrains: "0",
+          inputCount: 1,
+        },
+        rec.pearlAddress,
+      ),
+    ).toThrow(/E_MULTISIG_OUTPUT_MISMATCH.*fee/);
+  });
+
+  it("assertPsbtMatchesPreview throws on appended drain output", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [
+        { address: rec.pearlAddress, amountGrains: 50_000n }, // dest
+        { address: rec.pearlAddress, amountGrains: 30_000n }, // change
+        { address: rec.pearlAddress, amountGrains: 10_000n }, // unexpected extra
+      ],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+    expect(() =>
+      assertPsbtMatchesPreview(
+        info,
+        {
+          destination: rec.pearlAddress,
+          amountGrains: "50000",
+          feeGrains: "10000",
+          changeGrains: "30000",
+          inputCount: 1,
+        },
+        rec.pearlAddress,
+      ),
+    ).toThrow(/E_MULTISIG_OUTPUT_MISMATCH.*outputs/);
+  });
+
+  it("assertPsbtMatchesPreview validates change address binds to vault", async () => {
+    const cs = await cosigners(5);
+    const recA = recordFromCosigners(2, cs.slice(0, 3), 0);
+    const recB = recordFromCosigners(2, cs.slice(2, 5), 0); // different vault
+    // Compose so "change" output goes to vault B but preview says it should
+    // go to vault A. Simulates a hostile cosigner trying to reroute change.
+    const psbt = composeWorkerPsbt(
+      recA,
+      [{ txid: TXID_A, vout: 0, amountGrains: 100_000n }],
+      [
+        { address: recA.pearlAddress, amountGrains: 50_000n },
+        { address: recB.pearlAddress, amountGrains: 40_000n }, // wrong change addr
+      ],
+    );
+    const info = inspectPsbt(psbt, 2, recA.sortedPubkeysHex);
+    expect(() =>
+      assertPsbtMatchesPreview(
+        info,
+        {
+          destination: recA.pearlAddress,
+          amountGrains: "50000",
+          feeGrains: "10000",
+          changeGrains: "40000",
+          inputCount: 1,
+        },
+        recA.pearlAddress, // expected change goes here, but PSBT routes to B
+      ),
+    ).toThrow(/E_MULTISIG_OUTPUT_MISMATCH.*change/);
+  });
+});
+
+describe("composeVaultSend — dust-coalesce fee invariant (audit pass 4 H1 regression)", () => {
+  // When change < DUST_LIMIT_GRAINS, composeVaultSend drops the change output
+  // and folds the dust into the fee. The PSBT then has ONE output (the dest)
+  // worth opts.amountGrains, so the on-wire fee = sum(inputs) - amountGrains.
+  //
+  // Pass-3 added assertPsbtMatchesPreview which compares the PSBT's actual
+  // fee against preview.feeGrains exactly. If preview.feeGrains is set to
+  // the *recomputed* estimateMultisigFee(.., numOutputs=1, ..) (the old
+  // buggy path), then the originator's own draft fails with
+  //   E_MULTISIG_OUTPUT_MISMATCH: fee is X grains (expected Y).
+  //
+  // This test asserts the invariant: in the dust-coalesce branch, the value
+  // stored as preview.feeGrains must equal (sum - amountGrains), not the
+  // 1-output fee estimate. Worker-built PSBT here mirrors what
+  // composePearlMultisigPsbt produces from composeVaultSend's outputs.
+  it("preview.feeGrains equals sum-of-inputs minus amountGrains when change is dust", async () => {
+    const cs = await cosigners(3);
+    const rec = recordFromCosigners(2, cs, 0);
+
+    const feerate = 2n;
+    const picked = 1;
+    const numOutputs2 = 2;
+    const numOutputs1 = 1;
+    const fee2 =
+      (FIXED_OVERHEAD_VBYTES +
+        BigInt(picked) * PER_INPUT_VBYTES_MULTISIG +
+        BigInt(numOutputs2) * PER_P2TR_OUTPUT_VBYTES) *
+      feerate;
+    const fee1 =
+      (FIXED_OVERHEAD_VBYTES +
+        BigInt(picked) * PER_INPUT_VBYTES_MULTISIG +
+        BigInt(numOutputs1) * PER_P2TR_OUTPUT_VBYTES) *
+      feerate;
+
+    // Pick an amount so change_2out = DUST_LIMIT_GRAINS - 1 (forces coalesce)
+    const dustChange = DUST_LIMIT_GRAINS - 1n;
+    const amount = 100_000n;
+    const sum = amount + fee2 + dustChange;
+
+    // PSBT has 1 output worth `amount`; actual on-wire fee = sum - amount
+    const actualFee = sum - amount;
+    expect(actualFee).toBe(fee1 + dustChange + (fee2 - fee1));
+    expect(actualFee).toBeGreaterThan(fee1); // proves the old `fee = fee1` was wrong
+
+    const psbt = composeWorkerPsbt(
+      rec,
+      [{ txid: TXID_A, vout: 0, amountGrains: sum }],
+      [{ address: rec.pearlAddress, amountGrains: amount }],
+    );
+    const info = inspectPsbt(psbt, 2, rec.sortedPubkeysHex);
+
+    // Fixed behaviour: preview built with feeGrains = sum - amount, change = 0
+    expect(() =>
+      assertPsbtMatchesPreview(
+        info,
+        {
+          destination: rec.pearlAddress,
+          amountGrains: amount.toString(),
+          feeGrains: actualFee.toString(),
+          changeGrains: "0",
+          inputCount: 1,
+        },
+        rec.pearlAddress,
+      ),
+    ).not.toThrow();
+
+    // Buggy behaviour (pre-fix): preview stored fee1 instead of actualFee.
+    // assertPsbtMatchesPreview must catch this — otherwise an originator
+    // could happily sign a draft that pays more than the displayed fee.
+    expect(() =>
+      assertPsbtMatchesPreview(
+        info,
+        {
+          destination: rec.pearlAddress,
+          amountGrains: amount.toString(),
+          feeGrains: fee1.toString(),
+          changeGrains: "0",
+          inputCount: 1,
+        },
+        rec.pearlAddress,
+      ),
+    ).toThrow(/E_MULTISIG_OUTPUT_MISMATCH.*fee/);
   });
 });
 

@@ -11,6 +11,8 @@ import {
   signPendingTx,
   broadcastPendingTx,
   inspectPsbt,
+  psbtOutputsEqual,
+  assertPsbtMatchesPreview,
 } from "../../services/multisig";
 import { formatGrains } from "../../lib/format";
 import type { VaultRecord, VaultPendingTxRecord } from "../../storage/db";
@@ -46,6 +48,16 @@ export default function VaultPendingTxDetail() {
     (async () => {
       const [v, p] = await Promise.all([getVault(vaultId), getPendingTx(pendingId)]);
       if (cancelled) return;
+      // URL carries both ids independently; refuse to render a pending tx
+      // whose vaultId doesn't match the URL's vault. Otherwise a tampered
+      // URL would show pending P (for vault B) under vault A's header.
+      // The worker still refuses to sign — outputScript binding catches it
+      // — but the UI mismatch is itself a footgun. (audit pass 4, L1)
+      if (p && v && p.vaultId !== v.id) {
+        setVault(null);
+        setPending(null);
+        return;
+      }
       setVault(v ?? null);
       setPending(p ?? null);
     })();
@@ -56,10 +68,12 @@ export default function VaultPendingTxDetail() {
 
   // Live re-inspect on every render so a paste-back or freshly-signed
   // state shows accurate progress without waiting for the next save.
+  // Pass the vault cosigner set so the count excludes forged sigs from
+  // pubkeys outside the vault (audit pass 2, Medium #2).
   const live = useMemo(() => {
     if (!pending || !vault) return null;
     try {
-      return inspectPsbt(pending.psbtBase64, vault.threshold);
+      return inspectPsbt(pending.psbtBase64, vault.threshold, vault.sortedPubkeysHex);
     } catch (e) {
       return { error: e instanceof Error ? e.message : String(e) } as const;
     }
@@ -102,15 +116,28 @@ export default function VaultPendingTxDetail() {
     try {
       // Reject a paste-back that doesn't bind to the same vault — if the
       // cosigner pasted a wholly different PSBT we'd silently overwrite
-      // the draft. Re-inspect the original to grab its witnessScriptHex,
-      // then verify the candidate matches.
-      const original = inspectPsbt(pending.psbtBase64, vault.threshold);
-      const incoming = inspectPsbt(candidate, vault.threshold);
-      if (
-        original.witnessScriptHex &&
-        incoming.witnessScriptHex &&
-        original.witnessScriptHex !== incoming.witnessScriptHex
-      ) {
+      // the draft. We check four things and refuse on any mismatch:
+      //   1. witnessScriptHex non-empty + identical (input is OUR vault)
+      //   2. input count unchanged
+      //   3. outputs unchanged (scripts + amounts in same positions)
+      //   4. no foreign signers (pubkeys outside the vault cosigner set)
+      //
+      // (3) is the audit-pass-2 Medium #1 fix: a hostile cosigner could
+      // sign a copy of the PSBT whose outputs have been rerouted to drain
+      // to their own address, then return it. Without per-output
+      // comparison the user would see the original preview and broadcast.
+      const original = inspectPsbt(
+        pending.psbtBase64,
+        vault.threshold,
+        vault.sortedPubkeysHex,
+      );
+      const incoming = inspectPsbt(candidate, vault.threshold, vault.sortedPubkeysHex);
+      if (!incoming.witnessScriptHex) {
+        throw new Error(
+          "Pasted PSBT is missing witnessUtxo data — can't verify it binds to this vault.",
+        );
+      }
+      if (incoming.witnessScriptHex !== original.witnessScriptHex) {
         throw new Error(
           "Pasted PSBT is for a different output — it doesn't match this draft.",
         );
@@ -118,6 +145,16 @@ export default function VaultPendingTxDetail() {
       if (incoming.inputCount !== original.inputCount) {
         throw new Error(
           `Pasted PSBT has ${incoming.inputCount} input(s); this draft has ${original.inputCount}.`,
+        );
+      }
+      if (!psbtOutputsEqual(original.outputs, incoming.outputs)) {
+        throw new Error(
+          "Pasted PSBT has different outputs than the draft — a cosigner appears to have altered the destination or amount. Discarding.",
+        );
+      }
+      if (incoming.foreignSignersHex.length > 0) {
+        throw new Error(
+          `Pasted PSBT contains ${incoming.foreignSignersHex.length} signature(s) from pubkeys outside this vault — discarding.`,
         );
       }
       const updated: VaultPendingTxRecord = {
@@ -196,6 +233,24 @@ export default function VaultPendingTxDetail() {
   const isBroadcast = pending.status === "broadcast";
   const isFailed = pending.status === "failed";
 
+  // Cross-check: do the actual PSBT outputs + fee still match the
+  // originator's composition preview? If not, a cosigner has altered the
+  // destination, amount, change, or fee. Block sign + broadcast so the
+  // user can't accidentally finalise a rerouted spend. The service layer
+  // also enforces this on signPendingTx / broadcastPendingTx (audit pass
+  // 3 L1) — the UI banner just makes the failure visible up-front rather
+  // than after the user clicks Sign.
+  const outputMismatch = (() => {
+    if (!liveInfo) return null;
+    try {
+      assertPsbtMatchesPreview(liveInfo, pending.preview, vault.pearlAddress);
+      return null;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return msg.replace(/^E_MULTISIG_OUTPUT_MISMATCH:\s*/, "");
+    }
+  })();
+
   return (
     <Page title="Pending transaction">
       <section className="card mb-4">
@@ -215,9 +270,23 @@ export default function VaultPendingTxDetail() {
             <dd>{formatGrains(BigInt(pending.preview.amountGrains))} PRL</dd>
           </div>
           <div className="flex justify-between">
-            <dt className="text-ink-500">Fee</dt>
+            <dt className="text-ink-500">Fee (preview)</dt>
             <dd>{formatGrains(BigInt(pending.preview.feeGrains))} PRL</dd>
           </div>
+          {liveInfo && !liveInfo.feeUnknown && (
+            <div className="flex justify-between">
+              <dt className="text-ink-500">Fee (live)</dt>
+              <dd
+                className={
+                  liveInfo.feeGrains === BigInt(pending.preview.feeGrains)
+                    ? ""
+                    : "font-semibold text-red-600"
+                }
+              >
+                {formatGrains(liveInfo.feeGrains)} PRL
+              </dd>
+            </div>
+          )}
           <div className="flex justify-between">
             <dt className="text-ink-500">Change back to vault</dt>
             <dd>{formatGrains(BigInt(pending.preview.changeGrains))} PRL</dd>
@@ -282,6 +351,20 @@ export default function VaultPendingTxDetail() {
         )}
       </section>
 
+      {outputMismatch && (
+        <section className="card mb-4 border-2 border-red-600 bg-red-50 dark:bg-red-900/20">
+          <h2 className="text-sm font-semibold text-red-700 dark:text-red-300">
+            ⚠ Output mismatch — do not sign
+          </h2>
+          <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+            {outputMismatch}
+          </p>
+          <p className="mt-2 text-xs text-red-700 dark:text-red-300">
+            Signing or broadcasting is disabled. Delete this draft and start over.
+          </p>
+        </section>
+      )}
+
       {error && (
         <p className="card mb-4 text-sm text-red-600">{error}</p>
       )}
@@ -293,9 +376,13 @@ export default function VaultPendingTxDetail() {
             {!meSigned && !isFailed && liveInfo && (
               <button
                 className="btn-primary"
-                disabled={busy}
+                disabled={busy || outputMismatch !== null}
                 onClick={doSign}
-                title="Add your cosigner signature"
+                title={
+                  outputMismatch
+                    ? "Refusing to sign — outputs don't match the draft"
+                    : "Add your cosigner signature"
+                }
               >
                 {busy ? "Signing…" : "Sign with my key"}
               </button>
@@ -303,9 +390,13 @@ export default function VaultPendingTxDetail() {
             {thresholdMet && !isFailed && (
               <button
                 className="btn-primary"
-                disabled={busy}
+                disabled={busy || outputMismatch !== null}
                 onClick={doBroadcast}
-                title="Finalise and broadcast"
+                title={
+                  outputMismatch
+                    ? "Refusing to broadcast — outputs don't match the draft"
+                    : "Finalise and broadcast"
+                }
               >
                 {busy ? "Broadcasting…" : "Broadcast"}
               </button>
@@ -314,7 +405,7 @@ export default function VaultPendingTxDetail() {
               {copied ? "Copied!" : "Copy PSBT"}
             </button>
           </div>
-          {!thresholdMet && liveInfo && (
+          {!thresholdMet && liveInfo && !outputMismatch && (
             <p className="text-xs text-ink-500">
               Share the PSBT with the next cosigner — they sign and paste
               the result back below.

@@ -26,6 +26,7 @@ import {
   type VaultDescriptor,
 } from "../chains/pearl/multisig";
 import { pearlParams } from "../chains/pearl/network";
+import { encodeTaprootAddress } from "../chains/pearl/address";
 import { cryptoWorker } from "../crypto/worker-client";
 import {
   encodePubkeyDescriptor,
@@ -154,6 +155,25 @@ export async function createVault(input: CreateVaultInput): Promise<VaultRecord>
   const myHex = input.myPubkeyHex.toLowerCase();
   const isMember = descriptor.sortedPubkeys.some((p) => bytesToHex(p) === myHex);
   if (!isMember) throw new Error("E_VAULT_NOT_A_COSIGNER");
+
+  // Audit pass 3 M2: defend against a race in CreateVault where the user
+  // adjusts (vaultAccount, keyIndex) AFTER the wizard derived a pubkey at
+  // the previous slot. Re-derive at the slot we're about to PERSIST and
+  // require it match the pubkey claimed as "mine". Without this, a vault
+  // could be saved with myPubkeyHex bound to slot (0,0) but myKeyIndex
+  // pointing at (0,1) — at spend time we'd try to sign with the slot-(0,1)
+  // key, which isn't in the cosigner set, and the user would be permanently
+  // locked out of participating in their own funded vault.
+  const verify = await cryptoWorker.call<
+    "derivePearlMultisigPubkey",
+    { pubkeyHex: string; originPath: string }
+  >("derivePearlMultisigPubkey", {
+    vaultAccount: input.myVaultAccount,
+    keyIndex: input.myKeyIndex,
+  });
+  if (verify.pubkeyHex.toLowerCase() !== myHex) {
+    throw new Error("E_VAULT_PUBKEY_PATH_MISMATCH");
+  }
 
   const record: VaultRecord = {
     id: newUuid(),
@@ -316,10 +336,16 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
   let change = sum - need;
   if (change < DUST_LIMIT_GRAINS) {
     // Coalesce dust change into fee — same heuristic as singlesig.
+    // The PSBT will have only the destination output, so the on-wire fee
+    // equals sum - amountGrains (i.e. the recomputed 1-output fee PLUS the
+    // dust that would have been the change PLUS the saved per-output vbytes).
+    // We must store *that* value as preview.feeGrains, otherwise the pass-3
+    // assertPsbtMatchesPreview check (services/multisig.ts:628) will refuse
+    // to sign the originator's own draft with E_MULTISIG_OUTPUT_MISMATCH.
     numOutputs -= 1;
-    fee = estimateMultisigFee(picked.length, numOutputs, feerate);
-    need = opts.amountGrains + fee;
-    if (sum < need) throw new Error("E_INSUFFICIENT_FUNDS");
+    const recomputed = estimateMultisigFee(picked.length, numOutputs, feerate);
+    if (sum < opts.amountGrains + recomputed) throw new Error("E_INSUFFICIENT_FUNDS");
+    fee = sum - opts.amountGrains;
     change = 0n;
   }
 
@@ -389,26 +415,85 @@ export async function signVaultPsbt(opts: {
   return out;
 }
 
+export interface PsbtOutputInfo {
+  /** Pearl bech32m address if the output script is P2TR; otherwise null. */
+  address: string | null;
+  /** Output amount in grains (bigint). */
+  amountGrains: bigint;
+  /** Raw output scriptPubKey hex — present even when address is null so the UI can still show something. */
+  scriptHex: string;
+}
+
 export interface PsbtSignerInfo {
-  /** Number of distinct signers on input 0. All inputs share the cosigner set under our compose path so input 0 is representative. */
+  /** Number of distinct VALID signers on input 0 (vault cosigners only, foreign keys excluded if validPubkeysHex provided). */
   signerCount: number;
-  /** Lowercase hex x-only pubkeys that have a sig on input 0. */
+  /** Lowercase hex x-only pubkeys that have a sig on input 0 AND are members of the vault (if validPubkeysHex provided). */
   signersHex: string[];
+  /** Sigs from pubkeys NOT in the vault cosigner set. Empty unless validPubkeysHex was provided. A non-empty value flags a hostile or stale PSBT. */
+  foreignSignersHex: string[];
   /** True when signerCount >= threshold. */
   thresholdMet: boolean;
   inputCount: number;
   /** vault.outputScript hex from the PSBT's first input (witnessUtxo). Lets the caller bind the PSBT to a vault record by lookup. */
   witnessScriptHex: string;
+  /** Parsed outputs (address + amount) so the UI can show exactly what's being signed/broadcast. */
+  outputs: PsbtOutputInfo[];
+  /** Per-input witnessUtxo.amount in grains. */
+  inputAmountsGrains: bigint[];
+  /** Sum of input witnessUtxo.amount across all inputs. */
+  totalInputGrains: bigint;
+  /** Sum of output amounts. */
+  totalOutputGrains: bigint;
+  /** Fee = totalInputGrains - totalOutputGrains (sentinel 0n if feeUnknown). */
+  feeGrains: bigint;
+  /** True if any input is missing witnessUtxo.amount — fee cannot be computed; caller should treat as hostile. */
+  feeUnknown: boolean;
+  /** Network the addresses were decoded under — needed for sane error messages on cross-network PSBTs. v0.2.0 is mainnet-only. */
+  network: "mainnet";
 }
 
 /**
- * Parse a PSBT and report its signing progress. Pure local analysis — no
- * worker round-trip, no key material involved.
+ * Decode a P2TR output scriptPubKey ("OP_1 0x20 <32-byte program>") back to
+ * its Pearl bech32m address. Returns null for any non-P2TR shape so the UI
+ * surfaces the raw bytes rather than silently pretending.
+ *
+ * This is a CRITICAL display primitive — a malicious cosigner could try to
+ * sneak a non-P2TR output past the user; if we returned `null` and the UI
+ * skipped showing it, the user might broadcast without noticing.
+ */
+function p2trScriptToPearlAddress(
+  scriptBytes: Uint8Array,
+  network: "mainnet",
+): string | null {
+  // P2TR scriptPubKey = OP_1 (0x51) PUSH_32 (0x20) <32-byte program>
+  if (scriptBytes.length !== 34) return null;
+  if (scriptBytes[0] !== 0x51) return null;
+  if (scriptBytes[1] !== 0x20) return null;
+  try {
+    return encodeTaprootAddress(scriptBytes.slice(2), pearlParams(network));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse a PSBT and report its signing progress + outputs. Pure local
+ * analysis — no worker round-trip, no key material involved.
+ *
+ * The optional `validPubkeysHex` parameter MUST be passed by any caller that
+ * trusts the signerCount value for a threshold-met decision. Without it,
+ * `inspectPsbt` falls back to legacy behavior (count every tapScriptSig
+ * entry) — useful for opportunistic "match a PSBT to a vault" lookups but
+ * unsafe as a basis for "ready to broadcast" UX. See PsbtSignerInfo.
  *
  * Throws E_MULTISIG_PSBT_PARSE on a malformed PSBT, E_PEARL_NO_INPUTS on a
  * shape with zero inputs.
  */
-export function inspectPsbt(psbtBase64: string, threshold: number): PsbtSignerInfo {
+export function inspectPsbt(
+  psbtBase64: string,
+  threshold: number,
+  validPubkeysHex?: readonly string[],
+): PsbtSignerInfo {
   if (typeof psbtBase64 !== "string" || psbtBase64.length === 0) {
     throw new Error("E_MULTISIG_BAD_PSBT");
   }
@@ -427,19 +512,192 @@ export function inspectPsbt(psbtBase64: string, threshold: number): PsbtSignerIn
     witnessUtxo?: { script: Uint8Array; amount: bigint };
   };
   const sigEntries = input0.tapScriptSig ?? [];
+
+  // Collect per-input amounts so we can compute fee. Any input lacking a
+  // witnessUtxo.amount means the caller can't trust the fee figure — flag
+  // `feeUnknown` rather than producing a bogus number. (Audit pass 3, M1.)
+  const inputAmountsGrains: bigint[] = [];
+  let totalInputGrains = 0n;
+  let feeUnknown = false;
+  for (let i = 0; i < tx.inputsLength; i++) {
+    const inp = tx.getInput(i) as { witnessUtxo?: { amount: bigint } };
+    const amt = inp.witnessUtxo?.amount;
+    if (typeof amt !== "bigint") {
+      feeUnknown = true;
+      inputAmountsGrains.push(0n);
+    } else {
+      inputAmountsGrains.push(amt);
+      totalInputGrains += amt;
+    }
+  }
+  // Dedupe by pubkey hex; a PSBT could (maliciously or accidentally) carry
+  // two tapScriptSig entries for the same pubkey, and only one of them ends
+  // up in the witness on finalize. We count distinct signing keys.
   const seen = new Set<string>();
   for (const [{ pubKey }] of sigEntries) {
     seen.add(bytesToHex(pubKey));
   }
-  const signersHex = Array.from(seen);
+
+  // Split signers into "in-vault" vs "foreign" if the caller supplied the
+  // valid pubkey set. Without that set, every sig counts — backward-compat
+  // for any caller that hasn't been migrated. Callers driving UX off the
+  // result should always pass the valid set.
+  let signersHex: string[];
+  let foreignSignersHex: string[];
+  if (validPubkeysHex) {
+    const validSet = new Set(validPubkeysHex.map((h) => h.toLowerCase()));
+    signersHex = [];
+    foreignSignersHex = [];
+    for (const h of seen) {
+      if (validSet.has(h.toLowerCase())) signersHex.push(h);
+      else foreignSignersHex.push(h);
+    }
+  } else {
+    signersHex = Array.from(seen);
+    foreignSignersHex = [];
+  }
+
   const witnessScript = input0.witnessUtxo?.script;
+
+  // Outputs — show the user exactly what they're signing.
+  const outputs: PsbtOutputInfo[] = [];
+  let totalOutputGrains = 0n;
+  for (let i = 0; i < tx.outputsLength; i++) {
+    const o = tx.getOutput(i) as { script?: Uint8Array; amount?: bigint };
+    const script = o.script ?? new Uint8Array(0);
+    const amt = o.amount ?? 0n;
+    outputs.push({
+      address: p2trScriptToPearlAddress(script, "mainnet"),
+      amountGrains: amt,
+      scriptHex: bytesToHex(script),
+    });
+    totalOutputGrains += amt;
+  }
+
+  const feeGrains = feeUnknown
+    ? 0n
+    : totalInputGrains > totalOutputGrains
+      ? totalInputGrains - totalOutputGrains
+      : 0n;
+
   return {
     signerCount: signersHex.length,
     signersHex,
+    foreignSignersHex,
     thresholdMet: signersHex.length >= threshold,
     inputCount: tx.inputsLength,
     witnessScriptHex: witnessScript ? bytesToHex(witnessScript) : "",
+    outputs,
+    inputAmountsGrains,
+    totalInputGrains,
+    totalOutputGrains,
+    feeGrains,
+    feeUnknown,
+    network: "mainnet",
   };
+}
+
+/**
+ * Heuristic: flag a PSBT whose fee looks like a fund-extraction attempt.
+ * A hostile composer can pick big inputs and pay almost everything to fee
+ * (which miners receive). 20% of inputs is well above any honest feerate
+ * for a small tx — past that, the user should be forced to acknowledge.
+ *
+ * Returns `null` when fee is in sane bounds, or a human-readable reason
+ * string otherwise. `feeUnknown` is treated as suspicious (no input amounts
+ * means the cosigner is blind-signing — refuse).
+ */
+export function feeSuspiciousReason(info: PsbtSignerInfo): string | null {
+  if (info.feeUnknown) {
+    return "Input amounts are missing from the PSBT — fee can't be verified, so the wallet refuses to sign.";
+  }
+  if (info.totalInputGrains <= 0n) return null;
+  // 20% fee threshold — anything beyond is almost certainly extraction.
+  // Ten grains × 5 = 50 grains; we want fee_pct = (fee × 100) / inputs <= 20.
+  const feePct = (info.feeGrains * 100n) / info.totalInputGrains;
+  if (feePct > 20n) {
+    return `Fee is ${feePct}% of the spend (${info.feeGrains} grains of ${info.totalInputGrains}). That's far above normal — refusing.`;
+  }
+  return null;
+}
+
+/**
+ * Assert a PSBT still matches the originator's composition preview. Throws
+ * E_MULTISIG_OUTPUT_MISMATCH on the first divergence (destination address,
+ * destination amount, change address, change amount, output count, or fee).
+ *
+ * Used by signPendingTx / broadcastPendingTx as a defence-in-depth layer
+ * (audit pass 3, L1). The UI also has its own outputMismatch check, but the
+ * service-level assertion prevents any future caller (CLI, dev console,
+ * automated flow) from bypassing the gate.
+ */
+export function assertPsbtMatchesPreview(
+  info: PsbtSignerInfo,
+  preview: VaultPendingTxRecord["preview"],
+  vaultAddress: string,
+): void {
+  if (info.feeUnknown) {
+    throw new Error("E_MULTISIG_OUTPUT_MISMATCH: PSBT inputs are missing amount data");
+  }
+  const expectedAmount = BigInt(preview.amountGrains);
+  const expectedChange = BigInt(preview.changeGrains);
+  const expectedFee = BigInt(preview.feeGrains);
+  if (info.outputs.length === 0) {
+    throw new Error("E_MULTISIG_OUTPUT_MISMATCH: PSBT has no outputs");
+  }
+  const dest = info.outputs[0]!;
+  if (dest.address !== preview.destination) {
+    throw new Error(
+      `E_MULTISIG_OUTPUT_MISMATCH: destination is ${dest.address ?? "non-Pearl script"} (expected ${preview.destination})`,
+    );
+  }
+  if (dest.amountGrains !== expectedAmount) {
+    throw new Error(
+      `E_MULTISIG_OUTPUT_MISMATCH: destination amount is ${dest.amountGrains} (expected ${expectedAmount})`,
+    );
+  }
+  if (expectedChange > 0n) {
+    if (info.outputs.length < 2) {
+      throw new Error("E_MULTISIG_OUTPUT_MISMATCH: change output is missing");
+    }
+    const chg = info.outputs[1]!;
+    if (chg.address !== vaultAddress) {
+      throw new Error(
+        `E_MULTISIG_OUTPUT_MISMATCH: change goes to ${chg.address ?? "non-Pearl script"} (expected ${vaultAddress})`,
+      );
+    }
+    if (chg.amountGrains !== expectedChange) {
+      throw new Error(
+        `E_MULTISIG_OUTPUT_MISMATCH: change amount is ${chg.amountGrains} (expected ${expectedChange})`,
+      );
+    }
+  }
+  const expectedCount = expectedChange > 0n ? 2 : 1;
+  if (info.outputs.length > expectedCount) {
+    throw new Error(
+      `E_MULTISIG_OUTPUT_MISMATCH: PSBT has ${info.outputs.length} outputs (expected ${expectedCount})`,
+    );
+  }
+  if (info.feeGrains !== expectedFee) {
+    throw new Error(
+      `E_MULTISIG_OUTPUT_MISMATCH: fee is ${info.feeGrains} grains (expected ${expectedFee})`,
+    );
+  }
+}
+
+/**
+ * Compare two PSBTs' output sets and return true if they're equivalent
+ * (same script, same amount, in the same position). Used on paste-back to
+ * detect a hostile cosigner who returned a PSBT with mutated outputs — the
+ * witnessUtxo binding catches input mutation but not output mutation.
+ */
+export function psbtOutputsEqual(a: PsbtOutputInfo[], b: PsbtOutputInfo[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i]!.scriptHex !== b[i]!.scriptHex) return false;
+    if (a[i]!.amountGrains !== b[i]!.amountGrains) return false;
+  }
+  return true;
 }
 
 /**
@@ -504,7 +762,11 @@ export async function persistComposedAsPending(opts: {
   psbtBase64: string;
   preview: VaultPendingTxRecord["preview"];
 }): Promise<VaultPendingTxRecord> {
-  const info = inspectPsbt(opts.psbtBase64, opts.vault.threshold);
+  const info = inspectPsbt(
+    opts.psbtBase64,
+    opts.vault.threshold,
+    opts.vault.sortedPubkeysHex,
+  );
   const rec: VaultPendingTxRecord = {
     id: newUuid(),
     vaultId: opts.vault.id,
@@ -536,7 +798,20 @@ export async function signPendingTx(opts: {
   pending: VaultPendingTxRecord;
 }): Promise<VaultPendingTxRecord> {
   const myHex = opts.vault.myPubkeyHex.toLowerCase();
-  const pre = inspectPsbt(opts.pending.psbtBase64, opts.vault.threshold);
+  const pre = inspectPsbt(
+    opts.pending.psbtBase64,
+    opts.vault.threshold,
+    opts.vault.sortedPubkeysHex,
+  );
+  // Defence-in-depth (audit pass 3, L1): refuse to sign a draft whose PSBT
+  // has been mutated to point at different outputs / fee than the originator
+  // composed. The UI also has its own outputMismatch check; this ensures
+  // any future caller (CLI, automated flow, dev-console fiddling) can't
+  // bypass that gate.
+  assertPsbtMatchesPreview(pre, opts.pending.preview, opts.vault.pearlAddress);
+  if (pre.foreignSignersHex.length > 0) {
+    throw new Error("E_MULTISIG_FOREIGN_SIGNER_PRESENT");
+  }
   if (pre.signersHex.includes(myHex)) {
     return opts.pending;
   }
@@ -544,7 +819,7 @@ export async function signPendingTx(opts: {
     vault: opts.vault,
     psbtBase64: opts.pending.psbtBase64,
   });
-  const info = inspectPsbt(psbtBase64, opts.vault.threshold);
+  const info = inspectPsbt(psbtBase64, opts.vault.threshold, opts.vault.sortedPubkeysHex);
   const updated: VaultPendingTxRecord = {
     ...opts.pending,
     psbtBase64,
@@ -565,7 +840,16 @@ export async function broadcastPendingTx(opts: {
   vault: VaultRecord;
   pending: VaultPendingTxRecord;
 }): Promise<VaultPendingTxRecord> {
-  const info = inspectPsbt(opts.pending.psbtBase64, opts.vault.threshold);
+  const info = inspectPsbt(
+    opts.pending.psbtBase64,
+    opts.vault.threshold,
+    opts.vault.sortedPubkeysHex,
+  );
+  // Same service-level invariants as signPendingTx (audit pass 3, L1).
+  assertPsbtMatchesPreview(info, opts.pending.preview, opts.vault.pearlAddress);
+  if (info.foreignSignersHex.length > 0) {
+    throw new Error("E_MULTISIG_FOREIGN_SIGNER_PRESENT");
+  }
   if (!info.thresholdMet) throw new Error("E_MULTISIG_THRESHOLD_NOT_MET");
 
   const { rawHex } = finalizeVaultPsbt(opts.pending.psbtBase64);

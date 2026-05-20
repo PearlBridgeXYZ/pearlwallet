@@ -32,6 +32,20 @@ export interface PearlMultisigPubkeyDescriptor {
 
 const HEX_RE = /^[0-9a-f]{64}$/;
 const PATH_RE = /^m(\/\d+'?)+$/;
+// BIP-86-style paths in Pearl multisig are 5 levels deep
+// (m/86'/808276'/100'/account'/index). Cap at 12 levels + 128 chars to
+// reject pathological inputs without rejecting any legitimate variant.
+// (audit pass 4, L2)
+const PATH_MAX_LEN = 128;
+const PATH_MAX_DEPTH = 12;
+function isValidOriginPath(s: string): boolean {
+  if (s.length > PATH_MAX_LEN) return false;
+  if (!PATH_RE.test(s)) return false;
+  // depth = number of '/' separators
+  let depth = 0;
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 47 /* '/' */) depth++;
+  return depth <= PATH_MAX_DEPTH;
+}
 
 export function bytesToHex(b: Uint8Array): string {
   let out = "";
@@ -55,7 +69,7 @@ export function encodePubkeyDescriptor(d: {
   network?: "mainnet";
 }): string {
   if (d.xOnlyPubkey.length !== 32) throw new Error("E_DESCRIPTOR_BAD_PUBKEY_LEN");
-  if (!PATH_RE.test(d.originPath)) throw new Error("E_DESCRIPTOR_BAD_PATH");
+  if (!isValidOriginPath(d.originPath)) throw new Error("E_DESCRIPTOR_BAD_PATH");
   const label = d.label.trim();
   if (label.length === 0 || label.length > 64) throw new Error("E_DESCRIPTOR_BAD_LABEL");
   const obj: PearlMultisigPubkeyDescriptor = {
@@ -95,7 +109,7 @@ export function parsePubkeyDescriptor(json: string): {
   if (o.type !== "pearl-multisig-pubkey") throw new Error("E_DESCRIPTOR_BAD_TYPE");
   if (o.network !== "mainnet") throw new Error("E_DESCRIPTOR_BAD_NETWORK");
   if (typeof o.xOnlyPubkey !== "string") throw new Error("E_DESCRIPTOR_BAD_PUBKEY");
-  if (typeof o.originPath !== "string" || !PATH_RE.test(o.originPath)) {
+  if (typeof o.originPath !== "string" || !isValidOriginPath(o.originPath)) {
     throw new Error("E_DESCRIPTOR_BAD_PATH");
   }
   if (typeof o.label !== "string") throw new Error("E_DESCRIPTOR_BAD_LABEL");

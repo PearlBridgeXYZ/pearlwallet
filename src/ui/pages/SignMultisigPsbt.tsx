@@ -10,8 +10,10 @@ import {
   finalizeVaultPsbt,
   broadcastVaultTx,
   descriptorFromRecord,
+  feeSuspiciousReason,
 } from "../../services/multisig";
 import { bytesToHex } from "../../crypto/descriptor";
+import { formatGrains } from "../../lib/format";
 import type { VaultRecord } from "../../storage/db";
 
 // SignMultisigPsbt — paste a PSBT, match it to a local vault by its
@@ -72,17 +74,31 @@ export default function SignMultisigPsbt() {
     error: string | null;
   } {
     try {
-      // Use threshold=99 here as a sentinel — the match step needs the
-      // info object; the actual threshold check below uses the matched
-      // vault's threshold.
-      const info = inspectPsbt(psbtB64, 99);
-      const vault = vaultByScriptHex.get(info.witnessScriptHex);
-      const match: Match = vault
-        ? { kind: "matched", vault, witnessScriptHex: info.witnessScriptHex }
-        : { kind: "unknown", witnessScriptHex: info.witnessScriptHex };
-      return { match, info, error: null };
+      // Two-pass: first inspect with a sentinel threshold + no cosigner
+      // set to discover which (if any) local vault this PSBT belongs to.
+      // If matched, re-inspect with the matched vault's pubkey set so
+      // foreign signatures are counted separately (audit pass 2 Med #2).
+      const first = inspectPsbt(psbtB64, 99);
+      const vault = vaultByScriptHex.get(first.witnessScriptHex);
+      if (!vault) {
+        return {
+          match: { kind: "unknown", witnessScriptHex: first.witnessScriptHex },
+          info: first,
+          error: null,
+        };
+      }
+      const info = inspectPsbt(psbtB64, vault.threshold, vault.sortedPubkeysHex);
+      return {
+        match: { kind: "matched", vault, witnessScriptHex: info.witnessScriptHex },
+        info,
+        error: null,
+      };
     } catch (e) {
-      return { match: { kind: "unknown", witnessScriptHex: "" }, info: null, error: e instanceof Error ? e.message : String(e) };
+      return {
+        match: { kind: "unknown", witnessScriptHex: "" },
+        info: null,
+        error: e instanceof Error ? e.message : String(e),
+      };
     }
   }
 
@@ -185,28 +201,61 @@ export default function SignMultisigPsbt() {
           </p>
         )}
         {analysis && analysis.match.kind === "matched" && analysis.info && (
-          <SignSummary
-            vault={analysis.match.vault}
-            signerCount={analysis.info.signerCount}
-            signersHex={analysis.info.signersHex}
-            inputCount={analysis.info.inputCount}
-            thresholdMet={analysis.info.signerCount >= analysis.match.vault.threshold}
-          />
+          <>
+            <SignSummary
+              vault={analysis.match.vault}
+              signerCount={analysis.info.signerCount}
+              signersHex={analysis.info.signersHex}
+              inputCount={analysis.info.inputCount}
+              thresholdMet={analysis.info.signerCount >= analysis.match.vault.threshold}
+            />
+            <OutputsPreview
+              outputs={analysis.info.outputs}
+              vaultAddress={analysis.match.vault.pearlAddress}
+              feeGrains={analysis.info.feeGrains}
+              feeUnknown={analysis.info.feeUnknown}
+              totalInputGrains={analysis.info.totalInputGrains}
+            />
+            {analysis.info.foreignSignersHex.length > 0 && (
+              <p className="rounded-md border-2 border-red-600 bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+                ⚠ This PSBT contains {analysis.info.foreignSignersHex.length}{" "}
+                signature(s) from pubkeys outside the vault. Signing is blocked.
+              </p>
+            )}
+            {(() => {
+              const reason = feeSuspiciousReason(analysis.info);
+              if (!reason) return null;
+              return (
+                <p className="rounded-md border-2 border-red-600 bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+                  ⚠ {reason}
+                </p>
+              );
+            })()}
+          </>
         )}
 
         {error && <p className="text-sm text-red-600">{error}</p>}
 
         <div className="flex flex-wrap gap-2">
-          {analysis?.match.kind === "matched" && (
+          {analysis?.match.kind === "matched" && analysis.info && (
             <button
               className="btn-primary"
               disabled={
                 busy ||
-                analysis.info?.signersHex.includes(
+                analysis.info.signersHex.includes(
                   analysis.match.vault.myPubkeyHex,
-                ) === true
+                ) ||
+                analysis.info.foreignSignersHex.length > 0 ||
+                feeSuspiciousReason(analysis.info) !== null
               }
               onClick={doSign}
+              title={
+                analysis.info.foreignSignersHex.length > 0
+                  ? "Refusing — PSBT has signatures from pubkeys outside the vault"
+                  : feeSuspiciousReason(analysis.info)
+                    ? "Refusing — fee looks abnormal"
+                    : "Add your cosigner signature"
+              }
             >
               {busy ? "Signing…" : "Sign"}
             </button>
@@ -215,7 +264,15 @@ export default function SignMultisigPsbt() {
             analysis?.match.kind === "matched" &&
             analysis.info &&
             analysis.info.signerCount >= analysis.match.vault.threshold && (
-              <button className="btn-primary" disabled={busy} onClick={doBroadcast}>
+              <button
+                className="btn-primary"
+                disabled={
+                  busy ||
+                  analysis.info.foreignSignersHex.length > 0 ||
+                  feeSuspiciousReason(analysis.info) !== null
+                }
+                onClick={doBroadcast}
+              >
                 Broadcast
               </button>
             )}
@@ -242,6 +299,78 @@ export default function SignMultisigPsbt() {
           )}
       </div>
     </Page>
+  );
+}
+
+// OutputsPreview — the user is signing a PSBT they did NOT compose. The
+// witness script proves it spends FROM their vault, but the OUTPUTS are
+// the originator's choice. Render destination address(es) and amount(s)
+// prominently before the Sign button so the user can refuse a malicious
+// or wrong-address spend (audit pass 2 Med #1, applied to this page).
+function OutputsPreview(props: {
+  outputs: import("../../services/multisig").PsbtOutputInfo[];
+  vaultAddress: string;
+  feeGrains: bigint;
+  feeUnknown: boolean;
+  totalInputGrains: bigint;
+}) {
+  const { outputs, vaultAddress, feeGrains, feeUnknown, totalInputGrains } = props;
+  if (outputs.length === 0) {
+    return (
+      <p className="rounded-md border border-amber-500 bg-amber-50 p-2 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+        PSBT has no outputs — refuse to sign.
+      </p>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-ink-300 bg-white p-3 text-sm dark:border-ink-700 dark:bg-ink-900">
+      <div className="text-xs font-semibold uppercase text-ink-500">
+        Outputs you are about to sign
+      </div>
+      <ul className="mt-2 space-y-2">
+        {outputs.map((o, i) => {
+          const isChange = o.address === vaultAddress;
+          return (
+            <li key={i} className="flex flex-col gap-1">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-xs text-ink-500">
+                  #{i}
+                  {isChange && (
+                    <span className="ml-1 rounded bg-ink-100 px-1 text-[10px] uppercase dark:bg-ink-800">
+                      change
+                    </span>
+                  )}
+                </span>
+                <span className="text-right font-medium">
+                  {formatGrains(o.amountGrains)} PRL
+                </span>
+              </div>
+              <div className="break-all font-mono text-xs text-ink-700 dark:text-ink-300">
+                {o.address ?? `<non-Pearl script: ${o.scriptHex.slice(0, 24)}…>`}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="mt-3 flex flex-col gap-1 border-t border-ink-200 pt-2 text-xs dark:border-ink-700">
+        <div className="flex justify-between">
+          <span className="text-ink-500">Total inputs</span>
+          <span className="font-medium">
+            {feeUnknown ? "—" : `${formatGrains(totalInputGrains)} PRL`}
+          </span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-ink-500">Fee (paid to miner)</span>
+          <span className="font-medium">
+            {feeUnknown ? "unknown — refuse" : `${formatGrains(feeGrains)} PRL`}
+          </span>
+        </div>
+      </div>
+      <p className="mt-2 text-xs text-ink-500">
+        Confirm each destination AND the fee are correct before signing. Once
+        signed, you cannot un-sign.
+      </p>
+    </div>
   );
 }
 

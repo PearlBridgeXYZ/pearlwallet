@@ -122,12 +122,24 @@ export default function CreateVault() {
   async function deriveMine() {
     setError(null);
     setDeriving(true);
+    // Capture indices at call time. If the user changes account/index while
+    // the worker is deriving, the in-flight result must NOT clobber a now-
+    // stale slot. Audit pass 3 M2. (The service-level pubkey-vs-path check
+    // is the correctness backstop; this just prevents a confusing UX where
+    // a derived pubkey appears to be for a slot the user no longer chose.)
+    const capturedAccount = vaultAccount;
+    const capturedKeyIndex = keyIndex;
     try {
       const r = await exportMyCosignerDescriptor({
-        vaultAccount,
-        keyIndex,
+        vaultAccount: capturedAccount,
+        keyIndex: capturedKeyIndex,
         label: label.trim() || "me",
       });
+      // Guard against stale-result write: only commit if the indices the
+      // user CURRENTLY has selected still match what we derived for.
+      if (capturedAccount !== vaultAccount || capturedKeyIndex !== keyIndex) {
+        return;
+      }
       setMine(r);
     } catch (e) {
       setError(`Couldn't derive your cosigner pubkey: ${e instanceof Error ? e.message : String(e)}`);
