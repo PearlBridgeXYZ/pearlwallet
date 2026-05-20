@@ -31,11 +31,28 @@ const PRIORITY_GWEI_BY_TIER: Record<FeeTier, bigint> = {
   high: 3n,
 };
 
+// Sanity ceiling on baseFee. A hostile RPC (or BGP-hijacked publicnode)
+// could return an absurd baseFeePerGas to either DoS the WPRL send flow
+// (coverage check fails) or socially-engineer the user into funding more
+// ETH than needed. Mainnet baseFee historically peaks ~500 gwei; 5000
+// gwei is 10× the worst observed and still tightly bounds the worst
+// possible UI-level coverage error. v0.1.9 audit O1-H-1.
+export const MAX_BASE_FEE_WEI = 5000n * 1_000_000_000n;
+
+// How long a preview's frozen gas/fees stay valid before broadcast
+// refuses to sign them. 30s covers ordinary user-confirms; longer than
+// that and the user should re-see fresh numbers. v0.1.9 audit
+// O2-H-1 ≡ M2-H-2 (sign-what-you-saw).
+export const PREVIEW_FRESHNESS_MS = 30_000;
+
 /**
  * Returns EIP-1559 fee parameters tuned to `tier`. maxFeePerGas pads the
  * latest base fee by 2× so a single-block bump can't immediately stale
  * the tx — chains volatility means a 1× ceiling regularly drops a tx
  * back to the mempool after one block.
+ *
+ * Throws `E_ETH_FEE_MARKET_INSANE` if the RPC returns an absurd
+ * baseFeePerGas (defense against hostile / hijacked RPC).
  */
 export async function suggestGas(
   network: EthNetwork,
@@ -44,6 +61,9 @@ export async function suggestGas(
   const client = ethClient(network);
   const block = await client.getBlock({ blockTag: "latest" });
   const baseFee = block.baseFeePerGas ?? 0n;
+  if (baseFee > MAX_BASE_FEE_WEI) {
+    throw new Error("E_ETH_FEE_MARKET_INSANE");
+  }
   const priorityGwei = PRIORITY_GWEI_BY_TIER[tier];
   const priority = priorityGwei * 1_000_000_000n;
   const maxFee = baseFee * 2n + priority;
@@ -89,12 +109,30 @@ export async function estimateWprlGas(
   return (units * 12n) / 10n;
 }
 
+/**
+ * Frozen preview a UI can pass through to broadcast so the signed tx
+ * matches exactly the numbers the user saw. Nonce is intentionally NOT
+ * captured here — it's re-read at broadcast time so two tabs / two
+ * back-to-back sends don't collide on a stale nonce (the user never
+ * sees the nonce, so re-reading it isn't a sign-what-you-saw violation).
+ */
+export interface FrozenEthGas {
+  gas: bigint;
+  maxFeePerGas: bigint;
+  maxPriorityFeePerGas: bigint;
+  composedAt: number;
+}
+
 export interface SendNativeParams {
   network: EthNetwork;
   from: `0x${string}`;
   to: `0x${string}`;
   value: bigint;
   tier: FeeTier;
+  /** Sign-what-you-saw: pass the preview's frozen gas + fees to skip
+   *  re-quoting at broadcast. Throws `E_PREVIEW_STALE` if older than
+   *  `PREVIEW_FRESHNESS_MS`. v0.1.9 audit O2-H-1 ≡ M2-H-2. */
+  frozen?: FrozenEthGas;
 }
 
 export interface SendWprlParams {
@@ -103,6 +141,14 @@ export interface SendWprlParams {
   to: `0x${string}`;
   amount: bigint;
   tier: FeeTier;
+  /** See SendNativeParams.frozen. */
+  frozen?: FrozenEthGas;
+}
+
+function assertFreshOrThrow(frozen: FrozenEthGas, now = Date.now()): void {
+  if (now - frozen.composedAt > PREVIEW_FRESHNESS_MS) {
+    throw new Error("E_PREVIEW_STALE");
+  }
 }
 
 export interface SendResult {
@@ -131,11 +177,22 @@ async function chainIdFor(network: EthNetwork): Promise<number> {
 export async function sendNative(p: SendNativeParams): Promise<SendResult> {
   const chainId = await chainIdFor(p.network);
   const client = ethClient(p.network);
-  const [nonce, gas, fees] = await Promise.all([
-    client.getTransactionCount({ address: p.from, blockTag: "pending" }),
-    estimateNativeGas(p.network, p.from, p.to, p.value),
-    suggestGas(p.network, p.tier),
-  ]);
+  let gas: bigint;
+  let fees: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
+  if (p.frozen) {
+    assertFreshOrThrow(p.frozen);
+    gas = p.frozen.gas;
+    fees = {
+      maxFeePerGas: p.frozen.maxFeePerGas,
+      maxPriorityFeePerGas: p.frozen.maxPriorityFeePerGas,
+    };
+  } else {
+    [gas, fees] = await Promise.all([
+      estimateNativeGas(p.network, p.from, p.to, p.value),
+      suggestGas(p.network, p.tier),
+    ]);
+  }
+  const nonce = await client.getTransactionCount({ address: p.from, blockTag: "pending" });
   const composed: EthTxRequest = {
     chainId,
     nonce,
@@ -164,11 +221,22 @@ export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
     functionName: "transfer",
     args: [p.to, p.amount],
   });
-  const [nonce, gas, fees] = await Promise.all([
-    client.getTransactionCount({ address: p.from, blockTag: "pending" }),
-    estimateWprlGas(p.network, p.from, p.to, p.amount),
-    suggestGas(p.network, p.tier),
-  ]);
+  let gas: bigint;
+  let fees: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
+  if (p.frozen) {
+    assertFreshOrThrow(p.frozen);
+    gas = p.frozen.gas;
+    fees = {
+      maxFeePerGas: p.frozen.maxFeePerGas,
+      maxPriorityFeePerGas: p.frozen.maxPriorityFeePerGas,
+    };
+  } else {
+    [gas, fees] = await Promise.all([
+      estimateWprlGas(p.network, p.from, p.to, p.amount),
+      suggestGas(p.network, p.tier),
+    ]);
+  }
+  const nonce = await client.getTransactionCount({ address: p.from, blockTag: "pending" });
   const composed: EthTxRequest = {
     chainId,
     nonce,

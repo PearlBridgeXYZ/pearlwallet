@@ -1,13 +1,16 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
-import { useUI } from "../../state/ui-store";
 import { validPearl } from "../../lib/validate";
 import { formatGrains, parsePRL } from "../../lib/format";
+import { pearlTxExplorerUrl } from "../../chains/pearl/network";
 import { tipAddressFor } from "../../chains/pearl/tip";
-import { composePearlSend, sendPearl } from "../../services/pearl-tx";
+import {
+  broadcastPearlPrecomposed,
+  composePearlSend,
+} from "../../services/pearl-tx";
 
 type FeeTier = "low" | "normal" | "high";
 
@@ -25,11 +28,36 @@ interface ValidatedSend {
   grains: bigint;
 }
 
+// The Pearl pool walk is serialized across receive addresses and can
+// take a few seconds on a cold sentry. A flat "Walking UTXOs…" line
+// looked frozen — users assumed the page was broken. Cycle through a
+// few status messages with a pulsing dot so it feels alive.
+function ComposingHint() {
+  const messages = [
+    "Walking your receive-address pool…",
+    "Reading UTXOs from the Pearl sentry…",
+    "Picking the smallest set of coins…",
+    "Almost there — a pool walk takes a few seconds.",
+  ];
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => {
+      setIdx((i) => (i + 1 < messages.length ? i + 1 : i));
+    }, 1500);
+    return () => clearInterval(t);
+  }, [messages.length]);
+  return (
+    <div className="mt-3 flex items-center gap-2 text-xs text-ink-500">
+      <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-pearl-600" />
+      <span>{messages[idx]}</span>
+    </div>
+  );
+}
+
 export default function SendPRL() {
   const navigate = useNavigate();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
   const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
-  const tipEnabledGlobal = useUI((s) => s.tipEnabled);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
@@ -37,7 +65,11 @@ export default function SendPRL() {
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
-  const [tipThisTx, setTipThisTx] = useState(tipEnabledGlobal);
+  // The per-tx tip checkbox always starts on, independent of any
+  // previously persisted Settings toggle. The Settings page remains the
+  // way to opt out of all tips going forward; this default keeps the
+  // in-tx flow consistent with how the wallet should ship by default.
+  const [tipThisTx, setTipThisTx] = useState(true);
   const [validated, setValidated] = useState<ValidatedSend | null>(null);
   const [sending, setSending] = useState(false);
 
@@ -56,15 +88,20 @@ export default function SendPRL() {
       validated?.grains.toString(),
     ],
     enabled: stage === "preview" && !!validated && pool.length > 0,
-    queryFn: () =>
-      composePearlSend({
+    queryFn: async () => {
+      const composed = await composePearlSend({
         network: pearlNetwork,
         pool,
         destination: validated!.dest,
         amountGrains: validated!.grains,
         feerateSatPerVbyte: FEERATE_BY_TIER[tier],
         includeTip: tipThisTx,
-      }),
+      });
+      // Stamp so broadcast can refuse a stale preview. v0.1.9 audit
+      // O2-H-1: a hostile sentry can return a different UTXO set on a
+      // second walk — the user must sign the set they saw.
+      return { ...composed, composedAt: Date.now() };
+    },
   });
 
   function checkSend(): { ok: true; v: ValidatedSend } | { ok: false; reason: string } {
@@ -85,22 +122,24 @@ export default function SendPRL() {
 
   async function broadcast() {
     if (!validated) return;
+    const q = previewQ.data;
+    if (!q) return;
     setSending(true);
     setError(null);
     try {
-      const { txid: hash } = await sendPearl({
-        network: pearlNetwork,
-        pool,
-        destination: validated.dest,
-        amountGrains: validated.grains,
-        feerateSatPerVbyte: FEERATE_BY_TIER[tier],
-        includeTip: tipThisTx,
-      });
+      const { composedAt, ...composed } = q;
+      const { txid: hash } = await broadcastPearlPrecomposed(
+        { composed, composedAt },
+        pearlNetwork,
+      );
       setTxid(hash);
       setStage("sent");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("E_INSUFFICIENT_FUNDS")) {
+      if (msg === "E_PREVIEW_STALE") {
+        setError("UTXO selection is stale — re-confirm to refresh.");
+        previewQ.refetch();
+      } else if (msg.includes("E_INSUFFICIENT_FUNDS")) {
         setError("Insufficient PRL to cover amount + fee.");
       } else if (msg.includes("E_NO_UTXOS")) {
         setError("No spendable UTXOs found across your receive pool.");
@@ -123,6 +162,16 @@ export default function SendPRL() {
           <p className="mt-2 text-xs text-ink-500">
             Confirming on chain — this can take a few minutes.
           </p>
+          {txid && (
+            <a
+              href={pearlTxExplorerUrl(pearlNetwork, txid)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-block text-sm text-pearl-700 underline dark:text-pearl-300"
+            >
+              View on explorer →
+            </a>
+          )}
           <div className="mt-4 flex gap-2">
             <button onClick={() => navigate("/dashboard")} className="btn-primary flex-1">
               Back to dashboard
@@ -158,7 +207,7 @@ export default function SendPRL() {
                 {composed.tipGrains > 0n && (
                   <div className="flex justify-between">
                     <dt className="text-ink-500">
-                      Tip to PearlBridge (10 bps, min 1 PRL)
+                      Tip to PearlWallet Devs (10 bps, min 1 PRL)
                     </dt>
                     <dd>{formatGrains(composed.tipGrains)} PRL</dd>
                   </div>
@@ -181,9 +230,7 @@ export default function SendPRL() {
             )}
           </dl>
 
-          {previewQ.isLoading && (
-            <p className="mt-3 text-xs text-ink-500">Walking UTXOs and selecting coins…</p>
-          )}
+          {previewQ.isLoading && <ComposingHint />}
           {previewQ.isError && (
             <p className="mt-3 text-sm text-red-600">
               Couldn't compose: {(previewQ.error as Error).message}
@@ -205,7 +252,7 @@ export default function SendPRL() {
               className="mt-1"
             />
             <span>
-              Tip the PearlBridge dev team{" "}
+              Tip the PearlWallet devs{" "}
               <span className="font-medium">10 bps</span> (min{" "}
               <span className="font-medium">1 PRL</span>) on this transaction.
               <span className="ml-1 text-xs text-ink-500">

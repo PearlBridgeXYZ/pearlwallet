@@ -26,9 +26,14 @@ export const PEARL_MAINNET: PearlNetworkParams = {
   decimals: 8,
   rpcUrl: "https://rpc.pearlwallet.xyz/",
   rpcLabel: "rpc.pearlwallet.xyz",
-  explorerUrl: "https://explorer.pearlbridge.xyz",
+  explorerUrl: "https://explorer.pearlresearch.ai",
   magic: 0xd9b4bef9,
 };
+
+/** Public block-explorer URL for a confirmed Pearl tx. */
+export function pearlTxExplorerUrl(network: PearlNetwork, txid: string): string {
+  return `${PEARL_MAINNET.explorerUrl}/tx/${txid}?network=${network}`;
+}
 
 /**
  * Default network params. If a non-empty override is supplied (from

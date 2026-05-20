@@ -343,10 +343,10 @@ export default function Settings() {
       </section>
 
       <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Tip the PearlBridge devs</h2>
+        <h2 className="text-sm font-semibold">Tip the PearlWallet devs</h2>
         <p className="mt-2 text-xs text-ink-500">
           When you send PRL, the wallet can add a small tip output to the
-          PearlBridge developer fees address — <span className="font-medium">10 bps</span>{" "}
+          PearlWallet developer fees address — <span className="font-medium">10 bps</span>{" "}
           of the send amount, with a <span className="font-medium">1 PRL</span> floor for
           small transactions. The tip helps keep the project running.
         </p>

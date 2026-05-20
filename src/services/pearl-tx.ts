@@ -149,8 +149,21 @@ export interface SendPearlResult {
   composed: ComposedPearlTx;
 }
 
-export async function sendPearl(opts: ComposeOptions): Promise<SendPearlResult> {
-  const composed = await composePearlSend(opts);
+/** Frozen preview the UI passes through to broadcast. v0.1.9 audit
+ *  O2-H-1 ≡ M2-H-2 (sign-what-you-saw). */
+export interface FrozenPearlTx {
+  composed: ComposedPearlTx;
+  composedAt: number;
+}
+
+/** Max age of a frozen preview before broadcast refuses. Mirrors the
+ *  ETH side so both paths fail consistently. */
+export const PEARL_PREVIEW_FRESHNESS_MS = 30_000;
+
+async function signAndBroadcast(
+  composed: ComposedPearlTx,
+  network: PearlNetwork,
+): Promise<SendPearlResult> {
   const req: PearlTxRequest = {
     utxos: composed.utxos.map((u) => ({
       txid: u.txid,
@@ -163,11 +176,33 @@ export async function sendPearl(opts: ComposeOptions): Promise<SendPearlResult> 
       address: o.address,
       amountGrains: o.amountGrains.toString(),
     })),
-    network: opts.network,
+    network,
   };
   const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
   const txid = await broadcastPearlTx(raw);
   return { txid, composed };
+}
+
+/**
+ * Sign + broadcast a Pearl tx the UI has already composed and shown the
+ * user. Refuses to sign a preview older than PEARL_PREVIEW_FRESHNESS_MS
+ * so a long-delayed click can't capture a stale UTXO set (a hostile
+ * sentry could have returned different coins on the second walk).
+ */
+export async function broadcastPearlPrecomposed(
+  frozen: FrozenPearlTx,
+  network: PearlNetwork,
+  now: number = Date.now(),
+): Promise<SendPearlResult> {
+  if (now - frozen.composedAt > PEARL_PREVIEW_FRESHNESS_MS) {
+    throw new Error("E_PREVIEW_STALE");
+  }
+  return await signAndBroadcast(frozen.composed, network);
+}
+
+export async function sendPearl(opts: ComposeOptions): Promise<SendPearlResult> {
+  const composed = await composePearlSend(opts);
+  return await signAndBroadcast(composed, opts.network);
 }
 
 // Re-export for tests that need the constants.

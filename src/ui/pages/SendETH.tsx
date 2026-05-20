@@ -12,6 +12,7 @@ import {
   type FeeTier,
 } from "../../services/eth-tx";
 import { fetchEthBalanceWei } from "../../services/balances";
+import { ethTxExplorerUrl } from "../../chains/ethereum/network";
 
 const GAS_BY_TIER: Record<FeeTier, string> = {
   low: "1 gwei",
@@ -69,6 +70,9 @@ export default function SendETH() {
         worstCaseWei,
         required,
         covered: ethBal >= required,
+        // Stamp at compose time so broadcast can refuse a stale preview.
+        // The user signs the numbers above, not a re-quote.
+        composedAt: Date.now(),
       };
     },
   });
@@ -94,6 +98,8 @@ export default function SendETH() {
 
   async function broadcast() {
     if (!validated || !ethAddr) return;
+    const q = previewQ.data;
+    if (!q) return;
     setSending(true);
     setError(null);
     try {
@@ -103,12 +109,23 @@ export default function SendETH() {
         to: validated.dest,
         value: validated.wei,
         tier,
+        frozen: {
+          gas: q.gas,
+          maxFeePerGas: q.fees.maxFeePerGas,
+          maxPriorityFeePerGas: q.fees.maxPriorityFeePerGas,
+          composedAt: q.composedAt,
+        },
       });
       setTxHash(hash);
       setStage("sent");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("insufficient funds")) {
+      if (msg === "E_PREVIEW_STALE") {
+        setError("Fee estimate is stale — re-confirm to refresh the numbers.");
+        previewQ.refetch();
+      } else if (msg === "E_ETH_FEE_MARKET_INSANE") {
+        setError("The RPC returned an unreasonable gas price. Try again or switch networks.");
+      } else if (msg.includes("insufficient funds")) {
         setError("Insufficient ETH to cover both the transfer and gas.");
       } else {
         setError(`Broadcast failed: ${msg}`);
@@ -129,6 +146,16 @@ export default function SendETH() {
           <p className="mt-2 text-xs text-ink-500">
             Confirming on Ethereum — this can take a few minutes.
           </p>
+          {txHash && (
+            <a
+              href={ethTxExplorerUrl(ethNetwork, txHash)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-block text-sm text-pearl-700 underline dark:text-pearl-300"
+            >
+              View on Etherscan →
+            </a>
+          )}
           <button onClick={() => navigate("/dashboard")} className="btn-primary mt-4 w-full">
             Back to dashboard
           </button>

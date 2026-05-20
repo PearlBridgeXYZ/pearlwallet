@@ -24,7 +24,11 @@ export default function Dashboard() {
     <Page>
       <div className="card">
         <div className="text-xs uppercase tracking-wide text-ink-500">Total balance</div>
-        <div className="mt-1 text-3xl font-semibold">{formatUSD(totalUsd)}</div>
+        {balances ? (
+          <div className="mt-1 text-3xl font-semibold">{formatUSD(totalUsd)}</div>
+        ) : (
+          <div className="mt-1 text-sm text-ink-500">Loading, please wait a few seconds…</div>
+        )}
 
         <div className="mt-5 grid grid-cols-3 gap-4">
           <div>

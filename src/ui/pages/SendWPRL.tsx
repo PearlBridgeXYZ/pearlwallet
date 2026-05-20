@@ -13,6 +13,7 @@ import {
   type FeeTier,
 } from "../../services/eth-tx";
 import { fetchEthBalanceWei } from "../../services/balances";
+import { ethTxExplorerUrl } from "../../chains/ethereum/network";
 
 const GAS_BY_TIER: Record<FeeTier, string> = {
   low: "1 gwei",
@@ -63,7 +64,8 @@ export default function SendWPRL() {
         fetchEthBalanceWei(ethAddr!, ethNetwork),
       ]);
       const coverage = evaluateGasCoverage(ethBal, gas, fees.maxFeePerGas);
-      return { gas, fees, ethBal, coverage };
+      // Stamp so broadcast can refuse a stale preview.
+      return { gas, fees, ethBal, coverage, composedAt: Date.now() };
     },
   });
 
@@ -85,6 +87,8 @@ export default function SendWPRL() {
 
   async function broadcast() {
     if (!validated || !ethAddr) return;
+    const q = previewQ.data;
+    if (!q) return;
     setSending(true);
     setError(null);
     try {
@@ -94,14 +98,23 @@ export default function SendWPRL() {
         to: validated.dest,
         amount: validated.wei,
         tier,
+        frozen: {
+          gas: q.gas,
+          maxFeePerGas: q.fees.maxFeePerGas,
+          maxPriorityFeePerGas: q.fees.maxPriorityFeePerGas,
+          composedAt: q.composedAt,
+        },
       });
       setTxHash(hash);
       setStage("sent");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // Map a couple of high-value errors to friendlier copy. Everything
-      // else surfaces raw — opaque errors are still better than swallowing.
-      if (msg.includes("E_WPRL_NOT_DEPLOYED")) {
+      if (msg === "E_PREVIEW_STALE") {
+        setError("Fee estimate is stale — re-confirm to refresh the numbers.");
+        previewQ.refetch();
+      } else if (msg === "E_ETH_FEE_MARKET_INSANE") {
+        setError("The RPC returned an unreasonable gas price. Try again or switch networks.");
+      } else if (msg.includes("E_WPRL_NOT_DEPLOYED")) {
         setError("WPRL isn't deployed on this network yet.");
       } else if (msg.includes("insufficient funds")) {
         setError("Insufficient ETH for gas, or insufficient WPRL for amount.");
@@ -124,6 +137,16 @@ export default function SendWPRL() {
           <p className="mt-2 text-xs text-ink-500">
             Confirming on Ethereum — this can take a few minutes.
           </p>
+          {txHash && (
+            <a
+              href={ethTxExplorerUrl(ethNetwork, txHash)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 inline-block text-sm text-pearl-700 underline dark:text-pearl-300"
+            >
+              View on Etherscan →
+            </a>
+          )}
           <button onClick={() => navigate("/dashboard")} className="btn-primary mt-4 w-full">
             Back to dashboard
           </button>

@@ -45,3 +45,13 @@ export const RELAY_API_BASE: Record<EthNetwork, string> = {
 // Per PearlBridge RC5 contracts.
 export const MINT_FEE_BPS_DEFAULT = 50;  // 0.5% — verify at runtime via mintFeeBps()
 export const BURN_FEE_BPS_DEFAULT = 0;   // 0%   — verify at runtime via burnFeeBps()
+
+const ETH_EXPLORER_BASE: Record<EthNetwork, string> = {
+  mainnet: "https://etherscan.io",
+  sepolia: "https://sepolia.etherscan.io",
+};
+
+/** Public block-explorer URL for an Ethereum tx. */
+export function ethTxExplorerUrl(net: EthNetwork, hash: string): string {
+  return `${ETH_EXPLORER_BASE[net]}/tx/${hash}`;
+}
