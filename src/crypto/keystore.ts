@@ -4,7 +4,27 @@
 export const KDF_ITERATIONS = 600_000;
 export const KDF_SALT_BYTES = 16;
 export const AES_IV_BYTES = 12;
-export const AAD = new TextEncoder().encode("pearl-web-wallet-v1");
+export const SUPPORTED_BLOB_VERSION = 1 as const;
+
+// AAD binds the ciphertext to the version, KDF identity, iteration
+// count, and cipher. A keystore exported from this build will not
+// decrypt against a future v2 blob that swaps cipher or iterations —
+// the GCM auth check fails before we even attempt password-derived
+// decryption. Pre-v0.1.7 AAD was a static "pearl-web-wallet-v1"
+// label that carried zero context binding; this version is stricter.
+export function computeAAD(
+  version: number,
+  kdf: string,
+  kdfIterations: number,
+  cipher: string,
+): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({ v: version, kdf, iter: kdfIterations, c: cipher }),
+  );
+}
+
+/** Default AAD for fresh-encrypt of the current supported blob version. */
+export const AAD = computeAAD(SUPPORTED_BLOB_VERSION, "PBKDF2-SHA256", KDF_ITERATIONS, "AES-256-GCM");
 
 export interface EncryptedBlob {
   version: 1;
@@ -70,6 +90,16 @@ export async function encryptPlaintext(plaintext: Uint8Array, password: string):
 }
 
 export async function decryptBlob(blob: EncryptedBlob, password: string): Promise<Uint8Array> {
+  // Reject future blob formats explicitly. Without this guard, a v2 blob
+  // with mismatched KDF params would surface as a generic "wrong password"
+  // and the user could spend hours retrying — when the real issue is they
+  // need a newer client. This is cheap and unambiguous.
+  if (blob.version !== SUPPORTED_BLOB_VERSION) {
+    throw new Error("E_UNSUPPORTED_BLOB_VERSION");
+  }
+  if (blob.kdf !== "PBKDF2-SHA256" || blob.cipher !== "AES-256-GCM") {
+    throw new Error("E_UNSUPPORTED_BLOB_VERSION");
+  }
   const subtle = requireCrypto();
   const key = await deriveKey(password, blob.kdfSalt, blob.kdfIterations);
   try {

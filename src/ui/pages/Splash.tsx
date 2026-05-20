@@ -3,7 +3,8 @@ import { useWallet } from "../../state/wallet-store";
 
 export default function Splash() {
   const status = useWallet((s) => s.status);
-  const hasWallet = status !== "no-wallet";
+  const initializing = status === "initializing";
+  const hasWallet = status === "locked" || status === "unlocked";
 
   return (
     <div className="flex min-h-full items-center justify-center px-6 py-10">
@@ -15,7 +16,14 @@ export default function Splash() {
         </p>
 
         <div className="mt-8 flex flex-col gap-2">
-          {hasWallet ? (
+          {initializing ? (
+            // Suppress the create/restore CTAs until init() finishes. The
+            // load is usually < 50ms but a slow Dexie open on first paint
+            // would otherwise flash "Create a new wallet" at a returning
+            // user — looks broken and risks a click that lands on
+            // /onboarding/create before auto-route catches up.
+            <div className="text-sm text-ink-500 dark:text-ink-400">Loading...</div>
+          ) : hasWallet ? (
             <>
               {/* Existing wallet on this device — funnel the user to unlock,
                   not create/restore (which would overwrite the keystore and

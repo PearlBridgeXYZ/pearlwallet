@@ -25,13 +25,18 @@ import { fetchPrlPriceUsd } from "./prices";
 // surface the total as the sum of the addresses we DID see — the
 // alternative (all-or-nothing) hides real funds when the sentry has
 // even a tiny hiccup.
-async function fetchPoolBalances(pool: string[]): Promise<bigint[]> {
-  const out: bigint[] = new Array(pool.length).fill(0n);
+interface PoolWalkResult {
+  grains: bigint[];
+  failures: number;
+}
+
+async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
+  const grains: bigint[] = new Array(pool.length).fill(0n);
   let failures = 0;
   for (let i = 0; i < pool.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, 300));
     try {
-      out[i] = await fetchPrlBalanceGrains(pool[i]!);
+      grains[i] = await fetchPrlBalanceGrains(pool[i]!);
     } catch {
       failures++;
     }
@@ -39,7 +44,7 @@ async function fetchPoolBalances(pool: string[]): Promise<bigint[]> {
   // If MORE than half the pool failed we treat the whole walk as a
   // bust — the visible balance would be too suspect to show.
   if (failures > pool.length / 2) throw new Error("pool walk failed");
-  return out;
+  return { grains, failures };
 }
 
 export interface Balances {
@@ -47,7 +52,11 @@ export interface Balances {
   wprl: bigint;       // wei (10^18)
   prlUsd: number;
   wprlUsd: number;
-  prlSource: "live" | "error";
+  // "live" = full pool walked. "partial" = some pool addresses errored
+  //   but at least half succeeded — sum is under-reported; UI must
+  //   surface a warning so the user doesn't act on a low number.
+  // "error" = whole walk failed.
+  prlSource: "live" | "partial" | "error";
   wprlSource: "live" | "error";
   priceSource: "live" | "error";
 }
@@ -61,8 +70,9 @@ export async function fetchBalances(
   let prl = 0n;
   let prlSource: Balances["prlSource"] = "live";
   try {
-    const grains = await fetchPoolBalances(pool);
-    prl = grains.reduce((acc, g) => acc + g, 0n);
+    const result = await fetchPoolBalances(pool);
+    prl = result.grains.reduce((acc, g) => acc + g, 0n);
+    if (result.failures > 0) prlSource = "partial";
   } catch {
     prlSource = "error";
   }

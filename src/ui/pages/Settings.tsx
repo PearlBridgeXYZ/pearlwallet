@@ -4,6 +4,7 @@ import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { pearlParams } from "../../chains/pearl/network";
+import { passwordAcceptable } from "../../lib/validate";
 
 // Auto-mask exported mnemonic after this many seconds so a phrase left
 // onscreen during a coffee break stops being a shoulder-surf target.
@@ -96,6 +97,21 @@ export default function Settings() {
     };
   }, []);
 
+  // Tab-switch hide: when the tab is backgrounded, the 1Hz countdown is
+  // throttled to ~1/min, so the 60s auto-hide effectively freezes. A user
+  // who reveals their mnemonic, then alt-tabs, sees the phrase on the
+  // next visibility check — exactly the shoulder-surf gap v0.1.5's
+  // visible countdown was meant to address. Hide on `hidden` regardless
+  // of how long ago they revealed it.
+  useEffect(() => {
+    function onHide() {
+      if (document.hidden) hideMnemonic();
+    }
+    document.addEventListener("visibilitychange", onHide);
+    return () => document.removeEventListener("visibilitychange", onHide);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function doChangePassword() {
     setError(null);
     setSuccess(null);
@@ -103,8 +119,9 @@ export default function Settings() {
       setError("New passwords don't match.");
       return;
     }
-    if (newPw.length < 10) {
-      setError("New password must be at least 10 characters.");
+    const pw = passwordAcceptable(newPw);
+    if (!pw.ok) {
+      setError(pw.reason);
       return;
     }
     try {

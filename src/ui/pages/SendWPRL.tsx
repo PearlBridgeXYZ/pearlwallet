@@ -12,35 +12,39 @@ const GAS_BY_TIER: Record<GasTier, string> = {
   high: "3 gwei",
 };
 
+interface ValidatedSend {
+  dest: string;
+  wei: bigint;
+}
+
 export default function SendWPRL() {
   const navigate = useNavigate();
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
   const [tier, setTier] = useState<GasTier>("normal");
-  const [password, setPassword] = useState("");
+  // Same shape as SendPRL — broadcast lands in v0.2.
+  const [password] = useState("");
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
   const [txHash] = useState<string | null>(null);
+  const [validated, setValidated] = useState<ValidatedSend | null>(null);
 
-  function validate(): { dest: string; wei: bigint } | null {
+  // Pure validator — never sets state. Mirror of SendPRL.checkSend.
+  function checkSend(): { ok: true; v: ValidatedSend } | { ok: false; reason: string } {
     if (!validEth(destination)) {
-      setError("That doesn't look like a valid Ethereum address.");
-      return null;
+      return { ok: false, reason: "That doesn't look like a valid Ethereum address." };
     }
     let wei: bigint;
     try {
       wei = parseWPRL(amount);
     } catch {
-      setError("Enter a valid WPRL amount.");
-      return null;
+      return { ok: false, reason: "Enter a valid WPRL amount." };
     }
     if (wei <= 0n) {
-      setError("Amount must be greater than 0.");
-      return null;
+      return { ok: false, reason: "Amount must be greater than 0." };
     }
-    setError(null);
-    return { dest: destination.trim(), wei };
+    return { ok: true, v: { dest: destination.trim(), wei } };
   }
 
   async function broadcast() {
@@ -66,11 +70,16 @@ export default function SendWPRL() {
   }
 
   if (stage === "preview") {
-    const v = validate();
+    const v = validated;
     return (
       <Page title="Send WPRL">
         <div className="card">
           <h2 className="text-lg font-semibold">Confirm</h2>
+          <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+            Preview only — live WPRL broadcast ships in v0.2 (needs an ETH gas
+            balance, which we're adding in the same release). Use your existing
+            Ethereum wallet for now.
+          </div>
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between">
               <dt className="text-ink-500">To</dt>
@@ -85,23 +94,18 @@ export default function SendWPRL() {
               <dd>{tier} ({GAS_BY_TIER[tier]} priority)</dd>
             </div>
           </dl>
-          <p className="mt-4 text-sm text-amber-700 dark:text-amber-400">
-            This cannot be undone.
-          </p>
-          <label className="mt-4 block">
-            <span className="label">Password (re-confirm)</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
+          <input type="hidden" value={password} readOnly />
           {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
           <div className="mt-4 flex gap-2">
             <button onClick={() => setStage("compose")} className="btn-secondary">Back</button>
-            <button onClick={broadcast} className="btn-primary flex-1">Send</button>
+            <button
+              disabled
+              title="Broadcast lands in v0.2"
+              onClick={broadcast}
+              className="btn-primary flex-1 opacity-60"
+            >
+              Send (v0.2)
+            </button>
           </div>
         </div>
       </Page>
@@ -159,7 +163,14 @@ export default function SendWPRL() {
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button
           onClick={() => {
-            if (validate()) setStage("preview");
+            const result = checkSend();
+            if (!result.ok) {
+              setError(result.reason);
+              return;
+            }
+            setError(null);
+            setValidated(result.v);
+            setStage("preview");
           }}
           className="btn-primary"
         >

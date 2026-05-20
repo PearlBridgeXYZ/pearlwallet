@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { dataUrl } from "../../lib/qr";
@@ -12,6 +12,11 @@ export default function Receive() {
   const [copied, setCopied] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [prlIndex, setPrlIndex] = useState(0);
+  // Timer handles tracked in refs so we can cancel on unmount. A 60-second
+  // clipboard-clear left to fire after navigation could clobber a buffer
+  // the user copied something else into in the meantime.
+  const copiedFlagTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clipboardClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pearlPool = useMemo(
     () => addresses?.pearlPool ?? (addresses ? [addresses.pearl] : []),
@@ -26,6 +31,13 @@ export default function Receive() {
     void dataUrl(addr).then(setQr);
   }, [addr]);
 
+  useEffect(() => {
+    return () => {
+      if (copiedFlagTimerRef.current) clearTimeout(copiedFlagTimerRef.current);
+      if (clipboardClearTimerRef.current) clearTimeout(clipboardClearTimerRef.current);
+    };
+  }, []);
+
   // Auto-clear the clipboard 60s after copy so an address (not as
   // sensitive as a key, but still a privacy/correlation signal) doesn't
   // sit in the OS paste buffer indefinitely. Best-effort: a clipboard
@@ -36,9 +48,14 @@ export default function Receive() {
     try {
       await navigator.clipboard.writeText(addr);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (copiedFlagTimerRef.current) clearTimeout(copiedFlagTimerRef.current);
+      copiedFlagTimerRef.current = setTimeout(() => setCopied(false), 1500);
+      // Cancel any pending clear before scheduling a new one — back-to-back
+      // copies of two different addresses should be governed by the LATER
+      // address's window, not the earlier one's.
+      if (clipboardClearTimerRef.current) clearTimeout(clipboardClearTimerRef.current);
       const copiedAddr = addr;
-      setTimeout(async () => {
+      clipboardClearTimerRef.current = setTimeout(async () => {
         try {
           const current = await navigator.clipboard.readText();
           if (current === copiedAddr) {

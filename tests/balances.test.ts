@@ -147,7 +147,9 @@ describe("fetchBalances — Pearl pool aggregation", () => {
     }));
 
     const out = await fetchBalances(POOL, ETH);
-    expect(out.prlSource).toBe("live");
+    // v0.1.7: label partial walks explicitly so the UI can warn instead
+    // of presenting a degraded sum as authoritative.
+    expect(out.prlSource).toBe("partial");
     // 4.0 + 5.0 PRL = 900_000_000 grains. POOL[1] silently contributed 0.
     expect(out.prl).toBe(900_000_000n);
   });

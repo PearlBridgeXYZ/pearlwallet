@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
 import { cryptoWorker } from "../../crypto/worker-client";
-import { passwordStrength } from "../../lib/validate";
+import { passwordAcceptable, passwordStrength } from "../../lib/validate";
 
 export default function OnboardingRestore() {
   const navigate = useNavigate();
@@ -45,8 +45,9 @@ export default function OnboardingRestore() {
       setError("That doesn't look like a valid BIP-39 phrase. Check the words.");
       return;
     }
-    if (password.length < 10) {
-      setError("Password must be at least 10 characters.");
+    const pw = passwordAcceptable(password);
+    if (!pw.ok) {
+      setError(pw.reason);
       return;
     }
     if (password !== passwordConfirm) {

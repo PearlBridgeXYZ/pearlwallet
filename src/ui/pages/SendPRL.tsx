@@ -15,6 +15,11 @@ const FEE_BY_TIER: Record<FeeTier, bigint> = {
   high: 20000n,    // 0.0002 PRL
 };
 
+interface ValidatedSend {
+  dest: string;
+  grains: bigint;
+}
+
 export default function SendPRL() {
   const navigate = useNavigate();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
@@ -23,32 +28,39 @@ export default function SendPRL() {
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
-  const [password, setPassword] = useState("");
+  // Password collected on the preview form. Broadcast lands in v0.2 —
+  // keeping the bound state so the hidden input round-trips cleanly when
+  // the user types a draft password and hits Back.
+  const [password] = useState("");
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
   const [txHash] = useState<string | null>(null);
   // Per-transaction override: starts at the global preference so the
   // user can turn this off for a single send without changing settings.
   const [tipThisTx, setTipThisTx] = useState(tipEnabledGlobal);
+  // Validated send is captured when the user clicks Review, so the
+  // preview reads from this rather than re-running side-effectful
+  // validate() inside its render body. Calling setError during render
+  // is a React anti-pattern that warns under StrictMode and breaks
+  // outright under concurrent rendering.
+  const [validated, setValidated] = useState<ValidatedSend | null>(null);
 
-  function validate(): { dest: string; grains: bigint } | null {
+  // Pure validator — returns either the parsed values or an error
+  // message; never touches setState.
+  function checkSend(): { ok: true; v: ValidatedSend } | { ok: false; reason: string } {
     if (!validPearl(destination, pearlNetwork)) {
-      setError("That doesn't look like a valid Pearl address.");
-      return null;
+      return { ok: false, reason: "That doesn't look like a valid Pearl address." };
     }
     let grains: bigint;
     try {
       grains = parsePRL(amount);
     } catch {
-      setError("Enter a valid PRL amount.");
-      return null;
+      return { ok: false, reason: "Enter a valid PRL amount." };
     }
     if (grains <= 0n) {
-      setError("Amount must be greater than 0.");
-      return null;
+      return { ok: false, reason: "Amount must be greater than 0." };
     }
-    setError(null);
-    return { dest: destination.trim(), grains };
+    return { ok: true, v: { dest: destination.trim(), grains } };
   }
 
   async function broadcast() {
@@ -80,7 +92,7 @@ export default function SendPRL() {
   }
 
   if (stage === "preview") {
-    const v = validate();
+    const v = validated;
     const feeFor = FEE_BY_TIER[tier];
     const tipGrains = v && tipThisTx ? computeTipGrains(v.grains) : 0n;
     const totalGrains = v ? v.grains + feeFor + tipGrains : 0n;
@@ -88,6 +100,11 @@ export default function SendPRL() {
       <Page title="Send PRL">
         <div className="card">
           <h2 className="text-lg font-semibold">Confirm</h2>
+          <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+            Preview only — live PRL broadcast from the wallet UI ships in v0.2.
+            The numbers below are estimates (fixed fee placeholder, no UTXO coin
+            selection). For real PRL sends today, use the canonical Pearl tooling.
+          </div>
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between">
               <dt className="text-ink-500">To</dt>
@@ -140,25 +157,28 @@ export default function SendPRL() {
             This cannot be undone.
           </p>
 
-          <label className="mt-4 block">
-            <span className="label">Password (re-confirm)</span>
-            <input
-              className="input"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-
+          {/*
+            v0.1.7: stop offering a password field + active "Send" button
+            on a flow that can't broadcast. The previous shape implied
+            the wallet would send if the user typed their password and
+            clicked Send — it wouldn't, it would surface the same error
+            inline. Replace with a single disabled button until broadcast
+            lands so the UI never lies about what it can do.
+          */}
+          <input type="hidden" value={password} readOnly />
           {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
           <div className="mt-4 flex gap-2">
             <button onClick={() => setStage("compose")} className="btn-secondary">
               Back
             </button>
-            <button onClick={broadcast} className="btn-primary flex-1">
-              Send
+            <button
+              disabled
+              title="Broadcast lands in v0.2"
+              onClick={broadcast}
+              className="btn-primary flex-1 opacity-60"
+            >
+              Send (v0.2)
             </button>
           </div>
         </div>
@@ -219,7 +239,14 @@ export default function SendPRL() {
 
         <button
           onClick={() => {
-            if (validate()) setStage("preview");
+            const result = checkSend();
+            if (!result.ok) {
+              setError(result.reason);
+              return;
+            }
+            setError(null);
+            setValidated(result.v);
+            setStage("preview");
           }}
           className="btn-primary"
         >

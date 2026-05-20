@@ -62,16 +62,90 @@ export interface IntentExpectation {
 }
 
 /**
+ * Coerce a JSON-decoded relayer response into the typed MintPayload
+ * shape. Network responses arrive with amount/nonce/deadline as JSON
+ * number or decimal string (never bigint), so `payload.deadline <=
+ * nowSec` would throw `TypeError: Cannot mix BigInt and other types`
+ * before any binding check could run. Normalize at the boundary so
+ * downstream code sees a single canonical type.
+ */
+export function normalizeRelayerMintSig(raw: unknown): RelayerMintSig {
+  if (!raw || typeof raw !== "object") {
+    throw new Error("E_SIGNATURE_MALFORMED");
+  }
+  const obj = raw as { payload?: unknown; signature?: unknown };
+  if (!obj.payload || typeof obj.payload !== "object") {
+    throw new Error("E_SIGNATURE_MALFORMED");
+  }
+  if (typeof obj.signature !== "string" || !obj.signature.startsWith("0x")) {
+    throw new Error("E_SIGNATURE_MALFORMED");
+  }
+  const p = obj.payload as Record<string, unknown>;
+  const recipient = p.recipient;
+  const sdiHash = p.sdiHash;
+  if (typeof recipient !== "string" || !recipient.startsWith("0x")) {
+    throw new Error("E_SIGNATURE_MALFORMED");
+  }
+  if (typeof sdiHash !== "string" || !sdiHash.startsWith("0x")) {
+    throw new Error("E_SIGNATURE_MALFORMED");
+  }
+  // BigInt() rejects fractional strings + throws on NaN, but quietly
+  // coerces "" → 0n. An empty-string deadline would slide through as
+  // 0n and then fail `deadline <= nowSec` — making it look like a stale
+  // signature instead of a malformed one. Reject empty / missing fields
+  // explicitly before the coercion attempt.
+  function coerceUint(field: unknown): bigint {
+    if (field === null || field === undefined) throw new Error("E_SIGNATURE_MALFORMED");
+    if (typeof field === "string" && field.trim() === "") throw new Error("E_SIGNATURE_MALFORMED");
+    if (typeof field === "number" && !Number.isFinite(field)) throw new Error("E_SIGNATURE_MALFORMED");
+    if (typeof field !== "string" && typeof field !== "number" && typeof field !== "bigint") {
+      throw new Error("E_SIGNATURE_MALFORMED");
+    }
+    try {
+      return BigInt(field as string | number | bigint);
+    } catch {
+      throw new Error("E_SIGNATURE_MALFORMED");
+    }
+  }
+  const amount = coerceUint(p.amount);
+  const nonce = coerceUint(p.nonce);
+  const deadline = coerceUint(p.deadline);
+  if (amount < 0n || nonce < 0n || deadline < 0n) {
+    throw new Error("E_SIGNATURE_MALFORMED");
+  }
+  return {
+    payload: {
+      recipient: recipient as `0x${string}`,
+      amount,
+      sdiHash: sdiHash as `0x${string}`,
+      nonce,
+      deadline,
+    },
+    signature: obj.signature as `0x${string}`,
+  };
+}
+
+/**
  * Verify a relayer mint signature is well-formed, NOT expired, signed by
  * an address holding the RELAYER role on BridgeController, AND that the
  * signed payload binds to the user's own submitted intent. The wallet
  * MUST call this before broadcasting any mint tx, or it accepts attacker-
  * supplied recipients/amounts/intents.
+ *
+ * `expected` is REQUIRED. The v0.1.5 audit added the binding parameter as
+ * a defense-in-depth check; v0.1.6 left it as `expected?:` which made the
+ * defense opt-in and re-introduced the bypass. Callers that genuinely need
+ * to inspect a sig without binding (test tools, diagnostic CLIs) must use
+ * `verifyRelayerMintSigUnbound` and assume the loss-of-funds risk.
+ *
+ * `nowSecOverride` lets callers substitute a trusted timestamp (e.g. the
+ * latest Ethereum block timestamp) when the local clock can't be trusted.
  */
 export async function verifyRelayerMintSig(
   sig: RelayerMintSig,
-  network: EthNetwork = "mainnet",
-  expected?: IntentExpectation,
+  network: EthNetwork,
+  expected: IntentExpectation,
+  nowSecOverride?: bigint,
 ): Promise<{ signer: `0x${string}` }> {
   const cfg = bridgeConfig(network);
   const chainId = network === "mainnet" ? 1 : 11155111;
@@ -83,20 +157,18 @@ export async function verifyRelayerMintSig(
   };
   // Deadline check first — cheapest, no network. Reject a signature that
   // already expired before we burn an RPC round-trip on role lookup.
-  const nowSec = BigInt(Math.floor(Date.now() / 1000));
+  const nowSec = nowSecOverride ?? BigInt(Math.floor(Date.now() / 1000));
   if (sig.payload.deadline <= nowSec) {
     throw new Error("E_SIGNATURE_EXPIRED");
   }
-  if (expected) {
-    if (sig.payload.recipient.toLowerCase() !== expected.recipient.toLowerCase()) {
-      throw new Error("E_SIGNATURE_RECIPIENT_MISMATCH");
-    }
-    if (sig.payload.amount !== expected.amount) {
-      throw new Error("E_SIGNATURE_AMOUNT_MISMATCH");
-    }
-    if (sig.payload.sdiHash.toLowerCase() !== expected.sdiHash.toLowerCase()) {
-      throw new Error("E_SIGNATURE_SDI_HASH_MISMATCH");
-    }
+  if (sig.payload.recipient.toLowerCase() !== expected.recipient.toLowerCase()) {
+    throw new Error("E_SIGNATURE_RECIPIENT_MISMATCH");
+  }
+  if (sig.payload.amount !== expected.amount) {
+    throw new Error("E_SIGNATURE_AMOUNT_MISMATCH");
+  }
+  if (sig.payload.sdiHash.toLowerCase() !== expected.sdiHash.toLowerCase()) {
+    throw new Error("E_SIGNATURE_SDI_HASH_MISMATCH");
   }
   const signer = await recoverTypedDataAddress({
     domain,
@@ -111,6 +183,41 @@ export async function verifyRelayerMintSig(
   if (!hasRole) {
     throw new Error("E_SIGNATURE_NOT_FROM_RELAYER");
   }
+  return { signer };
+}
+
+/**
+ * Diagnostic-only: verify deadline + signature + relayer role WITHOUT
+ * binding payload to a user intent. Never call this on the broadcast
+ * path — the named-loudly suffix is intentional. Use only for relay
+ * health checks / CLI testing where loss-of-funds is impossible.
+ */
+export async function verifyRelayerMintSigUnbound(
+  sig: RelayerMintSig,
+  network: EthNetwork,
+  nowSecOverride?: bigint,
+): Promise<{ signer: `0x${string}` }> {
+  const cfg = bridgeConfig(network);
+  const chainId = network === "mainnet" ? 1 : 11155111;
+  const domain: TypedDataDomain = {
+    name: "PearlBridge",
+    version: "2",
+    chainId,
+    verifyingContract: cfg.bridgeController,
+  };
+  const nowSec = nowSecOverride ?? BigInt(Math.floor(Date.now() / 1000));
+  if (sig.payload.deadline <= nowSec) throw new Error("E_SIGNATURE_EXPIRED");
+  const signer = await recoverTypedDataAddress({
+    domain,
+    types: MINT_TYPES,
+    primaryType: "Mint",
+    message: sig.payload,
+    signature: sig.signature,
+  });
+  const client = ethClient(network);
+  const controller = getContract({ address: cfg.bridgeController, abi: BRIDGE_ROLES_ABI, client });
+  const hasRole = await controller.read.hasRole([RELAYER_ROLE, signer]);
+  if (!hasRole) throw new Error("E_SIGNATURE_NOT_FROM_RELAYER");
   return { signer };
 }
 
@@ -199,18 +306,36 @@ export async function postSdiIntent(network: EthNetwork, sdi: unknown): Promise<
  * on-chain RELAYER role, the requested user intent, and that it has not
  * expired. `expected` ties the relayer's payload to what the user actually
  * submitted — a MITM relay otherwise could swap recipient/amount/sdiHash
- * for its own address. Throws on any mismatch; broadcast path must not
- * call this without `expected` in production.
+ * for its own address. `expected` is REQUIRED at the type level so the
+ * binding cannot be skipped by a forgetful caller. Throws on any mismatch.
  */
 export async function getMintSignature(
   network: EthNetwork,
   intentId: string,
-  expected?: IntentExpectation,
+  expected: IntentExpectation,
+  nowSecOverride?: bigint,
 ): Promise<RelayerMintSig> {
   const cfg = bridgeConfig(network);
   const res = await fetchWithTimeout(`${cfg.relayApiBase}/intents/${intentId}/mint-sig`);
   if (!res.ok) throw new Error(`relay /mint-sig: ${res.status}`);
-  const raw = (await res.json()) as RelayerMintSig;
-  await verifyRelayerMintSig(raw, network, expected);
-  return raw;
+  // The wire format encodes uint256 fields as JSON numbers or strings.
+  // Normalize to typed bigints BEFORE handing to the verifier; otherwise
+  // `payload.deadline <= nowSec (bigint)` throws TypeError and every
+  // legitimate signature is rejected.
+  const raw = await res.json();
+  const sig = normalizeRelayerMintSig(raw);
+  await verifyRelayerMintSig(sig, network, expected, nowSecOverride);
+  return sig;
+}
+
+/**
+ * Fetch the latest Ethereum block timestamp. Use as `nowSecOverride` when
+ * verifying a relayer mint signature so a wildly-skewed client clock can't
+ * accept an already-expired signature (clock slow) or reject a fresh one
+ * (clock fast). Returns seconds as bigint.
+ */
+export async function fetchEthBlockTimestamp(network: EthNetwork): Promise<bigint> {
+  const client = ethClient(network);
+  const block = await client.getBlock({ blockTag: "latest" });
+  return block.timestamp;
 }

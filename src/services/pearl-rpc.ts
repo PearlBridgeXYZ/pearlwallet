@@ -93,9 +93,24 @@ function voutPaysAddress(vout: RawTxVout, address: string): boolean {
     vout.scriptPubKey.addresses.includes(address);
 }
 
+// Hard cap on pagination depth. A hostile or buggy sentry that returns
+// `page.length === PAGE` on every request (looping cursor, dummy data,
+// reorg replay) would otherwise spin the tab indefinitely — 100% CPU,
+// memory growth, no observable error. 20 pages × 100 = 2000 txs is
+// already more activity than any reasonable retail wallet sees, and
+// well past the point where we should stop trusting the RPC anyway.
+export const MAX_UTXO_WALK_PAGES = 20;
+
 /**
  * Returns the confirmed + mempool balance (in grains) for `address`,
  * by walking searchrawtransactions in pages and tracking a UTXO set.
+ *
+ * The per-page walk runs in TWO passes (vouts first, vins second).
+ * A hostile sentry could otherwise order vins before their funding
+ * vouts on the same page — the vin delete would no-op against an
+ * uncredited UTXO and the later vout credit would survive, leaving
+ * a spent UTXO in the running total. Two-pass guarantees every vin
+ * sees the page's full vout set before deleting.
  */
 export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
   const PAGE = 100;
@@ -107,8 +122,14 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
   // — not just within a page — prevents double-counting a UTXO that we
   // already credited in an earlier page.
   const seenOutputs = new Set<string>();
+  let pageCount = 0;
 
   while (true) {
+    if (pageCount >= MAX_UTXO_WALK_PAGES) {
+      // Best-effort cap — return the partial total rather than hang the
+      // tab. Caller can surface this as a degraded-balance label later.
+      throw new Error("E_UTXO_WALK_EXCEEDED");
+    }
     let page: RawTx[];
     try {
       page = await call<RawTx[]>("searchrawtransactions", [address, 1, skip, PAGE]);
@@ -120,6 +141,7 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
     }
     if (!page || page.length === 0) break;
 
+    // Pass 1: credit every vout that pays this address.
     for (const tx of page) {
       for (const vout of tx.vout) {
         if (!voutPaysAddress(vout, address)) continue;
@@ -128,12 +150,18 @@ export async function fetchPrlBalanceGrains(address: string): Promise<bigint> {
         seenOutputs.add(key);
         utxo.set(key, prlToGrains(vout.value));
       }
+    }
+    // Pass 2: debit every vin's referenced output. After pass 1, any
+    // funding vout that appears later in the same page is already in
+    // `utxo`, so the delete is correct.
+    for (const tx of page) {
       for (const vin of tx.vin) {
         if (!vin.txid || vin.vout === undefined) continue;
         utxo.delete(`${vin.txid}:${vin.vout}`);
       }
     }
 
+    pageCount++;
     if (page.length < PAGE) break;
     skip += page.length;
   }

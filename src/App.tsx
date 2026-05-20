@@ -37,12 +37,18 @@ export default function App() {
     else if (theme === "light") root.classList.add("light");
   }, [theme]);
 
-  // Activity-based idle tracking. Before v0.1.6 the auto-lock was fixed:
-  // 5 min after unlock, regardless of whether the user was actively
-  // using the wallet. Now real user input (pointer, key, touch, focus,
-  // visibility-change) bumps lastActivity, so an active typing/clicking
-  // user never auto-locks mid-flow. Throttled to once per second to
-  // avoid thrashing the Zustand store on mousemove.
+  // Activity-based idle tracking. Real user input (pointer, key, touch,
+  // focus) bumps lastActivity, so an active user never auto-locks
+  // mid-flow. Throttled to 1 Hz to avoid thrashing the store on
+  // mousemove.
+  //
+  // Visibility-change is handled SEPARATELY (below). A naive
+  // "if visible: bump()" lets a bystander revive a tab that's been
+  // idle past the auto-lock window by clicking back into it — because
+  // background-tab `setInterval` is throttled to ~1/min, the lock-poll
+  // hasn't run yet when the visibility handler fires synchronously. So
+  // we check elapsed-since-lastActivity FIRST and lock if expired,
+  // BEFORE allowing the bump.
   useEffect(() => {
     if (status !== "unlocked") return;
     let lastBump = 0;
@@ -54,13 +60,24 @@ export default function App() {
     };
     const events = ["pointerdown", "pointermove", "keydown", "touchstart", "wheel", "focus"];
     for (const ev of events) window.addEventListener(ev, bump, { passive: true });
-    const onVis = () => { if (!document.hidden) bump(); };
+    const onVis = () => {
+      if (document.hidden) return;
+      // On revival, check whether the auto-lock window already elapsed
+      // while we were backgrounded. If so, lock first, don't bump.
+      const since = Date.now() - useWallet.getState().lastActivity;
+      if (since > AUTO_LOCK_MS) {
+        void lock();
+        navigate("/unlock");
+        return;
+      }
+      bump();
+    };
     document.addEventListener("visibilitychange", onVis);
     return () => {
       for (const ev of events) window.removeEventListener(ev, bump);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [status, touch]);
+  }, [status, touch, lock, navigate]);
 
   // Auto-lock poll. Reads lastActivity from the store each tick so we
   // don't need the effect to re-run on every bump (which would tear
@@ -77,8 +94,12 @@ export default function App() {
     return () => clearInterval(timer);
   }, [status, lock, navigate]);
 
-  // Auto-route on status change.
+  // Auto-route on status change. Skip while "initializing" — we don't
+  // know yet whether a keystore exists and any navigate() call here
+  // would just bounce the user once init() resolves and the real status
+  // arrives.
   useEffect(() => {
+    if (status === "initializing") return;
     const path = location.pathname;
     if (status === "no-wallet" && !path.startsWith("/onboarding") && path !== "/") {
       navigate("/", { replace: true });

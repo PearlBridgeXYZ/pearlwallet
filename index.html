@@ -3,6 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!--
+      Mirror the CSP in public/_headers so non-Cloudflare deployments
+      (local static servers, IPFS, S3-backed mirrors, etc.) still enforce
+      connect-src against the trusted RPC allowlist. _headers is kept for
+      defense in depth — frame-ancestors / HSTS / Permissions-Policy
+      can't be set from a <meta> tag and stay on the response header.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://rpc.pearlwallet.xyz https://ethereum-rpc.publicnode.com https://eth.drpc.org https://pearlbridge.xyz; worker-src 'self' blob:; base-uri 'self'; form-action 'self'; object-src 'none'; manifest-src 'self'"
+    />
     <meta name="color-scheme" content="light dark" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
     <meta name="theme-color" content="#1f2940" />
