@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
 import { useWallet, AUTO_LOCK_MS } from "./state/wallet-store";
 import { useUI } from "./state/ui-store";
+import { monotonicNow } from "./lib/monotonic";
 import Splash from "./ui/pages/Splash";
 import OnboardingCreate from "./ui/pages/OnboardingCreate";
 import OnboardingRestore from "./ui/pages/OnboardingRestore";
@@ -10,6 +11,7 @@ import Dashboard from "./ui/pages/Dashboard";
 import Receive from "./ui/pages/Receive";
 import SendPRL from "./ui/pages/SendPRL";
 import SendWPRL from "./ui/pages/SendWPRL";
+import SendETH from "./ui/pages/SendETH";
 import Bridge from "./ui/pages/Bridge";
 import History from "./ui/pages/History";
 import Settings from "./ui/pages/Settings";
@@ -53,7 +55,7 @@ export default function App() {
     if (status !== "unlocked") return;
     let lastBump = 0;
     const bump = () => {
-      const now = Date.now();
+      const now = monotonicNow();
       if (now - lastBump < 1000) return;
       lastBump = now;
       touch();
@@ -64,7 +66,9 @@ export default function App() {
       if (document.hidden) return;
       // On revival, check whether the auto-lock window already elapsed
       // while we were backgrounded. If so, lock first, don't bump.
-      const since = Date.now() - useWallet.getState().lastActivity;
+      // monotonicNow() — Date.now() would let a backward clock step (NTP,
+      // VM-resume, hostile OS) trick this check into negative elapsed.
+      const since = monotonicNow() - useWallet.getState().lastActivity;
       if (since > AUTO_LOCK_MS) {
         void lock();
         navigate("/unlock");
@@ -85,7 +89,7 @@ export default function App() {
   useEffect(() => {
     if (status !== "unlocked") return;
     const timer = setInterval(() => {
-      const since = Date.now() - useWallet.getState().lastActivity;
+      const since = monotonicNow() - useWallet.getState().lastActivity;
       if (since > AUTO_LOCK_MS) {
         void lock();
         navigate("/unlock");
@@ -130,6 +134,7 @@ export default function App() {
           <Route path="/receive" element={<Receive />} />
           <Route path="/send/prl" element={<SendPRL />} />
           <Route path="/send/wprl" element={<SendWPRL />} />
+          <Route path="/send/eth" element={<SendETH />} />
           <Route path="/bridge" element={<Bridge />} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />

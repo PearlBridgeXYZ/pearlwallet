@@ -16,7 +16,9 @@ export default function Dashboard() {
   });
 
   const balances = balancesQ.data;
-  const totalUsd = balances ? balances.prlUsd * Number(balances.prl) / 1e8 + balances.wprlUsd * Number(balances.wprl) / 1e18 : 0;
+  const totalUsd = balances
+    ? balances.prlUsd * Number(balances.prl) / 1e8 + balances.wprlUsd * Number(balances.wprl) / 1e18
+    : 0;
 
   return (
     <Page>
@@ -24,7 +26,7 @@ export default function Dashboard() {
         <div className="text-xs uppercase tracking-wide text-ink-500">Total balance</div>
         <div className="mt-1 text-3xl font-semibold">{formatUSD(totalUsd)}</div>
 
-        <div className="mt-5 grid grid-cols-2 gap-4">
+        <div className="mt-5 grid grid-cols-3 gap-4">
           <div>
             <div className="text-xs text-ink-500">PRL</div>
             <div className="text-xl font-medium">
@@ -35,12 +37,12 @@ export default function Dashboard() {
             </div>
             {balances?.prlSource === "partial" && (
               <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-                Partial balance — sentry returned errors on some receive addresses. Refresh to retry.
+                Partial — sentry errors on some addresses.
               </div>
             )}
             {balances?.prlSource === "error" && (
               <div className="mt-1 text-xs text-red-600 dark:text-red-400">
-                Couldn't reach the Pearl RPC. Balance is unknown.
+                Pearl RPC unreachable.
               </div>
             )}
           </div>
@@ -52,11 +54,36 @@ export default function Dashboard() {
             <div className="text-xs text-ink-500">
               {balances ? `≈ ${formatUSD(balances.wprlUsd * Number(balances.wprl) / 1e18)}` : ""}
             </div>
+            {balances?.wprlSource === "error" && (
+              <div className="mt-1 text-xs text-red-600 dark:text-red-400">
+                Eth RPC unreachable.
+              </div>
+            )}
+          </div>
+          <div>
+            <div className="text-xs text-ink-500">ETH (gas)</div>
+            <div className="text-xl font-medium">
+              {balances ? formatWei(balances.eth) : "—"}
+            </div>
+            {balances?.ethSource === "error" && (
+              <div className="mt-1 text-xs text-red-600 dark:text-red-400">
+                Eth RPC unreachable.
+              </div>
+            )}
+            {balances && balances.wprl > 0n && balances.eth === 0n && balances.ethSource === "live" && (
+              <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                Fund ETH to send WPRL.
+              </div>
+            )}
           </div>
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-2">
-          <Link to="/send/prl" className="btn-secondary">Send</Link>
+          <Link to="/send/prl" className="btn-secondary">Send PRL</Link>
+          <Link to="/send/wprl" className="btn-secondary">Send WPRL</Link>
+          <Link to="/send/eth" className="btn-secondary">Send ETH</Link>
+        </div>
+        <div className="mt-2 grid grid-cols-2 gap-2">
           <Link to="/receive" className="btn-secondary">Receive</Link>
           <Link to="/bridge" className="btn-primary">Bridge</Link>
         </div>
@@ -73,7 +100,7 @@ export default function Dashboard() {
             <dd className="break-all font-mono">{addresses ? shortAddr(addresses.pearl, 12, 8) : "—"}</dd>
           </div>
           <div>
-            <dt className="text-xs text-ink-500">Ethereum (WPRL)</dt>
+            <dt className="text-xs text-ink-500">Ethereum (WPRL + ETH)</dt>
             <dd className="break-all font-mono">{addresses ? shortAddr(addresses.eth, 8, 6) : "—"}</dd>
           </div>
         </dl>

@@ -181,8 +181,13 @@ describe("v0.1.8 / passwordAcceptable — long passphrase escape hatch (opus2 cr
     expect(passwordAcceptable("correcthorsebattery").ok).toBe(true); // 19 chars all-lower
   });
 
-  it("accepts a 16-char digit-only string (entropy from length)", () => {
-    expect(passwordAcceptable("1234567890123456").ok).toBe(true);
+  it("rejects a 16-char digit-only string (v0.1.9 hardening of v0.1.8 escape hatch)", () => {
+    // The original v0.1.8 escape hatch accepted any 16+ chars regardless
+    // of variety. v0.1.8 audit (Opus1 M-1, Minimax1 M-1) flagged that an
+    // all-digit 16-char string has ~53 bits of work factor against 600k
+    // PBKDF2 iterations — brute-forceable on a single GPU in hours.
+    // v0.1.9 adds a degenerate-entropy guard.
+    expect(passwordAcceptable("1234567890123456").ok).toBe(false);
   });
 
   it("rejects a 15-char mono-class string (under the passphrase threshold)", () => {
@@ -325,10 +330,27 @@ describe("v0.1.8 / vite sourcemap disabled (consensus High)", () => {
   });
 });
 
-describe("v0.1.8 / iframe-bust in index.html", () => {
-  it("index.html contains a top-of-body iframe-bust script", async () => {
+describe("v0.1.8 / iframe-bust (v0.1.9 moved out-of-line for CSP)", () => {
+  it("index.html references the external iframe-bust script before main", async () => {
+    // v0.1.8 audit Opus2 H-1 / Minimax2 H-1: the prior inline script was
+    // killed by the wallet's own `script-src 'self'` CSP on non-CF
+    // deploys. The bust is now in public/iframe-bust.js — same logic,
+    // CSP-clean.
     const src = await import("node:fs/promises").then((m) =>
       m.readFile("index.html", "utf8"),
+    );
+    expect(src).toMatch(/<script src="\/iframe-bust\.js"><\/script>/);
+    // The order matters — bust BEFORE the main module so the framed
+    // page can't render React first.
+    const bustIdx = src.indexOf('src="/iframe-bust.js"');
+    const mainIdx = src.indexOf("/src/main.tsx");
+    expect(bustIdx).toBeGreaterThan(0);
+    expect(mainIdx).toBeGreaterThan(bustIdx);
+  });
+
+  it("public/iframe-bust.js contains the top-frame check", async () => {
+    const src = await import("node:fs/promises").then((m) =>
+      m.readFile("public/iframe-bust.js", "utf8"),
     );
     expect(src).toMatch(/window\.top\s*!==\s*window\.self/);
   });

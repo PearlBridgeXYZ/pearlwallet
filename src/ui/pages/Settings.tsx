@@ -143,7 +143,12 @@ export default function Settings() {
     setRpcStatus(null);
     const trimmed = (rawValue ?? rpcDraft).trim();
     if (trimmed === "") {
-      setPearlRpcOverride("");
+      try {
+        setPearlRpcOverride("");
+      } catch (e) {
+        setRpcStatus(e instanceof Error ? e.message : "Failed to clear override.");
+        return;
+      }
       setRpcStatus(`Using default (${defaultRpcUrl}).`);
       return;
     }
@@ -158,7 +163,23 @@ export default function Settings() {
       setRpcStatus("RPC URL must use https://.");
       return;
     }
-    setPearlRpcOverride(parsed.toString());
+    // v0.1.8 audit Opus2 M-3 / H-2: the store throws E_RPC_OVERRIDE_NOT_ALLOWED
+    // for hosts outside the allowlist. The previous shape let the throw
+    // propagate uncaught, surfacing as an unhandled promise rejection
+    // (silent in prod, scary error in dev) while the UI showed a green
+    // "Using custom: …" tick. Catch and translate to a clear inline message.
+    try {
+      setPearlRpcOverride(parsed.toString());
+    } catch (e) {
+      if (e instanceof Error && e.message === "E_RPC_OVERRIDE_NOT_ALLOWED") {
+        setRpcStatus(
+          "That host isn't on the wallet's RPC allowlist. Use one of: rpc.pearlwallet.xyz, ethereum-rpc.publicnode.com, eth.drpc.org, or pearlbridge.xyz.",
+        );
+      } else {
+        setRpcStatus(e instanceof Error ? e.message : "Failed to save RPC override.");
+      }
+      return;
+    }
     setRpcDraft(parsed.toString());
     setRpcStatus(`Using custom: ${parsed.toString()}`);
   }

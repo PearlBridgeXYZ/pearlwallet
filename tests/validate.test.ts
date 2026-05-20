@@ -35,12 +35,23 @@ describe("passwordAcceptable — L8 floor", () => {
     expect(out.ok).toBe(false);
   });
 
-  it("accepts a long mono-class passphrase (16+ chars, one class)", () => {
-    // v0.1.8 (opus2 cross-Low): a 16-char all-lowercase string draws
-    // its entropy from length, not class diversity. The classic XKCD
-    // passphrase shape should not be rejected.
+  it("accepts a long mono-class passphrase with real variety", () => {
+    // v0.1.8 (opus2 cross-Low): a long all-lowercase string draws its
+    // entropy from length AND variety. The classic XKCD passphrase
+    // shape should not be rejected — that's the whole point of the
+    // escape hatch.
     expect(passwordAcceptable("correcthorsebatterystaple").ok).toBe(true);
-    expect(passwordAcceptable("aaaaaaaaaaaaaaaa").ok).toBe(true); // 16 a's
+  });
+
+  it("rejects degenerate long 'passphrases' (v0.1.9 hardening)", () => {
+    // v0.1.8 audit (Opus1 M-1, Minimax1 M-1): a 16-digit string has
+    // ~53 bits of work-factor against 600k PBKDF2 — brute-forceable.
+    // A 16x repeat of one char has ~0 real entropy. The escape hatch
+    // must require actual variety, not just length.
+    expect(passwordAcceptable("aaaaaaaaaaaaaaaa").ok).toBe(false); // uniq=1
+    expect(passwordAcceptable("1234567890123456").ok).toBe(false); // all digits
+    expect(passwordAcceptable("abababababababab").ok).toBe(false); // uniq=2
+    expect(passwordAcceptable("abcdefghijklmnop").ok).toBe(false); // monotonic walk
   });
 
   it("accepts a passphrase mixing lower and digits", () => {

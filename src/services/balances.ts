@@ -13,6 +13,20 @@
 import { readWprlBalance } from "./bridge";
 import { fetchPrlBalanceGrains } from "./pearl-rpc";
 import { fetchPrlPriceUsd } from "./prices";
+import { ethClient } from "../chains/ethereum/rpc";
+import type { EthNetwork } from "../chains/ethereum/network";
+
+/**
+ * Native ETH balance in wei. Used for the gas-balance pre-check on the
+ * WPRL send flow — a user with full WPRL but zero ETH can't pay gas.
+ */
+export async function fetchEthBalanceWei(
+  addr: `0x${string}`,
+  network: EthNetwork = "mainnet",
+): Promise<bigint> {
+  const client = ethClient(network);
+  return await client.getBalance({ address: addr });
+}
 
 // Serialized pool walk with a 300ms inter-request gap. The public
 // sentry behind rpc.pearlwallet.xyz is fronted by Cloudflare and rate
@@ -57,6 +71,7 @@ async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
 export interface Balances {
   prl: bigint;        // grains (10^8), summed across the pool
   wprl: bigint;       // wei (10^18)
+  eth: bigint;        // wei — native gas balance for WPRL sends + ETH txs
   prlUsd: number;
   wprlUsd: number;
   // "live" = full pool walked. "partial" = some pool addresses errored
@@ -65,6 +80,7 @@ export interface Balances {
   // "error" = whole walk failed.
   prlSource: "live" | "partial" | "error";
   wprlSource: "live" | "error";
+  ethSource: "live" | "error";
   priceSource: "live" | "error";
 }
 
@@ -95,6 +111,14 @@ export async function fetchBalances(
     wprlSource = "error";
   }
 
+  let eth = 0n;
+  let ethSource: Balances["ethSource"] = "live";
+  try {
+    eth = await fetchEthBalanceWei(ethAddr as `0x${string}`, "mainnet");
+  } catch {
+    ethSource = "error";
+  }
+
   let price = 0;
   let priceSource: Balances["priceSource"] = "live";
   try {
@@ -106,11 +130,13 @@ export async function fetchBalances(
   return {
     prl,
     wprl,
+    eth,
     // WPRL is 1:1 wrapped PRL — same USD price.
     prlUsd: price,
     wprlUsd: price,
     prlSource,
     wprlSource,
+    ethSource,
     priceSource,
   };
 }

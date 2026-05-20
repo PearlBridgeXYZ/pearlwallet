@@ -6,9 +6,8 @@ import { useWallet } from "../../state/wallet-store";
 import { validEth } from "../../lib/validate";
 import { formatWei, parseWPRL } from "../../lib/format";
 import {
-  estimateWprlGas,
-  evaluateGasCoverage,
-  sendWprl,
+  estimateNativeGas,
+  sendNative,
   suggestGas,
   type FeeTier,
 } from "../../services/eth-tx";
@@ -25,7 +24,7 @@ interface ValidatedSend {
   wei: bigint;
 }
 
-export default function SendWPRL() {
+export default function SendETH() {
   const navigate = useNavigate();
   const ethAddr = useWallet((s) => s.addresses?.eth as `0x${string}` | undefined);
   const ethNetwork = useWallet((s) => s.ethNetwork);
@@ -39,16 +38,15 @@ export default function SendWPRL() {
   const [validated, setValidated] = useState<ValidatedSend | null>(null);
   const [sending, setSending] = useState(false);
 
-  // Pre-flight quote: estimate gas + suggested fee market + current ETH
-  // balance. Gates the "Send" button so a user without enough native ETH
-  // to pay gas never even sees an enabled broadcast button — far better
-  // UX than letting them sign a tx that the mempool will reject.
-  // The query is keyed on the validated send so it refetches when amount
-  // or destination change, and only enables on the preview stage so the
-  // compose step doesn't blast the RPC on every keystroke.
+  // Preview combines (a) the estimated gas cost the user will pay and
+  // (b) a forward-looking solvency check: amount + worstCaseGas must fit
+  // inside the current ETH balance. The check is conservative — the
+  // mempool only burns `gasUsed * effectiveGasPrice`, not the full
+  // `gas * maxFeePerGas` ceiling, so we may over-warn. Better than the
+  // alternative (silently broadcast a tx that bounces).
   const previewQ = useQuery({
     queryKey: [
-      "wprl-preview",
+      "eth-preview",
       ethAddr,
       ethNetwork,
       tier,
@@ -58,12 +56,20 @@ export default function SendWPRL() {
     enabled: stage === "preview" && !!validated && !!ethAddr,
     queryFn: async () => {
       const [gas, fees, ethBal] = await Promise.all([
-        estimateWprlGas(ethNetwork, ethAddr!, validated!.dest, validated!.wei),
+        estimateNativeGas(ethNetwork, ethAddr!, validated!.dest, validated!.wei),
         suggestGas(ethNetwork, tier),
         fetchEthBalanceWei(ethAddr!, ethNetwork),
       ]);
-      const coverage = evaluateGasCoverage(ethBal, gas, fees.maxFeePerGas);
-      return { gas, fees, ethBal, coverage };
+      const worstCaseWei = gas * fees.maxFeePerGas;
+      const required = validated!.wei + worstCaseWei;
+      return {
+        gas,
+        fees,
+        ethBal,
+        worstCaseWei,
+        required,
+        covered: ethBal >= required,
+      };
     },
   });
 
@@ -73,9 +79,12 @@ export default function SendWPRL() {
     }
     let wei: bigint;
     try {
+      // ETH uses 18 decimals — same as WPRL — so parseWPRL is the right
+      // boundary parser. Keeps the precision rules consistent with the
+      // other 18-decimal field in the app.
       wei = parseWPRL(amount);
     } catch {
-      return { ok: false, reason: "Enter a valid WPRL amount." };
+      return { ok: false, reason: "Enter a valid ETH amount." };
     }
     if (wei <= 0n) {
       return { ok: false, reason: "Amount must be greater than 0." };
@@ -88,23 +97,19 @@ export default function SendWPRL() {
     setSending(true);
     setError(null);
     try {
-      const { txHash: hash } = await sendWprl({
+      const { txHash: hash } = await sendNative({
         network: ethNetwork,
         from: ethAddr,
         to: validated.dest,
-        amount: validated.wei,
+        value: validated.wei,
         tier,
       });
       setTxHash(hash);
       setStage("sent");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      // Map a couple of high-value errors to friendlier copy. Everything
-      // else surfaces raw — opaque errors are still better than swallowing.
-      if (msg.includes("E_WPRL_NOT_DEPLOYED")) {
-        setError("WPRL isn't deployed on this network yet.");
-      } else if (msg.includes("insufficient funds")) {
-        setError("Insufficient ETH for gas, or insufficient WPRL for amount.");
+      if (msg.includes("insufficient funds")) {
+        setError("Insufficient ETH to cover both the transfer and gas.");
       } else {
         setError(`Broadcast failed: ${msg}`);
       }
@@ -115,7 +120,7 @@ export default function SendWPRL() {
 
   if (stage === "sent") {
     return (
-      <Page title="Send WPRL">
+      <Page title="Send ETH">
         <div className="card">
           <h2 className="text-lg font-semibold">Broadcast.</h2>
           <p className="mt-2 text-sm">
@@ -135,9 +140,9 @@ export default function SendWPRL() {
   if (stage === "preview") {
     const v = validated;
     const q = previewQ.data;
-    const covered = q?.coverage.covered ?? false;
+    const covered = q?.covered ?? false;
     return (
-      <Page title="Send WPRL">
+      <Page title="Send ETH">
         <div className="card">
           <h2 className="text-lg font-semibold">Confirm</h2>
           <dl className="mt-3 space-y-2 text-sm">
@@ -147,7 +152,7 @@ export default function SendWPRL() {
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-500">Amount</dt>
-              <dd>{v ? formatWei(v.wei) : "—"} WPRL</dd>
+              <dd>{v ? formatWei(v.wei) : "—"} ETH</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-500">Gas tier</dt>
@@ -157,11 +162,15 @@ export default function SendWPRL() {
               <>
                 <div className="flex justify-between">
                   <dt className="text-ink-500">Worst-case gas</dt>
-                  <dd>{formatWei(q.coverage.worstCaseWei)} ETH</dd>
+                  <dd>{formatWei(q.worstCaseWei)} ETH</dd>
+                </div>
+                <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
+                  <dt className="font-medium">Total (max)</dt>
+                  <dd className="font-medium">{formatWei(q.required)} ETH</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-ink-500">Your ETH</dt>
-                  <dd>{formatWei(q.coverage.ethBalanceWei)} ETH</dd>
+                  <dd>{formatWei(q.ethBal)} ETH</dd>
                 </div>
               </>
             )}
@@ -177,9 +186,8 @@ export default function SendWPRL() {
           )}
           {q && !covered && (
             <div className="mt-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-900 dark:border-red-700 dark:bg-red-900/20 dark:text-red-200">
-              You don't have enough ETH to cover gas. Fund this address with
-              a small amount of ETH before sending WPRL — even the smallest
-              ERC-20 transfer needs native gas.
+              Insufficient ETH — amount + gas exceeds your balance. Reduce
+              the amount or top up first.
             </div>
           )}
 
@@ -202,8 +210,12 @@ export default function SendWPRL() {
   }
 
   return (
-    <Page title="Send WPRL">
+    <Page title="Send ETH">
       <div className="card flex flex-col gap-3">
+        <p className="text-xs text-ink-500">
+          Send native ETH from your wallet's Ethereum address. Useful for
+          funding gas before a WPRL transfer or moving ETH out.
+        </p>
         <label className="block">
           <span className="label">Destination address</span>
           <input
@@ -217,7 +229,7 @@ export default function SendWPRL() {
           />
         </label>
         <label className="block">
-          <span className="label">Amount (WPRL)</span>
+          <span className="label">Amount (ETH)</span>
           <input
             className="input mono"
             inputMode="decimal"

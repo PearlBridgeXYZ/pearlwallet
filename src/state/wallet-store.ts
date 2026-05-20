@@ -2,6 +2,7 @@ import { create } from "zustand";
 import type { PearlNetwork } from "../chains/pearl/network";
 import type { EthNetwork } from "../chains/ethereum/network";
 import { cryptoWorker } from "../crypto/worker-client";
+import { monotonicNow } from "../lib/monotonic";
 import {
   db,
   loadKeystore,
@@ -165,7 +166,9 @@ export const useWallet = create<WalletState>((set, get) => ({
   pearlNetwork: "mainnet",
   ethNetwork: "mainnet",
   blob: null,
-  lastActivity: Date.now(),
+  // monotonicNow() — see lib/monotonic.ts. Date.now() would be subject
+  // to wall-clock manipulation that defeats the auto-lock window.
+  lastActivity: monotonicNow(),
 
   async init() {
     // Idempotent: under React.StrictMode dev, App's useEffect mounts
@@ -273,7 +276,7 @@ export const useWallet = create<WalletState>((set, get) => ({
         status: "unlocked",
         addresses: out.addresses,
         blob: out.blob,
-        lastActivity: Date.now(),
+        lastActivity: monotonicNow(),
       });
       return { mnemonic: out.mnemonic, addresses: out.addresses };
     });
@@ -310,7 +313,7 @@ export const useWallet = create<WalletState>((set, get) => ({
         status: "unlocked",
         addresses: out.addresses,
         blob: out.blob,
-        lastActivity: Date.now(),
+        lastActivity: monotonicNow(),
       });
       return { addresses: out.addresses };
     });
@@ -347,7 +350,7 @@ export const useWallet = create<WalletState>((set, get) => ({
         rec.publicData.pearlAddress = out.addresses.pearl;
         await saveKeystore(rec);
       }
-      set({ status: "unlocked", addresses: out.addresses, lastActivity: Date.now() });
+      set({ status: "unlocked", addresses: out.addresses, lastActivity: monotonicNow() });
       return { addresses: out.addresses };
     });
   },
@@ -422,7 +425,7 @@ export const useWallet = create<WalletState>((set, get) => ({
   },
 
   touch() {
-    set({ lastActivity: Date.now() });
+    set({ lastActivity: monotonicNow() });
   },
 
   setEthNetwork(net) {

@@ -59,8 +59,22 @@ export function passwordAcceptable(password: string): { ok: true } | { ok: false
     Number(/[A-Z]/.test(password)) +
     Number(/\d/.test(password)) +
     Number(/[^A-Za-z0-9]/.test(password));
-  // Long enough → entropy from length carries it; class mix not required.
+  // Long enough → entropy from length CAN carry it, but only if the
+  // input isn't degenerate. v0.1.8 audit (Opus1 M-1, Minimax1 M-1):
+  // "1234567890123456" (16 digits) passed the length gate and skipped
+  // the class-mix gate, giving an attacker a ~10^16 (~53 bits) keyspace
+  // against 600k PBKDF2 iterations — brute-forceable in hours on a GPU.
+  // The escape hatch's purpose is the XKCD-style multi-word passphrase
+  // ("correcthorsebatterystaple") which has real per-character entropy;
+  // an all-digit or all-same-char string of any length does not.
   if (password.length >= PASSPHRASE_MIN_LENGTH) {
+    if (hasDegenerateEntropy(password)) {
+      return {
+        ok: false,
+        reason:
+          "Passphrase needs real character variety. Avoid all-digit, all-same-character, or trivial-pattern strings — use multiple words or mix in different character types.",
+      };
+    }
     return { ok: true };
   }
   // Shorter passwords (10–15 chars) still need two classes — the floor
@@ -69,4 +83,37 @@ export function passwordAcceptable(password: string): { ok: true } | { ok: false
     return { ok: false, reason: `Use at least two of lowercase / uppercase / digit / symbol, or make it ${PASSPHRASE_MIN_LENGTH}+ characters.` };
   }
   return { ok: true };
+}
+
+/**
+ * Heuristic: a "passphrase" with no real entropy. Conservative — we want
+ * to reject the obvious low-entropy patterns (all-digit, all-same-char,
+ * monotonic sequences) without ever rejecting a legitimate XKCD-style
+ * passphrase or a non-Latin-script passphrase.
+ *
+ * Returns true when the input looks degenerate. Defense in depth: a user
+ * who insists on "1234567890123456" can defeat this by adding a single
+ * letter, but the deliberate "pick two words" pattern always passes.
+ */
+function hasDegenerateEntropy(password: string): boolean {
+  // All-digit: 10-char alphabet → ~3.3 bits per char. 16 digits = 53 bits
+  // — below the 70-bit floor we want for a passphrase pass.
+  if (/^\d+$/.test(password)) return true;
+  // All-whitespace, all-same-char, or two-char alphabet over a long
+  // string — same dilution argument.
+  const uniq = new Set(password).size;
+  if (uniq <= 2) return true;
+  // Trivial monotonic walks ("abcdefghijklmnop", "0123456789012345",
+  // straight keyboard rows). Detect by checking whether every adjacent
+  // pair has a charcode delta in {-1, 0, +1}: a uniform walk.
+  let monotonic = true;
+  for (let i = 1; i < password.length; i++) {
+    const d = password.charCodeAt(i) - password.charCodeAt(i - 1);
+    if (d !== 1 && d !== 0 && d !== -1) {
+      monotonic = false;
+      break;
+    }
+  }
+  if (monotonic) return true;
+  return false;
 }

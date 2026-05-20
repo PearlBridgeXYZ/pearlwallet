@@ -17,6 +17,8 @@ import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { secp256k1 } from "@noble/curves/secp256k1";
+import { signTransaction as ethSignTransaction } from "viem/accounts";
+import * as btc from "@scure/btc-signer";
 
 interface PearlReceiveKey {
   index: number;
@@ -173,6 +175,45 @@ function blobFromJSON(j: BlobJSON): EncryptedBlob {
   };
 }
 
+// Serialisable ETH tx payload. Mirrors viem's TransactionSerializable
+// trimmed to EIP-1559 fields we actually use. The worker re-validates the
+// shape on receipt — never trust an unsigned tx straight from the main
+// thread.
+export interface EthTxRequest {
+  chainId: number;
+  nonce: number;
+  to: `0x${string}`;
+  value: string; // bigint as decimal string (postMessage-safe)
+  data?: `0x${string}`;
+  gas: string; // bigint decimal
+  maxFeePerGas: string;
+  maxPriorityFeePerGas: string;
+}
+
+// One UTXO available to spend. `scriptHex` is the prevout's scriptPubKey
+// (P2TR: OP_1 <32-byte tweaked key>, 34 bytes => 68 hex chars). poolIndex
+// names which receive-pool key spent it; the worker uses that to choose
+// the correct privKey for each input. valueGrains is a bigint serialised
+// as decimal string for postMessage.
+export interface PearlUtxoSpec {
+  txid: string;
+  vout: number;
+  valueGrains: string;
+  scriptHex: string;
+  poolIndex: number;
+}
+
+export interface PearlTxOutput {
+  address: string;
+  amountGrains: string;
+}
+
+export interface PearlTxRequest {
+  utxos: PearlUtxoSpec[];
+  outputs: PearlTxOutput[];
+  network: PearlNetwork;
+}
+
 export type WorkerCmd =
   | { id: string; cmd: "createWallet"; strength: 128 | 256; password: string; network: PearlNetwork }
   | { id: string; cmd: "restoreWallet"; mnemonic: string; password: string; network: PearlNetwork }
@@ -182,7 +223,9 @@ export type WorkerCmd =
   | { id: string; cmd: "exportMnemonic"; password: string; blob: BlobJSON }
   | { id: string; cmd: "validateMnemonic"; mnemonic: string }
   | { id: string; cmd: "generateMnemonic"; strength: 128 | 256 }
-  | { id: string; cmd: "changePassword"; oldPassword: string; newPassword: string; blob: BlobJSON };
+  | { id: string; cmd: "changePassword"; oldPassword: string; newPassword: string; blob: BlobJSON }
+  | { id: string; cmd: "signEthTx"; tx: EthTxRequest }
+  | { id: string; cmd: "signPearlTx"; req: PearlTxRequest };
 
 export type WorkerResp =
   | { id: string; ok: true; result: unknown }
@@ -297,6 +340,123 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       const plaintext = await decryptBlob(blobFromJSON(msg.blob), msg.oldPassword);
       const newBlob = await encryptPlaintext(plaintext, msg.newPassword);
       return { blob: blobToJSON(newBlob) };
+    }
+
+    case "signEthTx": {
+      // ETH + WPRL sends both flow through this. The caller has already
+      // composed the tx (nonce, gas, EIP-1559 fees, optional ERC-20
+      // calldata) and we just produce the signed serialised hex. Private
+      // key never leaves the worker.
+      if (!session) throw new Error("E_LOCKED");
+      const t = msg.tx;
+      if (
+        typeof t.chainId !== "number" ||
+        typeof t.nonce !== "number" ||
+        typeof t.to !== "string" ||
+        !/^0x[0-9a-fA-F]{40}$/.test(t.to)
+      ) {
+        throw new Error("E_TX_SHAPE");
+      }
+      // The privateKey passed to viem must be a 0x-prefixed 64-hex-char
+      // string. We re-encode from the session bytes each call rather
+      // than retain a hex copy on the heap.
+      const pk = ("0x" + bytesToHex(session.ethPrivKey)) as `0x${string}`;
+      let value: bigint;
+      let gas: bigint;
+      let maxFee: bigint;
+      let maxPrio: bigint;
+      try {
+        value = BigInt(t.value);
+        gas = BigInt(t.gas);
+        maxFee = BigInt(t.maxFeePerGas);
+        maxPrio = BigInt(t.maxPriorityFeePerGas);
+      } catch {
+        throw new Error("E_TX_BIGINT");
+      }
+      if (value < 0n || gas <= 0n || maxFee <= 0n || maxPrio < 0n || maxPrio > maxFee) {
+        throw new Error("E_TX_RANGE");
+      }
+      const raw = await ethSignTransaction({
+        privateKey: pk,
+        transaction: {
+          chainId: t.chainId,
+          nonce: t.nonce,
+          to: t.to,
+          value,
+          data: t.data,
+          gas,
+          maxFeePerGas: maxFee,
+          maxPriorityFeePerGas: maxPrio,
+          type: "eip1559",
+        },
+      });
+      return { raw };
+    }
+
+    case "signPearlTx": {
+      // Build, sign, finalise a P2TR Pearl tx. Inputs are pre-selected by
+      // the caller (services/pearl-tx.ts) so the worker is purely a
+      // signer here — never sees the user's RPC choice, never picks
+      // coins, never decides change. Defensive shape checks come first.
+      if (!session) throw new Error("E_LOCKED");
+      const r = msg.req;
+      if (!Array.isArray(r.utxos) || r.utxos.length === 0) {
+        throw new Error("E_PEARL_NO_INPUTS");
+      }
+      if (!Array.isArray(r.outputs) || r.outputs.length === 0) {
+        throw new Error("E_PEARL_NO_OUTPUTS");
+      }
+      const params = pearlParams(r.network);
+      const network = { bech32: params.hrp, pubKeyHash: 0x00, scriptHash: 0x05, wif: 0x80 };
+
+      const tx = new btc.Transaction({ allowUnknownOutputs: false });
+
+      for (const u of r.utxos) {
+        if (
+          typeof u.txid !== "string" ||
+          !/^[0-9a-fA-F]{64}$/.test(u.txid) ||
+          typeof u.vout !== "number" ||
+          u.vout < 0 ||
+          typeof u.scriptHex !== "string" ||
+          !/^[0-9a-fA-F]+$/.test(u.scriptHex) ||
+          typeof u.poolIndex !== "number" ||
+          u.poolIndex < 0 ||
+          u.poolIndex >= session.pearlReceive.length
+        ) {
+          throw new Error("E_PEARL_UTXO_SHAPE");
+        }
+        const valueGrains = BigInt(u.valueGrains);
+        if (valueGrains <= 0n) throw new Error("E_PEARL_UTXO_VALUE");
+        const key = session.pearlReceive[u.poolIndex]!;
+        // tapInternalKey is the x-only (32-byte) internal pubkey. The
+        // node's compressed pubkey carries a parity byte we strip.
+        const xOnly = key.pubKey.slice(1);
+        tx.addInput({
+          txid: hexToBytes(u.txid),
+          index: u.vout,
+          witnessUtxo: { amount: valueGrains, script: hexToBytes(u.scriptHex) },
+          tapInternalKey: xOnly,
+        });
+      }
+
+      for (const o of r.outputs) {
+        if (typeof o.address !== "string" || typeof o.amountGrains !== "string") {
+          throw new Error("E_PEARL_OUTPUT_SHAPE");
+        }
+        const amt = BigInt(o.amountGrains);
+        if (amt <= 0n) throw new Error("E_PEARL_OUTPUT_VALUE");
+        tx.addOutputAddress(o.address, amt, network);
+      }
+
+      // Sign every input with its corresponding pool-index key.
+      // signIdx applies the BIP-86 tweak internally when tapInternalKey
+      // matches the privkey's pubkey, so we pass the raw privkey here.
+      for (let i = 0; i < r.utxos.length; i++) {
+        const pk = session.pearlReceive[r.utxos[i]!.poolIndex]!.privKey;
+        tx.signIdx(pk, i);
+      }
+      tx.finalize();
+      return { raw: tx.hex };
     }
   }
 }

@@ -1,18 +1,23 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { validPearl } from "../../lib/validate";
 import { formatGrains, parsePRL } from "../../lib/format";
-import { computeTipGrains, tipAddressFor } from "../../chains/pearl/tip";
+import { tipAddressFor } from "../../chains/pearl/tip";
+import { composePearlSend, sendPearl } from "../../services/pearl-tx";
 
 type FeeTier = "low" | "normal" | "high";
 
-const FEE_BY_TIER: Record<FeeTier, bigint> = {
-  low: 1000n,      // 0.00001 PRL placeholder
-  normal: 5000n,   // 0.00005 PRL
-  high: 20000n,    // 0.0002 PRL
+// sat/vbyte by tier. Pearl mempool relay floor is ~1 sat/vbyte on
+// btcd-derived nodes; we offer 1/2/4 so a fee-bump epoch doesn't strand
+// a normal-tier tx but a low-tier still relays under quiet conditions.
+const FEERATE_BY_TIER: Record<FeeTier, bigint> = {
+  low: 1n,
+  normal: 2n,
+  high: 4n,
 };
 
 interface ValidatedSend {
@@ -23,30 +28,45 @@ interface ValidatedSend {
 export default function SendPRL() {
   const navigate = useNavigate();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
+  const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
   const tipEnabledGlobal = useUI((s) => s.tipEnabled);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
-  // Password collected on the preview form. Broadcast lands in v0.2 —
-  // keeping the bound state so the hidden input round-trips cleanly when
-  // the user types a draft password and hits Back.
-  const [password] = useState("");
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
-  const [txHash] = useState<string | null>(null);
-  // Per-transaction override: starts at the global preference so the
-  // user can turn this off for a single send without changing settings.
+  const [txid, setTxid] = useState<string | null>(null);
   const [tipThisTx, setTipThisTx] = useState(tipEnabledGlobal);
-  // Validated send is captured when the user clicks Review, so the
-  // preview reads from this rather than re-running side-effectful
-  // validate() inside its render body. Calling setError during render
-  // is a React anti-pattern that warns under StrictMode and breaks
-  // outright under concurrent rendering.
   const [validated, setValidated] = useState<ValidatedSend | null>(null);
+  const [sending, setSending] = useState(false);
 
-  // Pure validator — returns either the parsed values or an error
-  // message; never touches setState.
+  // Pre-flight: compose the tx so the user sees the actual fee + change
+  // + UTXO count BEFORE clicking Send. Same composePearlSend the
+  // broadcast path uses — no preview/broadcast drift. Refetches when any
+  // input changes; tightly keyed on validated state so the compose stage
+  // doesn't pre-walk the UTXO set on every keystroke.
+  const previewQ = useQuery({
+    queryKey: [
+      "prl-preview",
+      pool.join(","),
+      tier,
+      tipThisTx,
+      validated?.dest,
+      validated?.grains.toString(),
+    ],
+    enabled: stage === "preview" && !!validated && pool.length > 0,
+    queryFn: () =>
+      composePearlSend({
+        network: pearlNetwork,
+        pool,
+        destination: validated!.dest,
+        amountGrains: validated!.grains,
+        feerateSatPerVbyte: FEERATE_BY_TIER[tier],
+        includeTip: tipThisTx,
+      }),
+  });
+
   function checkSend(): { ok: true; v: ValidatedSend } | { ok: false; reason: string } {
     if (!validPearl(destination, pearlNetwork)) {
       return { ok: false, reason: "That doesn't look like a valid Pearl address." };
@@ -64,10 +84,32 @@ export default function SendPRL() {
   }
 
   async function broadcast() {
-    setError(
-      "Live PRL send from this wallet UI is in progress. Tx construction is wired " +
-        "and tested; broadcast UI lands in v0.2. Balances + receive work normally.",
-    );
+    if (!validated) return;
+    setSending(true);
+    setError(null);
+    try {
+      const { txid: hash } = await sendPearl({
+        network: pearlNetwork,
+        pool,
+        destination: validated.dest,
+        amountGrains: validated.grains,
+        feerateSatPerVbyte: FEERATE_BY_TIER[tier],
+        includeTip: tipThisTx,
+      });
+      setTxid(hash);
+      setStage("sent");
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("E_INSUFFICIENT_FUNDS")) {
+        setError("Insufficient PRL to cover amount + fee.");
+      } else if (msg.includes("E_NO_UTXOS")) {
+        setError("No spendable UTXOs found across your receive pool.");
+      } else {
+        setError(`Broadcast failed: ${msg}`);
+      }
+    } finally {
+      setSending(false);
+    }
   }
 
   if (stage === "sent") {
@@ -76,7 +118,7 @@ export default function SendPRL() {
         <div className="card">
           <h2 className="text-lg font-semibold">Broadcast.</h2>
           <p className="mt-2 text-sm text-ink-500">
-            Tx hash: <span className="break-all font-mono">{txHash}</span>
+            Txid: <span className="break-all font-mono">{txid}</span>
           </p>
           <p className="mt-2 text-xs text-ink-500">
             Confirming on chain — this can take a few minutes.
@@ -93,18 +135,11 @@ export default function SendPRL() {
 
   if (stage === "preview") {
     const v = validated;
-    const feeFor = FEE_BY_TIER[tier];
-    const tipGrains = v && tipThisTx ? computeTipGrains(v.grains) : 0n;
-    const totalGrains = v ? v.grains + feeFor + tipGrains : 0n;
+    const composed = previewQ.data;
     return (
       <Page title="Send PRL">
         <div className="card">
           <h2 className="text-lg font-semibold">Confirm</h2>
-          <div className="mt-2 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
-            Preview only — live PRL broadcast from the wallet UI ships in v0.2.
-            The numbers below are estimates (fixed fee placeholder, no UTXO coin
-            selection). For real PRL sends today, use the canonical Pearl tooling.
-          </div>
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between">
               <dt className="text-ink-500">To</dt>
@@ -114,23 +149,53 @@ export default function SendPRL() {
               <dt className="text-ink-500">Amount</dt>
               <dd>{v ? formatGrains(v.grains) : "—"} PRL</dd>
             </div>
-            <div className="flex justify-between">
-              <dt className="text-ink-500">Fee ({tier})</dt>
-              <dd>{formatGrains(feeFor)} PRL</dd>
-            </div>
-            {tipThisTx && (
-              <div className="flex justify-between">
-                <dt className="text-ink-500">
-                  Tip to PearlBridge (10 bps, min 1 PRL)
-                </dt>
-                <dd>{formatGrains(tipGrains)} PRL</dd>
-              </div>
+            {composed && (
+              <>
+                <div className="flex justify-between">
+                  <dt className="text-ink-500">Fee ({tier})</dt>
+                  <dd>{formatGrains(composed.feeGrains)} PRL</dd>
+                </div>
+                {composed.tipGrains > 0n && (
+                  <div className="flex justify-between">
+                    <dt className="text-ink-500">
+                      Tip to PearlBridge (10 bps, min 1 PRL)
+                    </dt>
+                    <dd>{formatGrains(composed.tipGrains)} PRL</dd>
+                  </div>
+                )}
+                <div className="flex justify-between">
+                  <dt className="text-ink-500">Change back to you</dt>
+                  <dd>{formatGrains(composed.changeGrains)} PRL</dd>
+                </div>
+                <div className="flex justify-between">
+                  <dt className="text-ink-500">Inputs</dt>
+                  <dd>{composed.utxos.length} UTXO{composed.utxos.length === 1 ? "" : "s"}</dd>
+                </div>
+                <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
+                  <dt className="font-medium">Total leaving wallet</dt>
+                  <dd className="font-medium">
+                    {formatGrains(v!.grains + composed.feeGrains + composed.tipGrains)} PRL
+                  </dd>
+                </div>
+              </>
             )}
-            <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
-              <dt className="font-medium">Total</dt>
-              <dd className="font-medium">{formatGrains(totalGrains)} PRL</dd>
-            </div>
           </dl>
+
+          {previewQ.isLoading && (
+            <p className="mt-3 text-xs text-ink-500">Walking UTXOs and selecting coins…</p>
+          )}
+          {previewQ.isError && (
+            <p className="mt-3 text-sm text-red-600">
+              Couldn't compose: {(previewQ.error as Error).message}
+            </p>
+          )}
+          {composed?.degraded && (
+            <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+              Some receive addresses returned partial UTXO sets. The send
+              may not use every available coin; consider retrying if it
+              fails for insufficient funds.
+            </div>
+          )}
 
           <label className="mt-4 flex items-start gap-2 rounded-xl border border-ink-200 p-3 text-sm dark:border-ink-700">
             <input
@@ -157,28 +222,18 @@ export default function SendPRL() {
             This cannot be undone.
           </p>
 
-          {/*
-            v0.1.7: stop offering a password field + active "Send" button
-            on a flow that can't broadcast. The previous shape implied
-            the wallet would send if the user typed their password and
-            clicked Send — it wouldn't, it would surface the same error
-            inline. Replace with a single disabled button until broadcast
-            lands so the UI never lies about what it can do.
-          */}
-          <input type="hidden" value={password} readOnly />
           {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
 
           <div className="mt-4 flex gap-2">
-            <button onClick={() => setStage("compose")} className="btn-secondary">
+            <button onClick={() => setStage("compose")} className="btn-secondary" disabled={sending}>
               Back
             </button>
             <button
-              disabled
-              title="Broadcast lands in v0.2"
+              disabled={!composed || sending}
               onClick={broadcast}
-              className="btn-primary flex-1 opacity-60"
+              className="btn-primary flex-1"
             >
-              Send (v0.2)
+              {sending ? "Sending…" : "Send"}
             </button>
           </div>
         </div>
@@ -229,7 +284,9 @@ export default function SendPRL() {
                   onChange={() => setTier(t)}
                 />
                 <div className="font-medium capitalize">{t}</div>
-                <div className="text-xs text-ink-500">{formatGrains(FEE_BY_TIER[t])} PRL</div>
+                <div className="text-xs text-ink-500">
+                  {FEERATE_BY_TIER[t].toString()} sat/vB
+                </div>
               </label>
             ))}
           </div>

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
 import { AUTO_LOCK_MS } from "../../state/wallet-store";
+import { monotonicNow } from "../../lib/monotonic";
 
 function formatRemaining(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -15,13 +16,16 @@ export default function TopBar() {
   const status = useWallet((s) => s.status);
   const lock = useWallet((s) => s.lock);
   const lastActivity = useWallet((s) => s.lastActivity);
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(() => monotonicNow());
 
   // 1Hz tick while unlocked so the countdown actually counts. Otherwise
   // the user would see "5:00" frozen and assume the timer is dead.
+  // monotonicNow() keeps the countdown source consistent with the
+  // auto-lock check in App.tsx — using a wall-clock here while App uses
+  // monotonic would make the countdown drift on clock steps.
   useEffect(() => {
     if (status !== "unlocked") return;
-    const id = setInterval(() => setNow(Date.now()), 1000);
+    const id = setInterval(() => setNow(monotonicNow()), 1000);
     return () => clearInterval(id);
   }, [status]);
 

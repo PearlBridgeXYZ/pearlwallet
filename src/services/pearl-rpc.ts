@@ -20,6 +20,10 @@ interface RawTxVout {
   scriptPubKey: {
     address?: string;
     addresses?: string[];
+    // Raw scriptPubKey bytes as hex. btcd-derived sentries include this.
+    // The signer needs it as the witnessUtxo.script of every input
+    // (taproot signing binds the prevout script into the sighash).
+    hex?: string;
   };
 }
 
@@ -200,4 +204,104 @@ export async function fetchPrlBalanceGrains(address: string): Promise<PrlBalance
   let total = 0n;
   for (const amt of utxo.values()) total += amt;
   return { grains: total, degraded };
+}
+
+export interface PrlUtxo {
+  txid: string;
+  vout: number;
+  valueGrains: bigint;
+  scriptHex: string;
+}
+
+export interface PrlUtxoSet {
+  utxos: PrlUtxo[];
+  degraded: boolean;
+}
+
+/**
+ * Like fetchPrlBalanceGrains but returns the full UTXO set instead of a
+ * grain sum — needed by the send flow so the signer knows which prev-
+ * outs to consume and bind into the taproot sighash. Same two-pass
+ * walk, same MAX_UTXO_WALK_PAGES / MAX_RPC_PAGE_LENGTH guards, same
+ * degraded fallback. Returns `degraded:true` rather than throwing on
+ * cap-hit so a hostile sentry can't deny the user spending capability
+ * — they'll spend what they can prove instead of nothing.
+ *
+ * Any vout missing scriptPubKey.hex is silently dropped: the signer
+ * can't bind it into the sighash without the script, and sending a
+ * tx with a fabricated scriptPubKey would simply be rejected by the
+ * mempool. Visible-balance numbers diverging from spendable-utxo
+ * numbers is the safer failure mode (user notices, sentry is asked
+ * for full data) than silently broadcasting an invalid tx.
+ */
+export async function fetchPrlUtxos(address: string): Promise<PrlUtxoSet> {
+  const PAGE = 100;
+  let skip = 0;
+  type Held = { valueGrains: bigint; scriptHex: string };
+  const utxo = new Map<string, Held>();
+  const seenOutputs = new Set<string>();
+  let pageCount = 0;
+  let degraded = false;
+
+  while (true) {
+    if (pageCount >= MAX_UTXO_WALK_PAGES) {
+      degraded = true;
+      break;
+    }
+    let page: RawTx[];
+    try {
+      page = await call<RawTx[]>("searchrawtransactions", [address, 1, skip, PAGE]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("No information available about address")) {
+        return { utxos: [], degraded: false };
+      }
+      throw err;
+    }
+    if (!page || page.length === 0) break;
+    if (page.length > MAX_RPC_PAGE_LENGTH) {
+      degraded = true;
+      page = page.slice(0, MAX_RPC_PAGE_LENGTH);
+    }
+
+    for (const tx of page) {
+      for (const vout of tx.vout) {
+        if (!voutPaysAddress(vout, address)) continue;
+        const key = `${tx.txid}:${vout.n}`;
+        if (seenOutputs.has(key)) continue;
+        seenOutputs.add(key);
+        const scriptHex = vout.scriptPubKey.hex;
+        if (!scriptHex || !/^[0-9a-fA-F]+$/.test(scriptHex)) continue;
+        utxo.set(key, { valueGrains: prlToGrains(vout.value), scriptHex });
+      }
+    }
+    for (const tx of page) {
+      for (const vin of tx.vin) {
+        if (!vin.txid || vin.vout === undefined) continue;
+        utxo.delete(`${vin.txid}:${vin.vout}`);
+      }
+    }
+
+    pageCount++;
+    if (degraded) break;
+    if (page.length < PAGE) break;
+    skip += page.length;
+  }
+
+  const out: PrlUtxo[] = [];
+  for (const [key, held] of utxo) {
+    const [txid, voutStr] = key.split(":");
+    out.push({
+      txid: txid!,
+      vout: Number(voutStr),
+      valueGrains: held.valueGrains,
+      scriptHex: held.scriptHex,
+    });
+  }
+  return { utxos: out, degraded };
+}
+
+/** Broadcasts a signed raw transaction. Returns the txid on success. */
+export async function broadcastPearlTx(rawHex: string): Promise<string> {
+  return await call<string>("sendrawtransaction", [rawHex]);
 }

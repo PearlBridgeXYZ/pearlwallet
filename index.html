@@ -31,29 +31,15 @@
       Cloudflare deploy enforces it) but a non-CF mirror — local static
       server, IPFS gateway, S3 bucket — would not serve those headers
       and a malicious page could embed pearlwallet.xyz in a hidden iframe
-      to overlay/click-jack the unlock or send confirm. Inline so it
-      runs before main.tsx mounts React; throws to halt further script
-      evaluation in the framed context.
+      to overlay/click-jack the unlock or send confirm.
+
+      Served as an external blocking script so the CSP's strict
+      `script-src 'self'` (no `'unsafe-inline'`) allows it. The script
+      element appears BEFORE the React entry module, and classic scripts
+      are not deferred — it runs synchronously before main.tsx mounts.
+      v0.1.8 audit Opus2 H-1 / Minimax2 H-1.
     -->
-    <script>
-      (function () {
-        try {
-          if (window.top !== window.self) {
-            document.documentElement.innerHTML =
-              '<body style="background:#fff;color:#111;font-family:system-ui,sans-serif;padding:2rem"><h1 style="font-size:18px">PearlWallet cannot run inside an iframe.</h1><p style="font-size:14px">Open <a href="https://pearlwallet.xyz">pearlwallet.xyz</a> directly in a new tab.</p></body>';
-            throw new Error("PearlWallet refused to run framed");
-          }
-        } catch (e) {
-          // Cross-origin access to window.top throws SecurityError —
-          // that itself proves we're framed. Same response as above.
-          if (e && (e.name === "SecurityError" || /framed/.test(String(e.message)))) {
-            document.documentElement.innerHTML =
-              '<body style="background:#fff;color:#111;font-family:system-ui,sans-serif;padding:2rem"><h1 style="font-size:18px">PearlWallet cannot run inside an iframe.</h1></body>';
-            throw e;
-          }
-        }
-      })();
-    </script>
+    <script src="/iframe-bust.js"></script>
     <div id="root"></div>
     <noscript>
       <p style="padding: 2rem; font-family: sans-serif">
