@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
-import { useWallet } from "./state/wallet-store";
+import { useWallet, AUTO_LOCK_MS } from "./state/wallet-store";
 import { useUI } from "./state/ui-store";
 import Splash from "./ui/pages/Splash";
 import OnboardingCreate from "./ui/pages/OnboardingCreate";
@@ -37,15 +37,17 @@ export default function App() {
     else if (theme === "light") root.classList.add("light");
   }, [theme]);
 
-  // Auto-lock after 5 minutes idle.
+  // Auto-lock after AUTO_LOCK_MS of idle. Poll once per second so the
+  // observed lock time matches the countdown the user sees in TopBar
+  // (was 30s before — created up to a 30s "phantom unlocked" window).
   useEffect(() => {
     if (status !== "unlocked") return;
     const timer = setInterval(() => {
-      if (Date.now() - lastActivity > 5 * 60 * 1000) {
+      if (Date.now() - lastActivity > AUTO_LOCK_MS) {
         void lock();
         navigate("/unlock");
       }
-    }, 30_000);
+    }, 1000);
     return () => clearInterval(timer);
   }, [status, lastActivity, lock, navigate]);
 

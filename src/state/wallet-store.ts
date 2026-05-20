@@ -11,6 +11,13 @@ import {
   type KeystoreBlobJSON,
 } from "../storage/db";
 
+// Idle window before the wallet auto-locks. Exported so the TopBar
+// countdown and the App-level interval check stay in lockstep — if one
+// side hardcodes a different value the user sees "1:23 until lock"
+// while the wallet is already locked, which is exactly the v0.1.0
+// Low-#2 audit finding this constant addresses.
+export const AUTO_LOCK_MS = 5 * 60 * 1000;
+
 export type WalletStatus = "no-wallet" | "locked" | "unlocked";
 
 interface Addresses {

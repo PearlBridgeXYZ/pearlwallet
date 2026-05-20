@@ -1,9 +1,16 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { pearlParams } from "../../chains/pearl/network";
+
+// Auto-mask exported mnemonic after this many seconds so a phrase left
+// onscreen during a coffee break stops being a shoulder-surf target.
+// Audit follow-up: "mnemonic export does not clear state on hide" (v0.1.0
+// LOW #1). The display is also cleared on unmount so navigating away
+// kills the in-DOM copy immediately.
+const MNEMONIC_REVEAL_SECONDS = 60;
 
 export default function Settings() {
   const navigate = useNavigate();
@@ -25,6 +32,8 @@ export default function Settings() {
 
   const [showMnemonic, setShowMnemonic] = useState(false);
   const [mnemonicValue, setMnemonicValue] = useState<string | null>(null);
+  const [mnemonicSecondsLeft, setMnemonicSecondsLeft] = useState(0);
+  const mnemonicTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [pwExport, setPwExport] = useState("");
   const [oldPw, setOldPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -33,12 +42,40 @@ export default function Settings() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  function clearMnemonicTimer() {
+    if (mnemonicTimerRef.current) {
+      clearInterval(mnemonicTimerRef.current);
+      mnemonicTimerRef.current = null;
+    }
+  }
+
+  function hideMnemonic() {
+    clearMnemonicTimer();
+    setShowMnemonic(false);
+    setMnemonicValue(null);
+    setMnemonicSecondsLeft(0);
+    setPwExport("");
+  }
+
   async function doExport() {
     setError(null);
     try {
       const mnemonic = await exportMnemonic(pwExport);
       setMnemonicValue(mnemonic);
       setShowMnemonic(true);
+      setMnemonicSecondsLeft(MNEMONIC_REVEAL_SECONDS);
+      clearMnemonicTimer();
+      mnemonicTimerRef.current = setInterval(() => {
+        setMnemonicSecondsLeft((s) => {
+          if (s <= 1) {
+            clearMnemonicTimer();
+            setMnemonicValue(null);
+            setPwExport("");
+            return 0;
+          }
+          return s - 1;
+        });
+      }, 1000);
     } catch (e) {
       setError(
         e instanceof Error && e.message === "E_PASSWORD_WRONG"
@@ -47,6 +84,16 @@ export default function Settings() {
       );
     }
   }
+
+  // Belt-and-braces: nuke any revealed mnemonic when the user navigates
+  // away from Settings. Without this, the string would live in the React
+  // tree until the next render that knocked it out — long enough for a
+  // tab-switch screenshot to capture it.
+  useEffect(() => {
+    return () => {
+      clearMnemonicTimer();
+    };
+  }, []);
 
   async function doChangePassword() {
     setError(null);
@@ -176,20 +223,27 @@ export default function Settings() {
           />
           <button onClick={doExport} className="btn-secondary">Show</button>
         </div>
-        {showMnemonic && mnemonicValue && (
+        {showMnemonic && (
           <div className="card mt-3 bg-amber-50 dark:bg-amber-900/20">
             <p className="text-xs text-amber-700 dark:text-amber-400">
               Don't screenshot this. Write it down.
             </p>
-            <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-sm">
-              {mnemonicValue}
-            </pre>
+            {mnemonicValue ? (
+              <>
+                <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-sm">
+                  {mnemonicValue}
+                </pre>
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                  Auto-hiding in {mnemonicSecondsLeft}s.
+                </p>
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-ink-500">
+                Hidden. Re-enter your password above to reveal again.
+              </p>
+            )}
             <button
-              onClick={() => {
-                setShowMnemonic(false);
-                setMnemonicValue(null);
-                setPwExport("");
-              }}
+              onClick={hideMnemonic}
               className="btn-secondary mt-3"
             >
               Hide
