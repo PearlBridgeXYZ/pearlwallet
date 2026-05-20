@@ -1,7 +1,7 @@
 {
   "name": "pearl-web-wallet",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.1.12",
   "type": "module",
   "description": "Non-custodial pure-web wallet for PRL + WPRL with native PearlBridge integration",
   "license": "MIT",
