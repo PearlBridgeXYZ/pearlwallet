@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-dom";
-import { useWallet, AUTO_LOCK_MS } from "./state/wallet-store";
+import { useWallet, AUTO_LOCK_MS, type WalletStatus } from "./state/wallet-store";
 import { useUI } from "./state/ui-store";
 import { monotonicNow } from "./lib/monotonic";
 import Splash from "./ui/pages/Splash";
@@ -23,6 +23,51 @@ import SendFromVault from "./ui/pages/SendFromVault";
 import SignMultisigPsbt from "./ui/pages/SignMultisigPsbt";
 import VaultPendingTxDetail from "./ui/pages/VaultPendingTxDetail";
 import Footer from "./ui/components/Footer";
+
+/**
+ * Pure routing-guard decision. Returns the path to redirect to, or
+ * null if the current path is allowed for the given wallet status.
+ *
+ * Allowed-paths matrix:
+ *   initializing → null (always allowed; init() will resolve shortly)
+ *   no-wallet    → "/" and "/onboarding/*"
+ *   locked       → "/unlock" and "/onboarding/restore"
+ *                  (the latter is the documented forgot-password path
+ *                   — overwriting requires the seed, so a locked user
+ *                   may reach it. Everything else must unlock first.)
+ *   unlocked     → everything EXCEPT "/", "/unlock", "/onboarding/*"
+ *                  (those bounce to /dashboard so a logged-in user
+ *                   doesn't see the login or onboarding screens)
+ *
+ * Exported so the routing matrix is unit-testable in isolation
+ * (vitest runs node-env, no jsdom/react-router needed).
+ */
+export function routeGuardTarget(
+  status: WalletStatus,
+  path: string,
+): string | null {
+  if (status === "initializing") return null;
+  // Match "/onboarding" exactly OR "/onboarding/..." — NOT "/onboarding-fake"
+  // or "/onboardingX". Belt-and-braces: the only routes the Routes
+  // block exposes are `/onboarding/create` and `/onboarding/restore`,
+  // so a typo-prefix would bounce on the catch-all anyway, but
+  // keeping the matrix tight makes intent explicit.
+  const isOnboarding =
+    path === "/onboarding" || path.startsWith("/onboarding/");
+  if (status === "no-wallet") {
+    if (path === "/" || isOnboarding) return null;
+    return "/";
+  }
+  if (status === "locked") {
+    if (path === "/unlock" || path === "/onboarding/restore") return null;
+    return "/unlock";
+  }
+  // unlocked
+  if (path === "/" || path === "/unlock" || isOnboarding) {
+    return "/dashboard";
+  }
+  return null;
+}
 
 export default function App() {
   const init = useWallet((s) => s.init);
@@ -78,8 +123,16 @@ export default function App() {
       // VM-resume, hostile OS) trick this check into negative elapsed.
       const since = monotonicNow() - useWallet.getState().lastActivity;
       if (since > AUTO_LOCK_MS) {
-        void lock();
-        navigate("/unlock");
+        // v0.2.4 (SEC fix): await lock() before navigate. The previous
+        // `void lock(); navigate(...)` shape let the navigate land
+        // before status flipped to "locked", which made the route guard
+        // see status="unlocked" && path="/unlock" and bounce back to
+        // /dashboard — exposing a brief render window with addresses
+        // still populated and useQuery firing on stale derivation.
+        void (async () => {
+          await lock();
+          navigate("/unlock");
+        })();
         return;
       }
       bump();
@@ -99,36 +152,35 @@ export default function App() {
     const timer = setInterval(() => {
       const since = monotonicNow() - useWallet.getState().lastActivity;
       if (since > AUTO_LOCK_MS) {
-        void lock();
-        navigate("/unlock");
+        // v0.2.4 (SEC fix): await lock() before navigate — see onVis
+        // comment for the same rationale. Without this the route guard
+        // momentarily sees an "unlocked" tab on /unlock and re-routes
+        // back to /dashboard.
+        void (async () => {
+          await lock();
+          navigate("/unlock");
+        })();
       }
     }, 1000);
     return () => clearInterval(timer);
   }, [status, lock, navigate]);
 
-  // Auto-route on status change. Skip while "initializing" — we don't
-  // know yet whether a keystore exists and any navigate() call here
-  // would just bounce the user once init() resolves and the real status
-  // arrives.
+  // Auto-route on status OR navigation. Skip while "initializing" — we
+  // don't know yet whether a keystore exists and any navigate() call
+  // here would just bounce the user once init() resolves and the real
+  // status arrives.
+  //
+  // v0.2.4 (SEC fix): deps now include location.pathname. The previous
+  // [status]-only deps let a locked user click any <Link to=...> and
+  // land on the target page without re-firing the guard, since location
+  // changes don't change status. Concretely: clicking "Wipe this wallet"
+  // on /unlock navigated to /settings while still locked, and from
+  // there the TopBar logo (Link to /dashboard) revealed the full
+  // wallet surface without a password. The fix re-checks on every nav.
   useEffect(() => {
-    if (status === "initializing") return;
-    const path = location.pathname;
-    if (status === "no-wallet" && !path.startsWith("/onboarding") && path !== "/") {
-      navigate("/", { replace: true });
-    } else if (status === "locked" && path !== "/unlock") {
-      // v0.1.6: also bounce locked users off /onboarding/*. Pre-fix, a
-      // locked user could deep-link to /onboarding/create and overwrite
-      // the existing keystore. The store-level E_WALLET_EXISTS guard now
-      // catches that, but it's cleaner to never present the form at all.
-      navigate("/unlock", { replace: true });
-    } else if (
-      status === "unlocked" &&
-      (path === "/" || path === "/unlock" || path.startsWith("/onboarding"))
-    ) {
-      navigate("/dashboard", { replace: true });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [status]);
+    const target = routeGuardTarget(status, location.pathname);
+    if (target !== null) navigate(target, { replace: true });
+  }, [status, location.pathname, navigate]);
 
   // v0.2.0: bounce eth-only routes when the user has the Ethereum
   // surface turned off in Settings. Deep links, stale bookmarks, and

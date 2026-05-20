@@ -50,9 +50,12 @@ export default function Unlock() {
           <Link to="/onboarding/restore" className="text-pearl-700 hover:underline">
             Wrong password? Restore from recovery phrase
           </Link>
-          <Link to="/settings" className="text-ink-500 hover:underline">
-            Wipe this wallet
-          </Link>
+          <p className="text-xs text-ink-500">
+            To wipe this wallet without restoring, unlock first, then
+            use Settings → Danger zone. Wiping requires your password
+            so a passer-by with brief device access cannot nuke the
+            keystore.
+          </p>
         </div>
       </div>
     </div>

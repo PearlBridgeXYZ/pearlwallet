@@ -358,7 +358,14 @@ export const useWallet = create<WalletState>((set, get) => ({
   async lock() {
     await cryptoWorker.call<"lock">("lock", {}).catch(() => undefined);
     cryptoWorker.reset();
-    set({ status: "locked" });
+    // v0.2.4 (SEC, pass-2 M-2): clear addresses on lock. They survive
+    // re-load because they sit in publicData on the keystore row, but
+    // holding them in the live store while status="locked" means a
+    // useQuery with `enabled: !!addresses` can fire one balance/activity
+    // RPC during the lock-transition tick. Clearing them shuts that
+    // window: addresses come back on the next successful unlock(),
+    // which is the only path that legitimately needs them.
+    set({ status: "locked", addresses: null });
   },
 
   async wipe(password) {
