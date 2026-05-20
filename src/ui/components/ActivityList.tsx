@@ -4,7 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWallet } from "../../state/wallet-store";
 import { fetchActivity, type ActivityItem } from "../../services/activity";
-import { formatGrains, formatWei, shortAddr } from "../../lib/format";
+import { formatGrains, formatWei } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
 
@@ -132,9 +132,9 @@ function ActivityRow({ item, ethNetwork }: { item: ActivityItem; ethNetwork: "ma
           </span>
         </div>
         {item.counterparty && (
-          <div className="mt-0.5 truncate text-xs text-ink-500" title={item.counterparty}>
+          <div className="mt-0.5 text-xs text-ink-500">
             {isOut ? "to " : "from "}
-            <span className="font-mono">{shortAddr(item.counterparty, item.chain === "pearl" ? 12 : 8, item.chain === "pearl" ? 8 : 6)}</span>
+            <span className="break-all font-mono">{item.counterparty}</span>
           </div>
         )}
       </div>

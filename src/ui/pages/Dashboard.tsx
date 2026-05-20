@@ -2,9 +2,10 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import ActivityList from "../components/ActivityList";
+import CopyAddress from "../components/CopyAddress";
 import { useWallet } from "../../state/wallet-store";
 import { fetchBalances } from "../../services/balances";
-import { formatGrains, formatWei, formatUSD, shortAddr } from "../../lib/format";
+import { formatGrains, formatWei, formatUSD } from "../../lib/format";
 
 export default function Dashboard() {
   const addresses = useWallet((s) => s.addresses);
@@ -99,16 +100,10 @@ export default function Dashboard() {
           <h2 className="text-sm font-semibold">Your addresses</h2>
           <Link to="/receive" className="text-xs text-pearl-700 hover:underline">View QR</Link>
         </div>
-        <dl className="mt-3 space-y-2 text-sm">
-          <div>
-            <dt className="text-xs text-ink-500">Pearl L1</dt>
-            <dd className="break-all font-mono">{addresses ? shortAddr(addresses.pearl, 12, 8) : "—"}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-ink-500">Ethereum (WPRL + ETH)</dt>
-            <dd className="break-all font-mono">{addresses ? shortAddr(addresses.eth, 8, 6) : "—"}</dd>
-          </div>
-        </dl>
+        <div className="mt-3 space-y-3 text-sm">
+          <CopyAddress label="Pearl L1" value={addresses?.pearl ?? "—"} />
+          <CopyAddress label="Ethereum (WPRL + ETH)" value={addresses?.eth ?? "—"} />
+        </div>
       </div>
 
       <div className="card mt-4">

@@ -1,7 +1,7 @@
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
+import CopyAddress from "../components/CopyAddress";
 import { useWallet } from "../../state/wallet-store";
-import { shortAddr } from "../../lib/format";
 
 const BRIDGE_URL = "https://pearlbridge.xyz";
 
@@ -22,21 +22,17 @@ export default function Bridge() {
         </div>
 
         <div className="rounded-xl border border-ink-200 p-3 text-xs dark:border-ink-700">
-          <div className="text-ink-500">Your destinations</div>
-          <dl className="mt-2 space-y-1">
-            <div className="flex justify-between gap-2">
-              <dt className="text-ink-500">For WPRL → PRL, paste:</dt>
-              <dd className="break-all font-mono">
-                {addresses ? shortAddr(addresses.pearl, 12, 8) : "—"}
-              </dd>
-            </div>
-            <div className="flex justify-between gap-2">
-              <dt className="text-ink-500">For PRL → WPRL, paste:</dt>
-              <dd className="break-all font-mono">
-                {addresses ? shortAddr(addresses.eth, 8, 6) : "—"}
-              </dd>
-            </div>
-          </dl>
+          <div className="mb-2 text-ink-500">Your destinations</div>
+          <div className="space-y-3">
+            <CopyAddress
+              label="For WPRL → PRL, paste:"
+              value={addresses?.pearl ?? "—"}
+            />
+            <CopyAddress
+              label="For PRL → WPRL, paste:"
+              value={addresses?.eth ?? "—"}
+            />
+          </div>
         </div>
 
         <a
