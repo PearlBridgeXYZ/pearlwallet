@@ -125,53 +125,110 @@ function isTransientHttpStatus(status: number): boolean {
   return false;
 }
 
+// v0.2.6: per-endpoint attempt count. A single 5xx burst on the primary
+// used to immediately rotate to the next pool entry — fine in theory, but
+// until the fleet sentries are provisioned the "next entry" is NXDOMAIN
+// and the user just sees "Pearl RPC unreachable." Re-introduce a bounded
+// intra-endpoint retry (the v0.1.x shape, with the v0.2.5 rotation
+// wrapped around it) so a transient one-off failure on the live primary
+// doesn't cascade to the dead pool entries.
+const PER_ENDPOINT_ATTEMPTS = 2;
+const INTRA_ENDPOINT_BACKOFF_MS = 250;
+
+/**
+ * One transport attempt against a single endpoint. Returns the parsed
+ * result on success; throws on any failure. Caller decides whether to
+ * retry (same endpoint), rotate (next endpoint), or surface to the user.
+ *
+ * Classification of throws:
+ *   • `TypeError` — fetch() rejected (DNS, CORS, TLS, partition). Transient.
+ *   • `Error("rpc http 5xx")` / 408 / 429 — endpoint speaking, ill. Transient.
+ *   • `Error("rpc http 4xx")` (other) — request malformed/disallowed. Hard.
+ *   • `Error("rpc N: msg")` — chain-level JSON-RPC error. Hard (endpoint is fine).
+ *   • `Error("rpc null result")` — protocol violation. Hard.
+ */
+async function fetchOnce<T>(url: string, method: string, params: unknown[]): Promise<T> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
+  });
+  if (!res.ok) {
+    throw new Error(`rpc http ${res.status}`);
+  }
+  const body = (await res.json()) as RpcResult<T>;
+  if (body.error) {
+    // Chain-level error (-5 zero-activity, -32601 method-not-found).
+    // Endpoint is fine; surface directly so caller can swallow as needed.
+    throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
+  }
+  if (body.result === null) throw new Error("rpc null result");
+  return body.result;
+}
+
+/** True if the error means "this same endpoint might still work — retry." */
+function isRetryableSameEndpoint(err: unknown): boolean {
+  if (err instanceof TypeError) return true;
+  if (err instanceof Error) {
+    const m = /^rpc http (\d+)$/.exec(err.message);
+    if (m) return isTransientHttpStatus(Number(m[1]));
+  }
+  return false;
+}
+
+/** True if the error is a JSON-RPC body error — never rotate, never retry. */
+function isChainLevelError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  // `rpc <signed-int>: <message>` is the chain's voice. `rpc http <code>`
+  // and `rpc null result` are transport voices.
+  return /^rpc -?\d+:/.test(err.message);
+}
+
 async function call<T>(method: string, params: unknown[]): Promise<T> {
-  // v0.2.5: rotate across the sentry pool. Each endpoint gets one shot
-  // per call(); transient failures move us to the next endpoint rather
-  // than re-spinning the same one. A retry-on-same-endpoint approach
-  // (the v0.1.x design) burns wall-clock against a degraded sentry while
-  // a healthy peer sits idle. Rotation amortises the failure across the
-  // pool and surfaces the chain-state error (`body.error`) without
-  // wrapping it in a "rpc exhausted retries" the caller can't unwind.
+  // v0.2.5 + v0.2.6: layered failure strategy.
+  //   1. Intra-endpoint: each endpoint gets PER_ENDPOINT_ATTEMPTS shots
+  //      with INTRA_ENDPOINT_BACKOFF_MS between them. A one-off 503 on a
+  //      healthy primary recovers without rotating.
+  //   2. Inter-endpoint: if all attempts on an endpoint fail transiently,
+  //      mark it unhealthy and rotate to the next.
+  //   3. Pool-exhausted: throw the last error so the caller can surface
+  //      "RPC unreachable" — only after every endpoint × every attempt
+  //      failed transiently.
+  // Chain-level errors (`rpc -5: ...`) and hard 4xx short-circuit out
+  // immediately — rotating won't change the chain's answer, and a
+  // malformed request won't suddenly be valid on the next endpoint.
   const now = Date.now();
   const attempts = orderedAttempts(candidateEndpoints(), now);
   let lastErr: unknown;
   for (const url of attempts) {
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
-      });
-      if (!res.ok) {
-        lastErr = new Error(`rpc http ${res.status}`);
-        if (isTransientHttpStatus(res.status)) {
-          markEndpointUnhealthy(url, Date.now());
+    let endpointFailedAllAttempts = true;
+    for (let attempt = 0; attempt < PER_ENDPOINT_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        await new Promise((r) => setTimeout(r, INTRA_ENDPOINT_BACKOFF_MS));
+      }
+      try {
+        return await fetchOnce<T>(url, method, params);
+      } catch (err) {
+        lastErr = err;
+        if (isChainLevelError(err)) {
+          // The chain answered with an RPC error — endpoint is healthy,
+          // request is well-formed, the data just doesn't exist (or the
+          // method is gone). Surface to caller; do NOT mark unhealthy.
+          throw err;
+        }
+        if (isRetryableSameEndpoint(err)) {
+          // Try the same endpoint once more after a short backoff.
           continue;
         }
-        // 4xx other than 408/429 — request is malformed/disallowed.
-        // Rotating won't help; surface the error directly.
-        throw lastErr;
+        // Non-retryable transport error (e.g. 4xx-other). Mark unhealthy
+        // is too punitive — the request is the problem, not the host —
+        // so just surface directly without parking the endpoint.
+        endpointFailedAllAttempts = false;
+        throw err;
       }
-      const body = (await res.json()) as RpcResult<T>;
-      if (body.error) {
-        // Chain-level JSON-RPC error (e.g. -5 zero-activity address).
-        // The endpoint is fine — the chain just doesn't have the data.
-        // Caller catches and decides; do NOT mark the endpoint unhealthy.
-        throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
-      }
-      if (body.result === null) throw new Error("rpc null result");
-      return body.result;
-    } catch (err) {
-      // fetch() rejects with TypeError on DNS failure, network error,
-      // CORS rejection, certificate failure, etc. All transient from
-      // the wallet's perspective — try the next endpoint.
-      if (err instanceof TypeError) {
-        lastErr = err;
-        markEndpointUnhealthy(url, Date.now());
-        continue;
-      }
-      throw err;
+    }
+    if (endpointFailedAllAttempts) {
+      markEndpointUnhealthy(url, Date.now());
     }
   }
   throw lastErr ?? new Error("rpc pool exhausted");

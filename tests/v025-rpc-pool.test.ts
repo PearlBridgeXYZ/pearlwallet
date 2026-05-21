@@ -49,7 +49,12 @@ describe("v0.2.5 — pool definition", () => {
   });
 });
 
-describe("v0.2.5 — rotation on 5xx", () => {
+// v0.2.6: each endpoint now gets 2 attempts (PER_ENDPOINT_ATTEMPTS) before
+// rotating. A one-off 503 on a healthy primary should recover without
+// rotating to the (today NXDOMAIN) fleet hosts. Rotation only kicks in
+// after both intra-endpoint attempts have failed transiently.
+
+describe("v0.2.5/v0.2.6 — rotation on 5xx (after intra-endpoint retry exhausted)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     useUI.getState().setPearlRpcOverride("");
@@ -60,7 +65,27 @@ describe("v0.2.5 — rotation on 5xx", () => {
     _resetPearlRpcHealthForTests();
   });
 
-  it("primary 503 → falls through to secondary, returns secondary's result", async () => {
+  it("primary one-off 503 → SAME endpoint retried, succeeds without rotating (v0.2.6 fix)", async () => {
+    let primary = 0;
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url === PEARL_RPC_POOL[0]) {
+        primary++;
+        if (primary === 1) return new Response("upstream busy", { status: 503 });
+        return jsonResp(emptyResult());
+      }
+      return jsonResp(emptyResult());
+    }));
+    const bal = await fetchPrlBalanceGrains(ADDR);
+    expect(bal.grains).toBe(0n);
+    // First attempt: 503. Second attempt (after backoff): 200. Never
+    // rotated to secondary — which is what we want when the fleet
+    // hosts are NXDOMAIN.
+    expect(calls).toEqual([PEARL_RPC_POOL[0], PEARL_RPC_POOL[0]]);
+  });
+
+  it("primary 503 on BOTH attempts → rotates to secondary", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       calls.push(url);
@@ -71,11 +96,12 @@ describe("v0.2.5 — rotation on 5xx", () => {
     }));
     const bal = await fetchPrlBalanceGrains(ADDR);
     expect(bal.grains).toBe(0n);
-    expect(calls[0]).toBe(PEARL_RPC_POOL[0]);
-    expect(calls[1]).toBe(PEARL_RPC_POOL[1]);
+    // Primary hit twice, then rotation to secondary.
+    expect(calls.slice(0, 2)).toEqual([PEARL_RPC_POOL[0], PEARL_RPC_POOL[0]]);
+    expect(calls[2]).toBe(PEARL_RPC_POOL[1]);
   });
 
-  it("primary + secondary both 5xx → falls through to tertiary", async () => {
+  it("primary + secondary both 5xx (both attempts each) → falls through to tertiary", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       calls.push(url);
@@ -84,13 +110,20 @@ describe("v0.2.5 — rotation on 5xx", () => {
       return jsonResp(emptyResult());
     }));
     await fetchPrlBalanceGrains(ADDR);
-    expect(calls.length).toBe(3);
-    expect(calls[2]).toBe(PEARL_RPC_POOL[2]);
+    // 2 attempts on primary + 2 attempts on secondary + 1 success on tertiary
+    expect(calls.length).toBe(5);
+    expect(calls[4]).toBe(PEARL_RPC_POOL[2]);
   });
 
-  it("every endpoint 5xx → throws after exhausting pool", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 503 })));
+  it("every endpoint 5xx (both attempts each) → throws after exhausting pool", async () => {
+    let total = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => {
+      total++;
+      return new Response("", { status: 503 });
+    }));
     await expect(fetchPrlBalanceGrains(ADDR)).rejects.toThrow(/rpc http 503/);
+    // 4 endpoints × 2 attempts = 8
+    expect(total).toBe(PEARL_RPC_POOL.length * 2);
   });
 });
 
@@ -105,7 +138,7 @@ describe("v0.2.5 — rotation on network errors (TypeError)", () => {
     _resetPearlRpcHealthForTests();
   });
 
-  it("DNS failure (TypeError) on primary → rotates to secondary", async () => {
+  it("DNS failure (TypeError) on primary (both attempts) → rotates to secondary", async () => {
     // The provisioning-ready entries in the pool may NXDOMAIN today.
     // fetch() rejects with TypeError on NXDOMAIN — same code path as
     // network errors, CORS rejections, and TLS handshake failures.
@@ -117,8 +150,25 @@ describe("v0.2.5 — rotation on network errors (TypeError)", () => {
     }));
     const bal = await fetchPrlBalanceGrains(ADDR);
     expect(bal.grains).toBe(0n);
-    expect(calls[0]).toBe(PEARL_RPC_POOL[0]);
-    expect(calls[1]).toBe(PEARL_RPC_POOL[1]);
+    // Two attempts on primary, then secondary.
+    expect(calls.slice(0, 2)).toEqual([PEARL_RPC_POOL[0], PEARL_RPC_POOL[0]]);
+    expect(calls[2]).toBe(PEARL_RPC_POOL[1]);
+  });
+
+  it("primary one-off TypeError → SAME endpoint retried, succeeds without rotating", async () => {
+    let primary = 0;
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push(url);
+      if (url === PEARL_RPC_POOL[0]) {
+        primary++;
+        if (primary === 1) throw new TypeError("network glitch");
+        return jsonResp(emptyResult());
+      }
+      return jsonResp(emptyResult());
+    }));
+    await fetchPrlBalanceGrains(ADDR);
+    expect(calls).toEqual([PEARL_RPC_POOL[0], PEARL_RPC_POOL[0]]);
   });
 });
 
@@ -153,7 +203,7 @@ describe("v0.2.5 — 4xx does NOT rotate (request is wrong, next endpoint won't 
     expect(calls.length).toBe(1);
   });
 
-  it("408 (request timeout) DOES rotate — that's an endpoint health issue", async () => {
+  it("408 (request timeout) DOES retry then rotate after both attempts fail", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       calls.push(url);
@@ -161,11 +211,12 @@ describe("v0.2.5 — 4xx does NOT rotate (request is wrong, next endpoint won't 
       return jsonResp(emptyResult());
     }));
     await fetchPrlBalanceGrains(ADDR);
-    expect(calls.length).toBeGreaterThanOrEqual(2);
-    expect(calls[1]).toBe(PEARL_RPC_POOL[1]);
+    // Primary tried twice, then rotates.
+    expect(calls.slice(0, 2)).toEqual([PEARL_RPC_POOL[0], PEARL_RPC_POOL[0]]);
+    expect(calls[2]).toBe(PEARL_RPC_POOL[1]);
   });
 
-  it("429 (rate limited) DOES rotate — this endpoint is saturated, try the next", async () => {
+  it("429 (rate limited) DOES retry then rotate — endpoint is saturated", async () => {
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       calls.push(url);
@@ -173,7 +224,8 @@ describe("v0.2.5 — 4xx does NOT rotate (request is wrong, next endpoint won't 
       return jsonResp(emptyResult());
     }));
     await fetchPrlBalanceGrains(ADDR);
-    expect(calls.length).toBeGreaterThanOrEqual(2);
+    expect(calls.slice(0, 2)).toEqual([PEARL_RPC_POOL[0], PEARL_RPC_POOL[0]]);
+    expect(calls[2]).toBe(PEARL_RPC_POOL[1]);
   });
 });
 
@@ -240,14 +292,14 @@ describe("v0.2.5 — endpoint cooldown", () => {
       secondaryCalls++;
       return jsonResp(emptyResult());
     }));
-    // First call: primary fails (1 hit), secondary returns (1 hit).
+    // First call: primary fails both attempts (2 hits), secondary returns (1 hit).
     await fetchPrlBalanceGrains(ADDR);
-    expect(primaryCalls).toBe(1);
+    expect(primaryCalls).toBe(2);
     expect(secondaryCalls).toBe(1);
-    // Second call: primary is cooled-down → secondary is tried FIRST.
-    // We expect primary's count to stay at 1 and secondary to be hit again.
+    // Second call: primary is cooled-down → secondary tried FIRST.
+    // Primary's count stays at 2; secondary is hit again.
     await fetchPrlBalanceGrains(ADDR);
-    expect(primaryCalls).toBe(1);
+    expect(primaryCalls).toBe(2);
     expect(secondaryCalls).toBe(2);
   });
 
@@ -257,16 +309,14 @@ describe("v0.2.5 — endpoint cooldown", () => {
       attempts++;
       return new Response("", { status: 503 });
     }));
-    // First call: exhausts every endpoint, all get parked.
+    // First call: 4 endpoints × 2 attempts each = 8.
     await expect(fetchPrlBalanceGrains(ADDR)).rejects.toThrow();
     const firstRound = attempts;
-    expect(firstRound).toBe(PEARL_RPC_POOL.length);
-    // Second call: all endpoints are still in cooldown, but we don't
-    // refuse — we try them anyway (the cooldown is a soft hint, not a
-    // hard gate). User shouldn't be locked out because of a brief
-    // pool-wide outage.
+    expect(firstRound).toBe(PEARL_RPC_POOL.length * 2);
+    // Second call: all endpoints cooled-down, but we still try them
+    // (cooldown is a soft hint, not a hard gate). 8 more attempts.
     await expect(fetchPrlBalanceGrains(ADDR)).rejects.toThrow();
-    expect(attempts).toBe(firstRound + PEARL_RPC_POOL.length);
+    expect(attempts).toBe(firstRound + PEARL_RPC_POOL.length * 2);
   });
 });
 
@@ -282,7 +332,7 @@ describe("v0.2.5 — override behaviour with the pool", () => {
     _resetPearlRpcHealthForTests();
   });
 
-  it("an allowlisted override is tried FIRST; pool is the fallback", async () => {
+  it("an allowlisted override is tried FIRST (with retry); pool is the fallback", async () => {
     // Override path on the existing allowlisted host — a power user
     // running a custom sentry on a versioned endpoint.
     useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/v2");
@@ -295,12 +345,15 @@ describe("v0.2.5 — override behaviour with the pool", () => {
       return jsonResp(emptyResult());
     }));
     await fetchPrlBalanceGrains(ADDR);
-    expect(calls[0]).toBe("https://rpc.pearlwallet.xyz/v2");
-    // After override fails, the pool kicks in starting at index 0.
-    expect(calls[1]).toBe(PEARL_RPC_POOL[0]);
+    // Override tried twice (intra-endpoint retry) before pool kicks in.
+    expect(calls.slice(0, 2)).toEqual([
+      "https://rpc.pearlwallet.xyz/v2",
+      "https://rpc.pearlwallet.xyz/v2",
+    ]);
+    expect(calls[2]).toBe(PEARL_RPC_POOL[0]);
   });
 
-  it("override identical to the default pool primary is deduped (no double-attempt)", async () => {
+  it("override identical to the default pool primary is deduped (counts as one slot)", async () => {
     useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/");
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
@@ -309,9 +362,10 @@ describe("v0.2.5 — override behaviour with the pool", () => {
       return jsonResp(emptyResult());
     }));
     await fetchPrlBalanceGrains(ADDR);
-    // Primary appears exactly once across the attempt list, then the
-    // rotation moves on to the secondary — no wasted call.
+    // Override-equals-primary collapses to one endpoint slot, which
+    // gets PER_ENDPOINT_ATTEMPTS=2 — not 4. Then rotation continues to
+    // the secondary.
     const primaryHits = calls.filter((u) => u === PEARL_RPC_POOL[0]).length;
-    expect(primaryHits).toBe(1);
+    expect(primaryHits).toBe(2);
   });
 });
