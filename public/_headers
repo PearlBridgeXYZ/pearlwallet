@@ -1,5 +1,5 @@
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://rpc.pearlwallet.xyz https://ethereum-rpc.publicnode.com https://eth.drpc.org https://pearlbridge.xyz; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; manifest-src 'self'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://rpc.pearlwallet.xyz https://ethereum-rpc.publicnode.com https://eth.drpc.org https://pearlbridge.xyz https://pearl-sentry-fsn1-1.pearlbridge.xyz https://pearl-sentry-nbg1-1.pearlbridge.xyz https://pearl-sentry-hel1-1.pearlbridge.xyz; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; manifest-src 'self'
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer

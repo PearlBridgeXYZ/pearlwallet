@@ -4,7 +4,7 @@
 // walking searchrawtransactions and folding inputs/outputs into a
 // UTXO set keyed by `${txid}:${vout}`.
 
-import { pearlParams } from "../chains/pearl/network";
+import { PEARL_RPC_POOL, pearlParams } from "../chains/pearl/network";
 import { useUI } from "../state/ui-store";
 
 interface RpcResult<T> {
@@ -39,42 +39,142 @@ interface RawTx {
   confirmations?: number;
 }
 
-function rpcUrl(): string {
-  const override = useUI.getState().pearlRpcOverride;
-  return pearlParams("mainnet", override).rpcUrl;
+// v0.2.5: per-endpoint failure tracking. An endpoint that just returned a
+// 5xx / network error / DNS failure is parked for COOLDOWN_MS so the
+// rotation skips it on the next call rather than re-burning the same
+// timeout. Module-scope so a single tab's open requests share the health
+// view — across-tab coordination isn't needed since each tab's traffic
+// pattern is independent and the cooldowns are short.
+const ENDPOINT_COOLDOWN_MS = 60_000;
+const endpointUnhealthyUntil = new Map<string, number>();
+
+// Test hook: reset module state. Not exported in production type — keep
+// the surface area small.
+export function _resetPearlRpcHealthForTests(): void {
+  endpointUnhealthyUntil.clear();
+}
+
+function isEndpointHealthy(url: string, now: number): boolean {
+  const until = endpointUnhealthyUntil.get(url) ?? 0;
+  return now >= until;
+}
+
+function markEndpointUnhealthy(url: string, now: number): void {
+  endpointUnhealthyUntil.set(url, now + ENDPOINT_COOLDOWN_MS);
+}
+
+/**
+ * Returns the candidate endpoint list, in priority order, for a single
+ * call(). When an override is set it is tried FIRST (user-explicit choice
+ * wins), then the pool falls through in declared order. The override URL
+ * is also re-validated against the allowlist; if it doesn't validate we
+ * silently skip it and fall back to the pool — defense in depth against
+ * a tampered localStorage that bypassed the setter's check.
+ */
+function candidateEndpoints(): string[] {
+  const override = useUI.getState().pearlRpcOverride.trim();
+  const resolvedOverride = override ? pearlParams("mainnet", override).rpcUrl : "";
+  // pearlParams returns the canonical default when the override fails
+  // validation, so a literally-equal-to-default override is a no-op.
+  const overrideIsCustom = !!override && resolvedOverride !== PEARL_RPC_POOL[0];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  if (overrideIsCustom) {
+    out.push(resolvedOverride);
+    seen.add(resolvedOverride);
+  }
+  for (const url of PEARL_RPC_POOL) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
+}
+
+/**
+ * Returns the endpoint that should be tried first this call. Healthy
+ * candidates win over cooled-down ones; if every endpoint is currently
+ * cooled down we still try them (in priority order) because the cooldown
+ * is a soft signal — better to take a chance on a maybe-recovered host
+ * than refuse the user's request outright.
+ */
+function orderedAttempts(candidates: string[], now: number): string[] {
+  const healthy: string[] = [];
+  const cooled: string[] = [];
+  for (const url of candidates) {
+    if (isEndpointHealthy(url, now)) healthy.push(url);
+    else cooled.push(url);
+  }
+  return healthy.length > 0 ? [...healthy, ...cooled] : cooled;
+}
+
+/**
+ * Classifies an error/response as "rotate to next endpoint" vs "this
+ * endpoint is fine, the request itself is wrong." 5xx, network errors
+ * (TypeError on fetch), DNS failures, and aborts are transient. 4xx
+ * (other than 408/429) is a hard error — the next endpoint will likely
+ * respond identically because the request is malformed/disallowed.
+ *
+ * The `body.error` returned for valid JSON-RPC errors (e.g. -5 "No
+ * information about address") is NOT rotation-worthy — that's the chain
+ * speaking, not the endpoint failing.
+ */
+function isTransientHttpStatus(status: number): boolean {
+  if (status >= 500 && status < 600) return true;
+  if (status === 408 || status === 429) return true;
+  return false;
 }
 
 async function call<T>(method: string, params: unknown[]): Promise<T> {
-  // Single retry on transient sentry overload (5xx). Pool walks fire
-  // multiple heavyweight searchrawtransactions calls in flight and a
-  // brief 503 burst from the sentry would otherwise mark the whole
-  // balance as "error" for the user.
-  const maxAttempts = 3;
+  // v0.2.5: rotate across the sentry pool. Each endpoint gets one shot
+  // per call(); transient failures move us to the next endpoint rather
+  // than re-spinning the same one. A retry-on-same-endpoint approach
+  // (the v0.1.x design) burns wall-clock against a degraded sentry while
+  // a healthy peer sits idle. Rotation amortises the failure across the
+  // pool and surfaces the chain-state error (`body.error`) without
+  // wrapping it in a "rpc exhausted retries" the caller can't unwind.
+  const now = Date.now();
+  const attempts = orderedAttempts(candidateEndpoints(), now);
   let lastErr: unknown;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, 250 * attempt));
+  for (const url of attempts) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
+      });
+      if (!res.ok) {
+        lastErr = new Error(`rpc http ${res.status}`);
+        if (isTransientHttpStatus(res.status)) {
+          markEndpointUnhealthy(url, Date.now());
+          continue;
+        }
+        // 4xx other than 408/429 — request is malformed/disallowed.
+        // Rotating won't help; surface the error directly.
+        throw lastErr;
+      }
+      const body = (await res.json()) as RpcResult<T>;
+      if (body.error) {
+        // Chain-level JSON-RPC error (e.g. -5 zero-activity address).
+        // The endpoint is fine — the chain just doesn't have the data.
+        // Caller catches and decides; do NOT mark the endpoint unhealthy.
+        throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
+      }
+      if (body.result === null) throw new Error("rpc null result");
+      return body.result;
+    } catch (err) {
+      // fetch() rejects with TypeError on DNS failure, network error,
+      // CORS rejection, certificate failure, etc. All transient from
+      // the wallet's perspective — try the next endpoint.
+      if (err instanceof TypeError) {
+        lastErr = err;
+        markEndpointUnhealthy(url, Date.now());
+        continue;
+      }
+      throw err;
     }
-    const res = await fetch(rpcUrl(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
-    });
-    if (!res.ok) {
-      lastErr = new Error(`rpc http ${res.status}`);
-      if (res.status >= 500 && res.status < 600) continue;
-      throw lastErr;
-    }
-    const body = (await res.json()) as RpcResult<T>;
-    if (body.error) {
-      // -5 "No information available about address" = zero-activity address.
-      // Caller catches and converts to empty result.
-      throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
-    }
-    if (body.result === null) throw new Error("rpc null result");
-    return body.result;
   }
-  throw lastErr ?? new Error("rpc exhausted retries");
+  throw lastErr ?? new Error("rpc pool exhausted");
 }
 
 // PRL float → grains. Round via toFixed(8) string to dodge float drift.

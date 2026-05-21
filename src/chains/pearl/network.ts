@@ -30,6 +30,25 @@ export const PEARL_MAINNET: PearlNetworkParams = {
   magic: 0xd9b4bef9,
 };
 
+// v0.2.5: Pool of Pearl sentry RPC endpoints the client rotates through on
+// transient failures. The primary (index 0) is the CF-fronted load-balancer
+// hostname; the rest are direct sentry hostnames per the fleet plan in
+// PearlBridgeXYZ/operations/sentry-fleet/docs/SENTRY-ARCH.md. Entries that
+// don't resolve (NXDOMAIN) are treated identically to a 5xx — the rotation
+// just skips them and tries the next. This means we can ship the pool
+// architecture before every sentry is provisioned and a freshly-provisioned
+// sentry slots in via DNS alone.
+//
+// CSP `connect-src` (public/_headers) and the override allowlist
+// (state/ui-store.ts) must list the SAME hosts — otherwise the browser
+// blocks the fetch at runtime and rotation can't compensate.
+export const PEARL_RPC_POOL: readonly string[] = [
+  "https://rpc.pearlwallet.xyz/",
+  "https://pearl-sentry-fsn1-1.pearlbridge.xyz/rpc",
+  "https://pearl-sentry-nbg1-1.pearlbridge.xyz/rpc",
+  "https://pearl-sentry-hel1-1.pearlbridge.xyz/rpc",
+];
+
 /** Public block-explorer URL for a confirmed Pearl tx. */
 export function pearlTxExplorerUrl(network: PearlNetwork, txid: string): string {
   return `${PEARL_MAINNET.explorerUrl}/tx/${txid}?network=${network}`;

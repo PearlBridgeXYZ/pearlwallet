@@ -8,9 +8,15 @@ export type Theme = "system" | "light" | "dark";
 // write arbitrary URLs there. Validating at the store boundary makes the
 // allowlist single-sourced (CSP + here) and gives the Settings UI a
 // machine-readable rejection reason. Empty string = use the default.
+// v0.2.5: extended to cover the sentry-fleet hostnames used by the
+// auto-rotating RPC pool (see chains/pearl/network.ts PEARL_RPC_POOL).
+// Must stay in sync with public/_headers CSP `connect-src`.
 const PEARL_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "rpc.pearlwallet.xyz",
   "pearlbridge.xyz",
+  "pearl-sentry-fsn1-1.pearlbridge.xyz",
+  "pearl-sentry-nbg1-1.pearlbridge.xyz",
+  "pearl-sentry-hel1-1.pearlbridge.xyz",
 ];
 
 // Ethereum RPC override allowlist. Same model as Pearl side. Restricted
