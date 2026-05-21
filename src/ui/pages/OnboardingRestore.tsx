@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ClipboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { passwordAcceptable, passwordStrength } from "../../lib/validate";
+import { applyMnemonicPaste, parseMnemonicPaste } from "../../lib/mnemonic-paste";
 
 export default function OnboardingRestore() {
   const navigate = useNavigate();
@@ -40,6 +41,16 @@ export default function OnboardingRestore() {
       next[i] = v.trim().toLowerCase();
       return next;
     });
+  }
+
+  function onPasteAt(i: number, e: ClipboardEvent<HTMLInputElement>) {
+    const raw = e.clipboardData.getData("text");
+    const parsed = parseMnemonicPaste(raw);
+    if (parsed.length <= 1) return;
+    e.preventDefault();
+    const result = applyMnemonicPaste(parsed, words, length, i);
+    if (result.bulkApplied && result.length !== length) setLength(result.length);
+    setWords(result.words);
   }
 
   async function submit(allowOverwrite = false) {
@@ -114,6 +125,7 @@ export default function OnboardingRestore() {
               spellCheck={false}
               value={w}
               onChange={(e) => setWord(i, e.target.value)}
+              onPaste={(e) => onPasteAt(i, e)}
             />
           </label>
         ))}
