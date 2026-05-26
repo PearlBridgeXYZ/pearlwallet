@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
+import InstallPWA from "../components/InstallPWA";
 
 export default function Splash() {
   const status = useWallet((s) => s.status);
@@ -14,6 +15,20 @@ export default function Splash() {
         <p className="mt-2 text-sm text-ink-500 dark:text-ink-400">
           Non-custodial. PRL and WPRL in one place.
         </p>
+
+        {/* Install-first nudge for fresh visitors. On iOS Safari the
+            installed PWA gets its own isolated storage scope — a wallet
+            created in Safari is NOT visible in the home-screen app and
+            vice versa. Installing before setup lets the user create the
+            wallet inside the installed app and never see that surprise.
+            Component self-suppresses once installed / on file:// / on
+            unsupported browsers, so it disappears cleanly on the second
+            visit. */}
+        {!initializing && !hasWallet && (
+          <div className="mt-6 text-left">
+            <InstallPWA variant="banner" />
+          </div>
+        )}
 
         <div className="mt-8 flex flex-col gap-2">
           {initializing ? (

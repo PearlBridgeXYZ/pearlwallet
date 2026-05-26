@@ -113,6 +113,12 @@ export default function InstallPWA({ variant = "card" }: Props) {
               Add PearlWallet to your home screen — opens full-screen like a
               native app, faster launch, no browser chrome.
             </p>
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+              <span className="font-semibold">Tip:</span> on iPhone/iPad,
+              install <em>before</em> creating your wallet. Safari and the
+              installed app use separate storage on iOS, so a wallet
+              created here won't appear in the app (and vice versa).
+            </p>
             <button
               type="button"
               className={secondaryBtn}
