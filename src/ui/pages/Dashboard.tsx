@@ -12,6 +12,7 @@ export default function Dashboard() {
   const addresses = useWallet((s) => s.addresses);
   const multisigEnabled = useUI((s) => s.multisigEnabled);
   const ethEnabled = useUI((s) => s.ethEnabled);
+  const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
 
   const balancesQ = useQuery({
     queryKey: [
@@ -117,6 +118,13 @@ export default function Dashboard() {
           <div className="mt-2">
             <Link to="/vaults" className="btn-secondary block w-full text-center">
               Vaults <span className="text-xs text-amber-700 dark:text-amber-400">(experimental)</span>
+            </Link>
+          </div>
+        )}
+        {offlineSigningEnabled && (
+          <div className="mt-2">
+            <Link to="/offline-sign" className="btn-secondary block w-full text-center">
+              Offline signing <span className="text-xs text-amber-700 dark:text-amber-400">(experimental)</span>
             </Link>
           </div>
         )}

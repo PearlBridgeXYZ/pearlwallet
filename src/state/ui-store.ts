@@ -72,18 +72,27 @@ interface UIState {
   // line on Dashboard, and bounces the corresponding routes back to
   // /dashboard. Singlesig PRL only stays the default-on experience.
   ethEnabled: boolean;
+  // Experimental: Armory-style offline signing. Off (default) hides
+  // the entire "Offline signing" page + nav entry. On exposes the
+  // watcher / signer / broadcaster flows and QR data-transfer UX.
+  // Marked experimental because the wire format is v1 and may evolve;
+  // do NOT rely on a payload encoded today being decodable by a future
+  // major version. See src/lib/offline-signing/payload.ts.
+  offlineSigningEnabled: boolean;
   setTheme(t: Theme): void;
   setPearlRpcOverride(url: string): void;
   setEthRpcOverride(url: string): void;
   setTipEnabled(v: boolean): void;
   setMultisigEnabled(v: boolean): void;
   setEthEnabled(v: boolean): void;
+  setOfflineSigningEnabled(v: boolean): void;
 }
 
 // Bump the storage key whenever the shape changes so a stale persisted
 // blob doesn't carry forward a field that no longer exists (or worse,
 // is type-different). v4 → v5 in v0.2.0 for ethEnabled + ethRpcOverride.
-const STORAGE_KEY = "pearl-wallet-ui-v5";
+// v5 → v6 in v0.2.8 for offlineSigningEnabled.
+const STORAGE_KEY = "pearl-wallet-ui-v6";
 
 interface PersistedUI {
   theme: Theme;
@@ -92,6 +101,7 @@ interface PersistedUI {
   tipEnabled: boolean;
   multisigEnabled: boolean;
   ethEnabled: boolean;
+  offlineSigningEnabled: boolean;
 }
 
 const DEFAULT_UI: PersistedUI = {
@@ -101,6 +111,7 @@ const DEFAULT_UI: PersistedUI = {
   tipEnabled: true,
   multisigEnabled: false,
   ethEnabled: false,
+  offlineSigningEnabled: false,
 };
 
 function loadUI(): PersistedUI {
@@ -138,6 +149,7 @@ export const useUI = create<UIState>((set, get) => ({
   tipEnabled: initial.tipEnabled,
   multisigEnabled: initial.multisigEnabled,
   ethEnabled: initial.ethEnabled,
+  offlineSigningEnabled: initial.offlineSigningEnabled,
   setTheme(t) {
     set({ theme: t });
     saveUI({ ...persistedSnapshot(get()), theme: t });
@@ -172,6 +184,10 @@ export const useUI = create<UIState>((set, get) => ({
     set({ ethEnabled: v });
     saveUI({ ...persistedSnapshot(get()), ethEnabled: v });
   },
+  setOfflineSigningEnabled(v) {
+    set({ offlineSigningEnabled: v });
+    saveUI({ ...persistedSnapshot(get()), offlineSigningEnabled: v });
+  },
 }));
 
 function persistedSnapshot(s: UIState): PersistedUI {
@@ -182,5 +198,6 @@ function persistedSnapshot(s: UIState): PersistedUI {
     tipEnabled: s.tipEnabled,
     multisigEnabled: s.multisigEnabled,
     ethEnabled: s.ethEnabled,
+    offlineSigningEnabled: s.offlineSigningEnabled,
   };
 }

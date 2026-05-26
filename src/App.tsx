@@ -22,6 +22,7 @@ import VaultDetail from "./ui/pages/VaultDetail";
 import SendFromVault from "./ui/pages/SendFromVault";
 import SignMultisigPsbt from "./ui/pages/SignMultisigPsbt";
 import VaultPendingTxDetail from "./ui/pages/VaultPendingTxDetail";
+import OfflineSign from "./ui/pages/OfflineSign";
 import Footer from "./ui/components/Footer";
 
 /**
@@ -77,6 +78,7 @@ export default function App() {
   const theme = useUI((s) => s.theme);
   const ethEnabled = useUI((s) => s.ethEnabled);
   const multisigEnabled = useUI((s) => s.multisigEnabled);
+  const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -213,6 +215,21 @@ export default function App() {
     }
   }, [multisigEnabled, status, location.pathname, navigate]);
 
+  // Offline-signing experimental surface (v0.2.8). Same bounce pattern.
+  // The OfflineSign page also self-bounces, but catching the deep-link
+  // here avoids a render flash. Note: unlike eth/multisig pages, the
+  // offline-sign surface is partially useful even while locked (the
+  // Compose tab in manual mode needs no keys, the Broadcast tab is
+  // pure-RPC) — but the route guard above forces an unlock anyway, so
+  // the page only ever renders for an unlocked user.
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    if (offlineSigningEnabled) return;
+    if (location.pathname === "/offline-sign") {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [offlineSigningEnabled, status, location.pathname, navigate]);
+
   return (
     <div className="flex min-h-full flex-col">
       <div className="flex-1">
@@ -236,6 +253,7 @@ export default function App() {
           <Route path="/vaults/:id" element={<VaultDetail />} />
           <Route path="/vaults/:id/send" element={<SendFromVault />} />
           <Route path="/vaults/:id/tx/:txid" element={<VaultPendingTxDetail />} />
+          <Route path="/offline-sign" element={<OfflineSign />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

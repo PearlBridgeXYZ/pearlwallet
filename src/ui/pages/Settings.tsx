@@ -32,6 +32,8 @@ export default function Settings() {
   const setMultisigEnabled = useUI((s) => s.setMultisigEnabled);
   const ethEnabled = useUI((s) => s.ethEnabled);
   const setEthEnabled = useUI((s) => s.setEthEnabled);
+  const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
+  const setOfflineSigningEnabled = useUI((s) => s.setOfflineSigningEnabled);
 
   const defaultRpcUrl = pearlParams().rpcUrl;
   const defaultEthRpcUrl = "https://ethereum-rpc.publicnode.com";
@@ -535,6 +537,48 @@ export default function Settings() {
           {multisigEnabled
             ? "Vaults surface ON — primitives are visible at /vaults"
             : "Vaults surface OFF — wallet behaves exactly as singlesig"}
+        </p>
+      </section>
+
+      <section className="card mb-4 border-amber-200 dark:border-amber-900/40">
+        <h2 className="text-sm font-semibold">
+          Experimental: offline signing (Armory-style)
+        </h2>
+        <p className="mt-2 text-xs text-ink-500">
+          Offline signing splits the wallet into three roles —{" "}
+          <span className="font-medium">Watcher</span> (online, builds an
+          unsigned transaction with current UTXO data),{" "}
+          <span className="font-medium">Signer</span> (offline / air-gapped,
+          adds signatures), and{" "}
+          <span className="font-medium">Broadcaster</span> (online, pushes
+          the signed transaction). The three machines exchange payloads
+          by QR or copy-paste — no shared network, no key on the online
+          side. The same wallet code runs in all three roles.
+        </p>
+        <p className="mt-1 text-xs text-ink-500">
+          A fully-offline machine can also{" "}
+          <span className="font-medium">compose</span> a transaction
+          itself by pasting a manually-curated UTXO list. The signer
+          page then accepts that just like a watcher-built payload.
+        </p>
+        <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+          The wire format is v1 and may evolve. Don't trust a payload
+          encoded today to be decodable by a future major release —
+          keep watcher + signer + broadcaster on matching versions.
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={offlineSigningEnabled}
+            onChange={(e) => setOfflineSigningEnabled(e.target.checked)}
+          />
+          Enable offline signing surface (experimental, default off)
+        </label>
+        <p className="mt-2 text-xs text-ink-500">
+          Status:{" "}
+          {offlineSigningEnabled
+            ? "Offline signing ON — see Offline Signing in the nav"
+            : "Offline signing OFF"}
         </p>
       </section>
 

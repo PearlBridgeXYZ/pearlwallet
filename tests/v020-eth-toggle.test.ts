@@ -51,10 +51,14 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
     vi.resetModules();
   });
 
-  it("uses storage key pearl-wallet-ui-v5", async () => {
+  // Storage key bumped: v5 → v6 in v0.2.8 when offlineSigningEnabled was
+  // added to the persisted shape. The v0.2.0 invariant — that the v4 key
+  // is never written and the key in use is the post-v0.2.0 one — still
+  // holds; only the post-v0.2.0 key name moved forward.
+  it("uses the current versioned storage key (and never writes v4)", async () => {
     const { useUI } = await import("../src/state/ui-store");
     useUI.getState().setTheme("dark");
-    const raw = localStorage.getItem("pearl-wallet-ui-v5");
+    const raw = localStorage.getItem("pearl-wallet-ui-v6");
     expect(raw).not.toBeNull();
     const v4 = localStorage.getItem("pearl-wallet-ui-v4");
     expect(v4).toBeNull();
