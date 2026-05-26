@@ -14,6 +14,7 @@ import { resolve } from "node:path";
 import {
   detectStandalone,
   detectIOS,
+  detectMacSafari,
   detectFileProtocol,
 } from "../src/lib/pwa-install";
 
@@ -159,6 +160,88 @@ describe("detectIOS", () => {
       0,
     );
     expect(detectIOS()).toBe(false);
+  });
+});
+
+// ── detectMacSafari ─────────────────────────────────────────────────────
+
+describe("detectMacSafari", () => {
+  let restore: () => void = () => {};
+  afterEach(() => restore());
+
+  function withUA(userAgent: string, platform = "MacIntel", maxTouchPoints = 0) {
+    restore = installWindowStub({
+      navigator: { userAgent, platform, maxTouchPoints } as Partial<Navigator> & {
+        platform: string;
+      },
+    });
+  }
+
+  it("detects desktop Safari on macOS", () => {
+    withUA(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+      "MacIntel",
+      0,
+    );
+    expect(detectMacSafari()).toBe(true);
+  });
+
+  it("does NOT flag iPad-as-Mac (touch present)", () => {
+    withUA(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+      "MacIntel",
+      5,
+    );
+    expect(detectMacSafari()).toBe(false);
+  });
+
+  it("does NOT flag Chrome on macOS (Chrome handles install via beforeinstallprompt)", () => {
+    withUA(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "MacIntel",
+      0,
+    );
+    expect(detectMacSafari()).toBe(false);
+  });
+
+  it("does NOT flag Edge on macOS", () => {
+    withUA(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+      "MacIntel",
+      0,
+    );
+    expect(detectMacSafari()).toBe(false);
+  });
+
+  it("does NOT flag Firefox on macOS", () => {
+    withUA(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:121.0) Gecko/20100101 Firefox/121.0",
+      "MacIntel",
+      0,
+    );
+    expect(detectMacSafari()).toBe(false);
+  });
+
+  it("does NOT flag Safari on iOS (handled by detectIOS)", () => {
+    withUA(
+      "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+      "iPhone",
+      5,
+    );
+    expect(detectMacSafari()).toBe(false);
+  });
+
+  it("does NOT flag desktop Linux Chrome", () => {
+    withUA(
+      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+      "Linux x86_64",
+      0,
+    );
+    expect(detectMacSafari()).toBe(false);
+  });
+
+  it("never throws when window is missing", () => {
+    expect(() => detectMacSafari()).not.toThrow();
   });
 });
 

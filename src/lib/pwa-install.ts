@@ -84,11 +84,38 @@ export function detectFileProtocol(): boolean {
   }
 }
 
+/**
+ * Is this desktop Safari on macOS? Safari 17+ supports installing web
+ * apps via File → Add to Dock, but there's no JS API to trigger it.
+ * We show manual instructions on this path the same way we do for
+ * iOS Safari. Chrome/Edge/Brave on macOS fire beforeinstallprompt and
+ * fall through to the one-click path.
+ */
+export function detectMacSafari(): boolean {
+  try {
+    if (typeof window === "undefined") return false;
+    const ua = window.navigator.userAgent || "";
+    // Chrome / Edge / Brave all include "Safari" in the UA but ALSO
+    // include "Chrome"/"Edg"/"CriOS"/"Chromium". Exclude those first.
+    if (/Chrome|Chromium|Edg\/|CriOS|FxiOS|OPR\//.test(ua)) return false;
+    if (!/Safari\//.test(ua)) return false;
+    // Mac. Touch maxTouchPoints ≤ 1 distinguishes from iPad-as-Mac.
+    const platform = (window.navigator as Navigator & { platform?: string }).platform || "";
+    if (platform !== "MacIntel") return false;
+    if ((window.navigator.maxTouchPoints ?? 0) > 1) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export interface PwaInstallState {
   /** Already installed; hide all install UI. */
   isStandalone: boolean;
   /** iOS Safari — show manual Add-to-Home-Screen instructions. */
   isIOS: boolean;
+  /** macOS desktop Safari — show File → Add to Dock instructions. */
+  isMacSafari: boolean;
   /** Running off file:// — hide all install UI. */
   isFileProtocol: boolean;
   /** Browser fired beforeinstallprompt; a one-click button will work. */
@@ -101,6 +128,7 @@ export function usePwaInstall(): PwaInstallState {
   const [deferred, setDeferred] = useState<BeforeInstallPromptEvent | null>(null);
   const [isStandalone, setIsStandalone] = useState<boolean>(() => detectStandalone());
   const [isIOS] = useState<boolean>(() => detectIOS());
+  const [isMacSafari] = useState<boolean>(() => detectMacSafari());
   const [isFileProtocol] = useState<boolean>(() => detectFileProtocol());
 
   useEffect(() => {
@@ -156,6 +184,7 @@ export function usePwaInstall(): PwaInstallState {
   return {
     isStandalone,
     isIOS,
+    isMacSafari,
     isFileProtocol,
     canPromptNow: deferred !== null,
     prompt,
