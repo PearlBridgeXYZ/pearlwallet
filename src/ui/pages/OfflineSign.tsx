@@ -72,13 +72,13 @@ export default function OfflineSign() {
         Experimental. The wire format is v1 and may evolve — keep all
         machines in your offline-signing flow on matching wallet versions.
       </p>
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 grid grid-cols-3 gap-2">
         {(["compose", "sign", "broadcast"] as const).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
-            className={`rounded-md px-3 py-2 text-sm capitalize ${
+            className={`tap rounded-md px-3 py-2 text-sm capitalize ${
               tab === t
                 ? "bg-pearl-700 text-white"
                 : "border bg-transparent hover:bg-ink-100 dark:hover:bg-ink-800"

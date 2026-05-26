@@ -16,11 +16,35 @@
     />
     <meta name="color-scheme" content="light dark" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
-    <meta name="theme-color" content="#1f2940" />
+    <!--
+      Two theme-color metas: a light-mode color matched to the page bg
+      (bg-ink-50 = #f5f7fa), and a dark-mode color matched to the dark
+      bg (bg-ink-950 = #050811). iOS status bar uses the active one,
+      Chrome address bar on Android picks it up the same way. This makes
+      the standalone PWA frame blend into the wallet UI instead of
+      showing a jarring slate-blue strip up top.
+    -->
+    <meta name="theme-color" content="#f5f7fa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#050811" media="(prefers-color-scheme: dark)" />
+    <!--
+      iOS PWA hints. apple-mobile-web-app-capable removes Safari chrome
+      when launched from the home screen. status-bar-style "default"
+      means the OS picks the readable color against our theme-color.
+      format-detection=telephone=no stops iOS from auto-linking digit
+      runs (e.g. a 0.00000001 amount) as phone numbers.
+    -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="PearlWallet" />
+    <meta name="application-name" content="PearlWallet" />
+    <meta name="format-detection" content="telephone=no" />
     <meta name="robots" content="noindex,nofollow" />
     <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
     <link rel="icon" href="/favicon-64.png" sizes="64x64" type="image/png" />
     <link rel="apple-touch-icon" href="/logo-192.png" />
+    <link rel="apple-touch-icon" sizes="192x192" href="/logo-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="/logo-512.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <title>PearlWallet</title>
     <meta name="description" content="PearlWallet — non-custodial browser wallet for Pearl L1 and WPRL with native PearlBridge integration. Open source. Your keys, your browser, your funds." />

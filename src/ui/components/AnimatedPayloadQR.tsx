@@ -71,14 +71,24 @@ export default function AnimatedPayloadQR({ payload, chunkBytes }: Props) {
 
   return (
     <div className="flex flex-col items-center gap-3">
+      {/* The QR itself fits within the parent container — the rendered
+          PNG is 320px square, but we let the <img> shrink with the
+          card on narrow screens (max-w 100% + auto height) so it stays
+          fully visible on a 360px-wide phone. */}
       <div className="rounded bg-white p-2">
         {src ? (
-          <img src={src} alt={`QR frame ${idx + 1} of ${frames.length}`} width={320} height={320} />
+          <img
+            src={src}
+            alt={`QR frame ${idx + 1} of ${frames.length}`}
+            width={320}
+            height={320}
+            className="h-auto w-full max-w-[320px]"
+          />
         ) : (
-          <div className="h-[320px] w-[320px] animate-pulse rounded bg-ink-100 dark:bg-ink-800" />
+          <div className="aspect-square w-full max-w-[320px] animate-pulse rounded bg-ink-100 dark:bg-ink-800" />
         )}
       </div>
-      <div className="flex items-center gap-3 text-xs text-ink-500">
+      <div className="flex flex-wrap items-center justify-center gap-2 text-xs text-ink-500">
         <span className="tabular-nums">
           Frame {idx + 1} / {frames.length}
         </span>
@@ -86,13 +96,13 @@ export default function AnimatedPayloadQR({ payload, chunkBytes }: Props) {
           <>
             <button
               type="button"
-              className="rounded border px-2 py-1 text-xs hover:bg-ink-100 dark:hover:bg-ink-800"
+              className="tap rounded border px-3 py-2 text-xs hover:bg-ink-100 dark:hover:bg-ink-800"
               onClick={() => setPaused((p) => !p)}
             >
               {paused ? "Resume" : "Pause"}
             </button>
             <select
-              className="rounded border bg-transparent px-2 py-1 text-xs"
+              className="tap rounded border bg-transparent px-3 py-2 text-xs"
               value={speedMs}
               onChange={(e) => setSpeedMs(Number(e.target.value))}
             >
@@ -104,7 +114,7 @@ export default function AnimatedPayloadQR({ payload, chunkBytes }: Props) {
             </select>
             <button
               type="button"
-              className="rounded border px-2 py-1 text-xs hover:bg-ink-100 dark:hover:bg-ink-800"
+              className="tap rounded border px-3 py-2 text-xs hover:bg-ink-100 dark:hover:bg-ink-800"
               onClick={() => setIdx((i) => (i + 1) % frames.length)}
             >
               Next

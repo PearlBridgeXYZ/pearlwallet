@@ -102,6 +102,16 @@ html = html.replace(
   "",
 );
 
+// 5b. Drop apple-touch-icon links. file:// browsers can't install the
+//     PWA anyway, and inlining the 512×512 PNG as a data URI bloated
+//     the offline file by ~290 kB without changing user behaviour at
+//     all. The favicon-32/64 references stay — those DO render in the
+//     browser tab.
+html = html.replace(
+  /<link[^>]*\brel=["']apple-touch-icon["'][^>]*>\s*/g,
+  "",
+);
+
 // 6. Relax the inline-script CSP. The web build forbids inline scripts
 //    (defense against XSS); the offline file IS one self-contained
 //    document the user audited and saved, so inline is the only way

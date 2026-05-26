@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import ActivityList from "../components/ActivityList";
 import CopyAddress from "../components/CopyAddress";
+import InstallPWA from "../components/InstallPWA";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { fetchBalances } from "../../services/balances";
@@ -37,6 +38,14 @@ export default function Dashboard() {
 
   return (
     <Page>
+      {/* Install banner — self-suppresses when already installed, on
+          file://, on desktops without an install path, or after the
+          user dismisses it once. Sits above the balance card so it's
+          the first thing mobile users see on a fresh install. */}
+      <div className="mb-4">
+        <InstallPWA variant="banner" />
+      </div>
+
       <div className="card">
         <div className="text-xs uppercase tracking-wide text-ink-500">Total balance</div>
         {balances ? (
@@ -98,20 +107,20 @@ export default function Dashboard() {
 
         {ethEnabled ? (
           <>
-            <div className="mt-5 grid grid-cols-3 gap-2">
-              <Link to="/send/prl" className="btn-secondary">Send PRL</Link>
-              <Link to="/send/wprl" className="btn-secondary">Send WPRL</Link>
-              <Link to="/send/eth" className="btn-secondary">Send ETH</Link>
+            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <Link to="/send/prl" className="btn-secondary tap">Send PRL</Link>
+              <Link to="/send/wprl" className="btn-secondary tap">Send WPRL</Link>
+              <Link to="/send/eth" className="btn-secondary tap">Send ETH</Link>
             </div>
             <div className="mt-2 grid grid-cols-2 gap-2">
-              <Link to="/receive" className="btn-secondary">Receive</Link>
-              <Link to="/bridge" className="btn-primary">Bridge</Link>
+              <Link to="/receive" className="btn-secondary tap">Receive</Link>
+              <Link to="/bridge" className="btn-primary tap">Bridge</Link>
             </div>
           </>
         ) : (
           <div className="mt-5 grid grid-cols-2 gap-2">
-            <Link to="/send/prl" className="btn-secondary">Send PRL</Link>
-            <Link to="/receive" className="btn-secondary">Receive</Link>
+            <Link to="/send/prl" className="btn-secondary tap">Send PRL</Link>
+            <Link to="/receive" className="btn-secondary tap">Receive</Link>
           </div>
         )}
         {multisigEnabled && (

@@ -33,21 +33,34 @@ export default function TopBar() {
   const warning = remaining <= 60_000;
 
   return (
-    <header className="border-b border-ink-200 bg-white/80 backdrop-blur dark:border-ink-800 dark:bg-ink-950/80">
-      <div className="mx-auto flex max-w-2xl items-center justify-between px-4 py-3">
-        <Link to="/dashboard" className="flex items-center gap-2">
+    <header
+      className="sticky top-0 z-30 border-b border-ink-200 bg-white/80 backdrop-blur dark:border-ink-800 dark:bg-ink-950/80"
+      // Push the bar content below the iOS notch / Android status bar.
+      // The bar itself spans edge-to-edge (the bg-color extends into
+      // the safe area to avoid a jarring strip).
+      style={{ paddingTop: "env(safe-area-inset-top)" }}
+    >
+      <div
+        className="mx-auto flex max-w-2xl items-center justify-between gap-2 py-3"
+        style={{
+          paddingLeft: "max(1rem, env(safe-area-inset-left))",
+          paddingRight: "max(1rem, env(safe-area-inset-right))",
+        }}
+      >
+        <Link to="/dashboard" className="flex min-w-0 items-center gap-2">
           <img
             src="/logo-192.png"
             alt=""
             width={28}
             height={28}
-            className="h-7 w-7 rounded-full"
+            className="h-7 w-7 shrink-0 rounded-full"
           />
-          <span className="text-sm font-semibold tracking-tight">PearlWallet</span>
+          <span className="truncate text-sm font-semibold tracking-tight">PearlWallet</span>
         </Link>
-        <div className="flex items-center gap-3 text-xs">
+        <div className="flex shrink-0 items-center gap-1 text-xs sm:gap-3">
           {status === "unlocked" && (
             <>
+              {/* Countdown — visible label on sm+, icon-only on narrow */}
               <span
                 className={
                   warning
@@ -57,11 +70,12 @@ export default function TopBar() {
                 title="Time until automatic lock from inactivity"
                 aria-label={`Auto-lock in ${formatRemaining(remaining)}`}
               >
-                Lock in {formatRemaining(remaining)}
+                <span className="hidden sm:inline">Lock in </span>
+                {formatRemaining(remaining)}
               </span>
               <button
                 type="button"
-                className="text-ink-500 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100"
+                className="rounded-md px-2 py-2 text-ink-500 hover:bg-ink-100 hover:text-ink-900 active:bg-ink-200 dark:text-ink-400 dark:hover:bg-ink-800 dark:hover:text-ink-100"
                 onClick={async () => {
                   await lock();
                   navigate("/unlock");
@@ -74,7 +88,7 @@ export default function TopBar() {
           )}
           <Link
             to="/settings"
-            className="text-ink-500 hover:text-ink-900 dark:text-ink-400 dark:hover:text-ink-100"
+            className="rounded-md px-2 py-2 text-ink-500 hover:bg-ink-100 hover:text-ink-900 active:bg-ink-200 dark:text-ink-400 dark:hover:bg-ink-800 dark:hover:text-ink-100"
           >
             Settings
           </Link>

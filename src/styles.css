@@ -9,6 +9,32 @@
   html, body, #root {
     height: 100%;
   }
+  /* Allow the bg to bleed into the notch / home-indicator area. The
+     Page wrapper applies safe-area-inset padding so content stays
+     readable. */
+  body {
+    overscroll-behavior-y: none;
+  }
+  /* Disable iOS Safari's tap-highlight grey flash — a wallet that
+     flashes on every button feels twitchy. We still keep keyboard
+     :focus-visible outlines (via the ring utility on .input/.btn). */
+  * {
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+@layer utilities {
+  /* Safe-area padding helpers — `env(safe-area-inset-*)` lets the
+     wallet sit comfortably on devices with a notch or home indicator
+     without ever clipping content. Use via Tailwind arbitrary props
+     in JSX too, but these aliases keep the common cases tidy. */
+  .pt-safe { padding-top: max(env(safe-area-inset-top), 0.25rem); }
+  .pb-safe { padding-bottom: max(env(safe-area-inset-bottom), 0.25rem); }
+  .pl-safe { padding-left: max(env(safe-area-inset-left), 0.25rem); }
+  .pr-safe { padding-right: max(env(safe-area-inset-right), 0.25rem); }
+  /* Minimum touch target — keeps tap-friendly buttons compliant with
+     Apple HIG (44pt) and Material (48dp). */
+  .tap { min-height: 44px; min-width: 44px; }
 }
 
 @layer components {
@@ -27,8 +53,12 @@
   .btn-danger {
     @apply btn bg-red-700 text-white hover:bg-red-800;
   }
+  /* Note: text-base (16px) — text-sm (14px) would trigger iOS Safari's
+     zoom-on-focus, which yanks the viewport every time the user taps
+     an address or amount field. 16px is the minimum that keeps the
+     viewport still. On desktop this still looks fine. */
   .input {
-    @apply w-full rounded-xl border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900 outline-none ring-pearl-500/40 placeholder:text-ink-400 focus:ring-2 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100;
+    @apply w-full rounded-xl border border-ink-300 bg-white px-3 py-2 text-base text-ink-900 outline-none ring-pearl-500/40 placeholder:text-ink-400 focus:ring-2 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100;
   }
   .label {
     @apply mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500 dark:text-ink-400;

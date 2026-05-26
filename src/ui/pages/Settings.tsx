@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
+import InstallPWA from "../components/InstallPWA";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { pearlParams } from "../../chains/pearl/network";
@@ -272,6 +273,15 @@ export default function Settings() {
 
   return (
     <Page title="Settings">
+      {/* Install PWA card — InstallPWA self-suppresses when already
+          installed, when running from file://, or when the browser
+          offers no install path (desktop Safari/Firefox). Sits at the
+          top of Settings because finding the install option is the
+          number-one reason users open this page on mobile. */}
+      <div className="mb-4">
+        <InstallPWA variant="card" />
+      </div>
+
       <section className="card mb-4">
         <h2 className="text-sm font-semibold">Account</h2>
         <div className="mt-3 flex flex-wrap gap-2">
