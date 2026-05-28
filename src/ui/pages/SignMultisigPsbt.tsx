@@ -14,6 +14,7 @@ import {
 } from "../../services/multisig";
 import { bytesToHex } from "../../crypto/descriptor";
 import { formatGrains } from "../../lib/format";
+import { useProposal } from "../../state/proposal-store";
 import type { VaultRecord } from "../../storage/db";
 
 // SignMultisigPsbt — paste a PSBT, match it to a local vault by its
@@ -51,6 +52,15 @@ export default function SignMultisigPsbt() {
       }
     })();
   }, []);
+
+  // Prefill from a relay-delivered proposal if VaultProposal stashed one.
+  // We consume it (single-shot) so a later tab refresh of /vaults/sign
+  // doesn't re-stuff the textarea with stale content.
+  const consumePsbtProposal = useProposal((s) => s.consumePsbt);
+  useEffect(() => {
+    const pending = consumePsbtProposal();
+    if (pending) setPsbtIn(pending.payload);
+  }, [consumePsbtProposal]);
 
   // Re-derive every vault's outputScript so we can match by hex. We do
   // this once after vaults load — it's cheap (one taproot tweak per

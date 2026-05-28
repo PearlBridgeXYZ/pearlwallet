@@ -23,6 +23,7 @@ import SendFromVault from "./ui/pages/SendFromVault";
 import SignMultisigPsbt from "./ui/pages/SignMultisigPsbt";
 import VaultPendingTxDetail from "./ui/pages/VaultPendingTxDetail";
 import OfflineSign from "./ui/pages/OfflineSign";
+import VaultProposal from "./ui/pages/VaultProposal";
 import Footer from "./ui/components/Footer";
 
 /**
@@ -61,6 +62,13 @@ export function routeGuardTarget(
   }
   if (status === "locked") {
     if (path === "/unlock" || path === "/onboarding/restore") return null;
+    // Preserve a vault-proposal deeplink across the unlock so a one-time
+    // token isn't burnt before the user can act on it. Other paths just
+    // bounce to /unlock and continue to /dashboard after unlock.
+    const vaultTxMatch = /^\/vault\/tx\/[A-Za-z0-9_-]{43}$/.exec(path);
+    if (vaultTxMatch) {
+      return `/unlock?next=${encodeURIComponent(path)}`;
+    }
     return "/unlock";
   }
   // unlocked
@@ -254,6 +262,7 @@ export default function App() {
           <Route path="/vaults/:id/send" element={<SendFromVault />} />
           <Route path="/vaults/:id/tx/:txid" element={<VaultPendingTxDetail />} />
           <Route path="/offline-sign" element={<OfflineSign />} />
+          <Route path="/vault/tx/:token" element={<VaultProposal />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>

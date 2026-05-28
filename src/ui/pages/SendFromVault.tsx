@@ -11,6 +11,7 @@ import {
 } from "../../services/multisig";
 import { formatGrains, parsePRL } from "../../lib/format";
 import { validPearl } from "../../lib/validate";
+import { useProposal } from "../../state/proposal-store";
 import type { VaultRecord } from "../../storage/db";
 
 type Stage = "compose" | "preview" | "saved";
@@ -55,6 +56,29 @@ export default function SendFromVault() {
       cancelled = true;
     };
   }, [id]);
+
+  // Prefill from a relay-delivered tx-intent if VaultProposal stashed one.
+  // The amount comes over as grains-as-string; we convert to a decimal PRL
+  // string for the input. Consume the proposal slot so a later visit to
+  // /vaults/:id/send doesn't re-fill on its own.
+  const consumeIntent = useProposal((s) => s.consumeIntent);
+  useEffect(() => {
+    if (!vault) return;
+    const pending = consumeIntent();
+    if (!pending) return;
+    if (pending.intent.vaultAddress !== vault.pearlAddress) {
+      // VaultProposal already routed us to the right vault; this is a
+      // belt-and-braces guard against a stale slot from a different vault.
+      return;
+    }
+    setDestination(pending.intent.destination);
+    try {
+      setAmount(formatGrains(BigInt(pending.intent.amountGrains)));
+    } catch {
+      // If grains is malformed, leave the field blank — user will see
+      // the error when they try to compose.
+    }
+  }, [vault, consumeIntent]);
 
   async function compose() {
     if (!vault) return;

@@ -1,9 +1,29 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
+
+// Whitelist of paths the `?next=` redirect honours. We never want to
+// follow an arbitrary URL after unlock — open-redirect into an
+// attacker-controlled origin would let a phishing link bounce through
+// the wallet and steal session state. Allow only known internal routes.
+//
+// Exported so the open-redirect matrix is unit-testable in isolation
+// (same pattern as `routeGuardTarget` in App.tsx).
+export const NEXT_PATH_PATTERNS = [
+  /^\/vault\/tx\/[A-Za-z0-9_-]{43}$/,
+];
+
+export function safeNext(raw: string | null): string {
+  if (!raw) return "/dashboard";
+  if (!raw.startsWith("/")) return "/dashboard";
+  if (NEXT_PATH_PATTERNS.some((re) => re.test(raw))) return raw;
+  return "/dashboard";
+}
 
 export default function Unlock() {
   const navigate = useNavigate();
+  const [params] = useSearchParams();
+  const next = safeNext(params.get("next"));
   const unlock = useWallet((s) => s.unlock);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
@@ -15,7 +35,7 @@ export default function Unlock() {
     setError(null);
     try {
       await unlock(password);
-      navigate("/dashboard");
+      navigate(next, { replace: true });
     } catch (e) {
       setError(e instanceof Error && e.message === "E_PASSWORD_WRONG"
         ? "Incorrect password."
