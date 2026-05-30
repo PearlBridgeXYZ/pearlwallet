@@ -18,7 +18,8 @@ import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
-import { secp256k1 } from "@noble/curves/secp256k1";
+import { sha256 } from "@noble/hashes/sha256";
+import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
 import { signTransaction as ethSignTransaction } from "viem/accounts";
 import * as btc from "@scure/btc-signer";
 import { base64 } from "@scure/base";
@@ -278,6 +279,31 @@ export interface PearlMultisigComposePsbtRequest {
   descriptor: VaultDescriptorOverWire;
 }
 
+// signSigProofForVault — derives this cosigner's privkey for the given
+// vault slot and BIP 340 Schnorr-signs the domain-separated proof digest
+// computed from (token, psbtBase64, signedAt). The worker computes the
+// digest itself — the main thread NEVER hands the worker an opaque
+// digest to sign, otherwise the worker would be a generic signature
+// oracle for the cosigner privkey.
+//
+// Returns the proof + the x-only signer pubkey so the caller can
+// include both in the POST body without needing a separate
+// derivePearlMultisigPubkey round-trip.
+export interface PearlSigProofRequest {
+  token: string;
+  psbtBase64: string;
+  signedAt: number;
+  vaultAccount: number;
+  keyIndex: number;
+  /** Vault membership check — worker refuses to sign if the derived pubkey isn't in this set. */
+  descriptor: VaultDescriptorOverWire;
+}
+
+export interface PearlSigProofResponse {
+  signerPubkeyHex: string;
+  hmacProofHex: string;
+}
+
 export type WorkerCmd =
   | { id: string; cmd: "createWallet"; strength: 128 | 256; password: string; network: PearlNetwork }
   | { id: string; cmd: "restoreWallet"; mnemonic: string; password: string; network: PearlNetwork }
@@ -292,7 +318,8 @@ export type WorkerCmd =
   | { id: string; cmd: "signPearlTx"; req: PearlTxRequest }
   | { id: string; cmd: "derivePearlMultisigPubkey"; vaultAccount: number; keyIndex: number }
   | { id: string; cmd: "composePearlMultisigPsbt"; req: PearlMultisigComposePsbtRequest }
-  | { id: string; cmd: "signPearlMultisigPsbt"; req: PearlMultisigSignPsbtRequest };
+  | { id: string; cmd: "signPearlMultisigPsbt"; req: PearlMultisigSignPsbtRequest }
+  | { id: string; cmd: "signSigProofForVault"; req: PearlSigProofRequest };
 
 export type WorkerResp =
   | { id: string; ok: true; result: unknown }
@@ -709,6 +736,68 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       }
 
       return { psbtBase64: base64.encode(tx.toPSBT()) };
+    }
+
+    case "signSigProofForVault": {
+      // Domain-separated sig-return proof. The worker computes the digest
+      // itself — main thread cannot ask the worker to Schnorr-sign an
+      // arbitrary 32-byte digest with a vault privkey. The proof message
+      // shape mirrors pearl-vault-relay/src/sig-proof.ts so the relay's
+      // verifySigProof accepts the result.
+      if (!session) throw new Error("E_LOCKED");
+      const r = msg.req;
+      if (typeof r.token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(r.token)) {
+        throw new Error("E_SIGPROOF_BAD_TOKEN");
+      }
+      if (typeof r.psbtBase64 !== "string" || r.psbtBase64.length === 0) {
+        throw new Error("E_SIGPROOF_BAD_PSBT");
+      }
+      if (
+        typeof r.signedAt !== "number" ||
+        !Number.isInteger(r.signedAt) ||
+        r.signedAt < 1_700_000_000 ||
+        r.signedAt > 4_000_000_000
+      ) {
+        throw new Error("E_SIGPROOF_BAD_TS");
+      }
+
+      const params = pearlParams(r.descriptor.network);
+      const pubkeys = r.descriptor.sortedPubkeysHex.map((h) => hexToBytes(h));
+      const vault = vaultDescriptorFromPubkeys(r.descriptor.threshold, pubkeys, params);
+
+      const master = masterFromSeed(session.seed);
+      const path = pearlMultisigPath(r.vaultAccount, r.keyIndex);
+      const child = master.derive(path);
+      if (!child.privateKey || !child.publicKey) throw new Error("E_HD_DERIVE_FAILED");
+      const myXOnly = child.publicKey.slice(1); // drop sec1 prefix byte
+      const myHex = bytesToHex(myXOnly);
+
+      // Refuse to mint a proof under a vault we aren't a member of.
+      // Without this check, an attacker who controls the main thread
+      // could ask us to sign for a vault we don't belong to and then
+      // attempt to inject the proof at another proposal (which would
+      // be rejected by the relay's whitelist gate anyway — but defense
+      // in depth, and keeps the proof primitive honest).
+      if (!vault.sortedPubkeys.some((p) => bytesToHex(p) === myHex)) {
+        throw new Error("E_MULTISIG_NOT_A_COSIGNER");
+      }
+
+      // Compute the domain-separated digest. Must stay byte-identical to
+      // pearl-vault-relay/src/sig-proof.ts:computeSigProofDigest. Don't
+      // refactor either side without re-running the cross-test.
+      const SIG_PROOF_DOMAIN = "pearl-vault-relay/sig/v1";
+      const psbtDigestHex = bytesToHex(
+        sha256(new TextEncoder().encode(r.psbtBase64)),
+      );
+      const canonical =
+        `${SIG_PROOF_DOMAIN}\n${r.token}\n${r.signedAt}\n${psbtDigestHex}`;
+      const digest = sha256(new TextEncoder().encode(canonical));
+
+      const proofBytes = schnorr.sign(digest, child.privateKey);
+      return {
+        signerPubkeyHex: myHex,
+        hmacProofHex: bytesToHex(proofBytes),
+      };
     }
   }
 }

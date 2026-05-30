@@ -415,6 +415,36 @@ export async function signVaultPsbt(opts: {
   return out;
 }
 
+/**
+ * Mint a sig-return proof for posting a partial sig back to the relay.
+ * The worker derives the cosigner privkey, computes the domain-separated
+ * digest from (token, psbtBase64, signedAt), and BIP 340 Schnorr-signs
+ * it. Main thread never sees the privkey or the raw digest — only the
+ * pubkey and the proof come back.
+ *
+ * Used by SignMultisigPsbt's "Post to relay" path.
+ */
+export async function signVaultSigProof(opts: {
+  vault: VaultRecord;
+  token: string;
+  psbtBase64: string;
+  signedAt: number;
+}): Promise<{ signerPubkeyHex: string; hmacProofHex: string }> {
+  return await cryptoWorker.call<
+    "signSigProofForVault",
+    { signerPubkeyHex: string; hmacProofHex: string }
+  >("signSigProofForVault", {
+    req: {
+      token: opts.token,
+      psbtBase64: opts.psbtBase64,
+      signedAt: opts.signedAt,
+      vaultAccount: opts.vault.myVaultAccount,
+      keyIndex: opts.vault.myKeyIndex,
+      descriptor: wireDescriptorFromRecord(opts.vault),
+    },
+  });
+}
+
 export interface PsbtOutputInfo {
   /** Pearl bech32m address if the output script is P2TR; otherwise null. */
   address: string | null;
