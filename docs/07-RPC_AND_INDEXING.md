@@ -36,9 +36,9 @@ The proxy:
 - Logs nothing identifying (no IPs, no method args beyond method name + status).
 - Forwards to one of N pearld nodes with health-check failover.
 
-Implementation choice: Cloudflare Worker (low cost, edge cache) OR a small small VPS with nginx + rate-limit module. Recommend **Cloudflare Worker** for simplicity, with origin = a tunneled pearld endpoint on a VPS.
+Implementation choice: Cloudflare Worker (low cost, edge cache) OR a small VPS with nginx + rate-limit module. Recommend **Cloudflare Worker** for simplicity, with origin = a tunneled pearld endpoint on a VPS.
 
-Source for pearld endpoints: existing PearlBridge fleet (multiple VPS hosts per `project_pearl_fleet_watchdog.md`). Coordinate with the fleet watchdog to ensure wallet's read load doesn't impact bridge SLA.
+Source for pearld endpoints: existing PearlBridge sentry fleet. Coordinate with the fleet watchdog to ensure wallet's read load doesn't impact bridge SLA.
 
 ### Backup pearld
 
@@ -141,7 +141,7 @@ Back-of-envelope for 10k MAU:
 - Indexer (esplora on a small VPS): trivial load
 - Etherscan: 5 req/s = 432k/day. Sufficient with 60s caching.
 
-A €10/mo small VPS comfortably handles pearld + esplora for that load.
+A small (~€10/mo) VPS comfortably handles pearld + esplora for that load.
 
 ## Pinned endpoint list
 

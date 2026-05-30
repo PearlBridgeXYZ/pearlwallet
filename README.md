@@ -2,7 +2,7 @@
 
 **A non-custodial, pure-web wallet for Pearl L1 (PRL) and Wrapped PRL (WPRL) on Ethereum, with native PearlBridge integration.**
 
-🔗 **Live:** [pearlwallet.xyz](https://pearlwallet.xyz) · Mirror: [pearlwallet.xyz](https://pearlwallet.xyz)
+🔗 **Live:** [pearlwallet.xyz](https://pearlwallet.xyz)
 📦 **Releases:** [github.com/PearlBridgeXYZ/pearlwallet/releases](https://github.com/PearlBridgeXYZ/pearlwallet/releases) — every tag ships a single-file offline HTML for air-gapped use.
 🛠 **Status:** Shipping. Currently at `v0.1.18`. Pre-`v1.0` — flagged experimental until the public audit lands.
 

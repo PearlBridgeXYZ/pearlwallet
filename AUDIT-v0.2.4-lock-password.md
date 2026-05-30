@@ -4,7 +4,7 @@ Audit window: post the v0.2.4 route-guard / Unlock.tsx fix that closed the
 `locked → /settings → /dashboard` bypass. Scope: password handling +
 encryption at rest, lock mechanism end-to-end.
 
-Reviewer: Bernard
+Reviewer: Bridge Developer
 Date: 2026-05-20
 Build: package.json reports v0.2.3 (the v0.2.4 label is the fix tag, not
 yet bumped in package.json — flagged at Notes #1).

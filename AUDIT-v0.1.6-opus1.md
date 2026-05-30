@@ -1,6 +1,6 @@
 # Pearl Web Wallet v0.1.6 — Independent Audit (opus1)
 
-Audited at `.` against `package.json` version `0.1.6` on 2026-05-20. Independent read — prior `AUDIT-v0.1.5-*.md` files not consulted.
+Audited against `package.json` version `0.1.6` on 2026-05-20. Independent read — prior `AUDIT-v0.1.5-*.md` files not consulted.
 
 Scope: src/crypto/*, src/services/{bridge,pearl-rpc,balances}.ts, src/state/wallet-store.ts, src/chains/{pearl,ethereum}/*, src/ui/pages/*, src/App.tsx, public/_headers, index.html.
 

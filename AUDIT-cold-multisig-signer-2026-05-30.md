@@ -5,9 +5,8 @@
 a sig-return endpoint to `pearl-vault-relay` and a "Post sig to relay" flow
 to `pearl-web-wallet`. Repos touched:
 
-- `pearl-vault-relay` (not git-tracked locally — see "Deployment" below)
-- `pearl-web-wallet` (PearlBridgeXYZ/pearlwallet — archived; pushes go to
-  `PearlBridgeXYZ/pearlwallet` public mirror)
+- `pearl-vault-relay` (not git-tracked — see "Deployment" below)
+- `pearl-web-wallet` (pushes to `PearlBridgeXYZ/pearlwallet`)
 
 **Verdict:** READY FOR INTEGRATION.
 
@@ -179,11 +178,10 @@ tests/v030-sig-proof.test.ts              — NEW; locks proof format contract w
 ## Deployment notes
 
 **pearl-vault-relay is NOT a local git repo.** The brief expected per-phase
-auto-commits, but the working tree at `.`
-has no `.git` directory. All source changes are on disk under the canonical
-path; `npm run build` re-emits `dist/`. To ship: copy the working tree to the
-deployment host, run `npm install` (the two new noble deps), `npm run build`,
-restart the relay service. Same procedure as v0.1.0.
+auto-commits, but the relay's working tree has no `.git` directory. All
+source changes are on disk; `npm run build` re-emits `dist/`. To ship: copy
+the working tree to the deployment host, run `npm install` (the two new noble
+deps), `npm run build`, restart the relay service. Same procedure as v0.1.0.
 
 **Dependency additions** (pearl-vault-relay):
 
@@ -212,7 +210,7 @@ versions; this aligns the vault-relay's pin to the rest of the stack.
 ## Out of scope (intentional)
 
 - Originating relay's witness-assembly + broadcast path (consumes the `/sigs`
-  output; existing pearlbridge-relay or future bernard-side script).
+  output; existing pearlbridge-relay or future cosigner-side script).
 - Wallet-side "I see another cosigner posted but with a different PSBT than I
   signed" reconciliation. Today the wallet treats its own sig as the canonical
   PSBT to broadcast against. Spec doesn't require this; future v0.3.x.

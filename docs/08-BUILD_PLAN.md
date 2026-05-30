@@ -149,7 +149,7 @@ Pre-mainnet checklist:
 | Designer × ~20 hrs total | (core team's call) |
 | Security audit (TOB/OZ/Cure53 web-wallet engagement) | $30k - $80k |
 | Domain registrations (canonical + 4 defensive) | ~$25/yr |
-| small VPS (pearld + esplora) | €10/mo |
+| VPS (pearld + esplora) | €10/mo |
 | Cloudflare Pages + Worker | Free tier sufficient |
 | Cloudflare DNS | Free |
 | **Operating cost / yr (excluding labor + audit)** | **~$160/yr** |

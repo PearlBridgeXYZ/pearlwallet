@@ -54,7 +54,7 @@ Team directive (2026-05-17) is to build custom. The build team should still pres
                    ▼                                  ▼
         ┌─────────────────────┐         ┌────────────────────────┐
         │ Pearl RPC proxy     │         │ ethereum-rpc.publicnode│
-        │ (VPS provider / CF Worker│         │ .com (primary)         │
+        │ (VPS / CF Worker    │         │ .com (primary)         │
         │  in front of pearld)│         │ eth.drpc.org (fallback)│
         │ + CORS + rate limit │         └────────────────────────┘
         └─────────────────────┘
@@ -62,8 +62,7 @@ Team directive (2026-05-17) is to build custom. The build team should still pres
                    ▼
         ┌─────────────────────┐
         │ pearld nodes        │
-        │ (existing fleet:    │
-        │ multiple VPS hosts)   │
+        │ (existing fleet)    │
         └─────────────────────┘
 
         ┌─────────────────────────────────────────┐

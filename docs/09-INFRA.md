@@ -23,13 +23,13 @@
 ┌──────────┐    ┌─────────────────┐    ┌─────────────────────┐
 │ Public   │    │ rpc.pearlwallet │    │ idx.pearlwallet.xyz │
 │ Eth RPCs │    │ .xyz            │    │ (esplora)           │
-│ (no auth)│    │ (Cloudflare     │    │ (small VPS) │
+│ (no auth)│    │ (Cloudflare     │    │ (small VPS)         │
 └──────────┘    │  Worker)        │    └─────────┬───────────┘
                 └────────┬────────┘              │
                          │                       │
                          ▼                       ▼
                   ┌──────────────────────────────────┐
-                  │ small VPS                      │
+                  │ Small VPS                         │
                   │  • pearld (mainnet)              │
                   │  • esplora indexer               │
                   │  • Watchtower / restart policy   │
@@ -49,9 +49,8 @@
 - Free tier easily handles wallet load.
 - Easy method allowlist + rate limit.
 
-**small VPS** (€10/mo) for pearld + esplora:
-- Existing relationship per memory.
-- Geographic redundancy: a second small VPS in another region as failover (€10/mo).
+**Small VPS** (~€10/mo) for pearld + esplora:
+- Geographic redundancy: a second small VPS in another region as failover (~€10/mo).
 
 **Status page** at `status.pearlwallet.xyz`: a simple static page reading from a JSON file updated by a healthcheck cron. Or use `instatus.com` free tier.
 
@@ -65,7 +64,7 @@ www                     CNAME  → pearlwallet.xyz (CF proxy ON)
 rpc                     A      → CF Worker (via CF proxy ON)
 idx                     A      → indexer VPS IP (CF proxy ON)
 testnet-rpc             A      → CF Worker (testnet)
-testnet-idx             A      → testnet indexer indexer (CF proxy ON)
+testnet-idx             A      → testnet indexer VPS (CF proxy ON)
 status                  CNAME  → instatus or static page (CF proxy ON)
 
 ;; CAA: only Let's Encrypt + Google Trust Services allowed
@@ -198,7 +197,7 @@ On `main`:
 ## Monitoring
 
 ### Wallet status page
-At `status.pearlwallet.xyz`. Reads JSON updated by a cron on a VPS:
+At `status.pearlwallet.xyz`. Reads JSON updated by a cron on the indexer VPS:
 - Pearl RPC health (last successful `getblockchaininfo` < 60s ago)
 - Pearl indexer health
 - Eth RPC health (both endpoints)
@@ -217,7 +216,7 @@ At `status.pearlwallet.xyz`. Reads JSON updated by a cron on a VPS:
 
 ## Backup & recovery
 
-- Repo on GitHub (primary) + mirrored to a private gitea/forgejo on a VPS (warm backup).
+- Repo on GitHub (primary) + mirrored to a private gitea/forgejo on the indexer VPS (warm backup).
 - Built artifacts retained for last 50 tags in Cloudflare Pages.
 - pearld data dirs snapshotted nightly to provider backup storage.
 - Deployment config (Cloudflare Worker source, DNS zone file, Pages settings) in repo under `infra/` so it's recoverable from git alone.

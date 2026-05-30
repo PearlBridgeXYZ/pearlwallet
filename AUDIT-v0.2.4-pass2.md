@@ -6,7 +6,7 @@ the `routeGuardTarget` extraction shipped after pass 1
 race windows, unit-test coverage, and a sampling re-verification of
 the crypto-at-rest claims from pass 1.
 
-Reviewer: Bernard
+Reviewer: Bridge Developer
 Date: 2026-05-20
 Build: `package.json` reports `0.2.4` (now bumped — pass 1 note closed).
 

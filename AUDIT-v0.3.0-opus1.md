@@ -38,7 +38,7 @@ Both kinds are bounded by the wallet's *own* m-of-n threshold check at finalisat
 
 #### M1. **CSP `connect-src 'self' https:` is broader than the v0.3.0 surface needs**
 
-**Location:** nginx site config on `pearlwallet.xyz` and `pearlwallet.xyz`. Live CSP (verified `curl -sI https://pearlwallet.xyz/`):
+**Location:** nginx site config on `pearlwallet.xyz`. Live CSP (verified `curl -sI https://pearlwallet.xyz/`):
 
 ```
 content-security-policy: default-src 'self'; script-src 'self';

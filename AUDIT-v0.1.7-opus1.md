@@ -1,6 +1,6 @@
 # Pearl Web Wallet v0.1.7 — Independent Audit (opus1)
 
-Audited at `.` against `package.json` version `0.1.7` on 2026-05-20. Independent read — prior `AUDIT-v0.1.6-*.md` consulted only for output format. v0.1.7 closed-finding list from the brief used to suppress duplicate-flagging of patched items.
+Audited against `package.json` version `0.1.7` on 2026-05-20. Independent read — prior `AUDIT-v0.1.6-*.md` consulted only for output format. v0.1.7 closed-finding list from the brief used to suppress duplicate-flagging of patched items.
 
 Scope: src/services/{bridge,pearl-rpc,balances}.ts, src/state/wallet-store.ts, src/crypto/{keystore,worker,worker-client,hd,mnemonic}.ts, src/lib/{validate,format}.ts, src/chains/pearl/{address,network,tip}.ts, src/chains/ethereum/{network,rpc}.ts, src/ui/pages/{Splash,OnboardingCreate,OnboardingRestore,SendPRL,SendWPRL,Bridge,Receive,Settings}.tsx, src/App.tsx, src/storage/db.ts, src/state/ui-store.ts, public/_headers, index.html.
 

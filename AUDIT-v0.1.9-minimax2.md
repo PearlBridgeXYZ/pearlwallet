@@ -92,7 +92,7 @@ The wallet has three separate send flows (SendPRL, SendETH, SendWPRL), each with
 
 However, there is **no cross-check** to prevent a user from copying a Pearl address (prl1p...) and pasting it into the ETH send field, or vice versa. While the validators will reject each other (a Pearl address fails validEth, an Ethereum address fails validPearl), a **confused user might misinterpret the error message** ("That doesn't look like a valid Ethereum address") as a validation failure rather than a format mismatch.
 
-A typosquat scenario: user on a phishing clone (pearlwallet.xyz → walletmrb.xyz) sees an unfamiliar address in the send field, doesn't realize they're on the wrong domain, and tries to send to what they think is their Ethereum address but is actually a Pearl address they pasted.
+A typosquat scenario: user on a phishing clone (pearlwallet.xyz → pearlwallets.xyz) sees an unfamiliar address in the send field, doesn't realize they're on the wrong domain, and tries to send to what they think is their Ethereum address but is actually a Pearl address they pasted.
 
 **Impact:**  
 - User sends funds to an address on the wrong chain, resulting in permanent loss if the sending address cannot be recovered (UTXO tx signed, value broadcast on wrong network).
@@ -342,7 +342,7 @@ However, the flag is also set on SendPRL.tsx, but **not prominently highlighted 
 ## Threat Model Gaps & Observations
 
 ### Phishing + Domain Typosquat
-The wallet's UI (iframe-bust, CSP, SRI absence) is hardened against embedding and frame-based attacks. However, a typosquat domain (pearlwallet.xyz → walletmrb.xyz) would look identical to users. The manifest and metadata don't include signature verification or domain pinning that could be checked by a user's browser security tools.
+The wallet's UI (iframe-bust, CSP, SRI absence) is hardened against embedding and frame-based attacks. However, a typosquat domain (pearlwallet.xyz → pearlwallets.xyz) would look identical to users. The manifest and metadata don't include signature verification or domain pinning that could be checked by a user's browser security tools.
 
 **Mitigation:** Domain registration with trademark/privacy protection; browser warnings for lookalike domains (browser vendors' responsibility).
 

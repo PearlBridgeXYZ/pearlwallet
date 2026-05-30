@@ -54,7 +54,7 @@ for non-Cloudflare mirrors where the `frame-ancestors` response header from
 iframe-bust is structurally necessary. On those mirrors, the meta CSP IS
 served (it's in the HTML), and it blocks the script.
 
-**Exploit path.** Attacker hosts `pearlwallet.xyz` on an IPFS gateway or S3
+**Exploit path.** Attacker hosts a `pearlwallet.xyz` clone on an IPFS gateway or S3
 mirror, then embeds it in a clickjacking iframe on `evil.example`. The
 browser:
 1. Reads the inline meta CSP → installs `script-src 'self'` policy.

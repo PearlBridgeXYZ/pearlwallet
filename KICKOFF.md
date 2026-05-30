@@ -15,7 +15,7 @@ A non-custodial browser wallet at `pearlwallet.xyz` for retail PRL holders. Hold
 React 18 + Vite + TS + Tailwind + shadcn. viem for Eth. @noble/curves + @scure/btc-signer for Pearl. Dexie for encrypted IndexedDB storage. Web Worker for all crypto.
 
 ## Hosting
-Cloudflare Pages SPA + Cloudflare Worker RPC proxy + Primary pearld/esplora indexer.
+Cloudflare Pages SPA + Cloudflare Worker RPC proxy + small VPS for pearld/esplora indexer.
 
 ## Timeline
 9 weeks to mainnet beta. Audit gate at week 7.

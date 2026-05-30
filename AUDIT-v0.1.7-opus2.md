@@ -1,6 +1,6 @@
 # Pearl Web Wallet v0.1.7 — Independent Adversarial Review (opus2)
 
-**Scope:** v0.1.7 source tree at `.`, focus on the eleven question areas in the brief (concurrency, AAD migration, UTXO DoS, viem EIP-712, JSON boundary, KDF strength, build pipeline, storage, UI focus/paste, Worker isolation, partial-pool semantics).
+**Scope:** v0.1.7 source tree, focus on the eleven question areas in the brief (concurrency, AAD migration, UTXO DoS, viem EIP-712, JSON boundary, KDF strength, build pipeline, storage, UI focus/paste, Worker isolation, partial-pool semantics).
 **Method:** read-only; reviewed v0.1.6-opus2 only for format; did not echo prior findings.
 **Verdict (one line):** v0.1.7 closes the headline H1/H2/H3 gaps from v0.1.6 cleanly. The remaining issues are real-but-bounded: (a) `worker-src 'self' blob:` in dist puts Vite's blob-worker URL on a CSP that is *missing* `frame-ancestors`, (b) production builds ship sourcemaps with `sourceMappingURL` annotations, (c) `makeAsyncLock` does NOT cover `init()`, the OTC-price-proxy fetch, or `useUI` mutations, (d) AAD is JSON.stringify — non-deterministic across engines if ever extended, (e) Worker `postMessage(WorkerCmd)` ships mnemonics/passwords by **structuredClone** — they linger in two heaps until GC.
 
@@ -304,4 +304,4 @@ A CSP violation in a deployed wallet (e.g. a third-party script injection attemp
 
 **Runner-up:** **H1 — sourcemaps in dist**. Trivial to fix (`sourcemap: false`); large information disclosure delta.
 
-**Report path:** `./AUDIT-v0.1.7-opus2.md`
+**Report path:** `AUDIT-v0.1.7-opus2.md`

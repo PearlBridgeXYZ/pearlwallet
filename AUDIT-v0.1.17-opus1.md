@@ -17,8 +17,8 @@ same release:
    document with the worker baked in as a data URI, CSS inlined,
    favicons as data URIs, runnable from `file://`.
 2. **Manifest MIME fix on the nginx mirror.** `manifest.webmanifest`
-   was serving as `application/octet-stream` from pearlwallet.xyz and
-   pearlwallet.xyz, which blocked PWA install (Chrome rejects the
+   was serving as `application/octet-stream` from pearlwallet.xyz,
+   which blocked PWA install (Chrome rejects the
    manifest under that MIME). Patched the host's `/etc/nginx/mime.types`
    to register `application/manifest+json` for `webmanifest`. CF Pages
    deploy (when source flips on) already serves it correctly via
@@ -48,8 +48,8 @@ same release:
   `github.com/PearlBridgeXYZ/pearlwallet/releases/latest`.
 - (host-side, not in repo) nginx `mime.types` — added
   `application/manifest+json webmanifest;`. Reload verified, both
-  pearlwallet.xyz and pearlwallet.xyz now serve the manifest with the
-  correct Content-Type.
+  pearlwallet.xyz now serves the manifest with the correct
+  Content-Type.
 
 ## Offline-readiness audit (commissioned)
 
