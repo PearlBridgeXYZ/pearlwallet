@@ -56,6 +56,11 @@ export default function SignMultisigPsbt() {
   >({ kind: "idle" });
   const [relayStatus, setRelayStatus] = useState<ProposalStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
+  // Latch the signedAt for an attempted post so retry-after-error reuses
+  // the same (psbt, signedAt) pair and lands as idempotent rather than
+  // as a 409 conflict. Cleared by anything that invalidates the prior
+  // attempt (a re-sign, manual edit of the PSBT, new proposal).
+  const postSignedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!multisigEnabled) navigate("/dashboard", { replace: true });
@@ -186,6 +191,11 @@ export default function SignMultisigPsbt() {
         psbtBase64: psbt.trim(),
       });
       setPsbtCurrent(psbtBase64);
+      // Re-signing invalidates any previous post attempt's latched
+      // signedAt — the new PSBT bytes change the proof digest, so the
+      // next /sig POST must be a fresh attempt rather than a retry.
+      postSignedAtRef.current = null;
+      setPostState({ kind: "idle" });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -202,7 +212,13 @@ export default function SignMultisigPsbt() {
     setPostState({ kind: "posting" });
     setError(null);
     try {
-      const signedAt = Math.floor(Date.now() / 1000);
+      // Reuse a latched signedAt if the user is retrying after a flake.
+      // Without this, every click mints a fresh signedAt → a fresh
+      // proof → and the relay sees it as a CONFLICT (different signed_at
+      // under the same (token, signer)) rather than an idempotent retry.
+      const signedAt =
+        postSignedAtRef.current ?? Math.floor(Date.now() / 1000);
+      postSignedAtRef.current = signedAt;
       const proof = await signVaultSigProof({
         vault: analysis.match.vault,
         token: proposalToken,
