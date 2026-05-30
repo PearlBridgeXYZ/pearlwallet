@@ -50,7 +50,7 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
         return jsonResp({ result: [{
           txid: "aa".repeat(32),
           vin: [{ txid: "bb".repeat(32), vout: 0 }],
-          vout: [{ value: 12.34567891, n: 0, scriptPubKey: { address: ADDR } }],
+          vout: [{ value: 12.34567891, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
         }], error: null });
       }
       return jsonResp({ result: [], error: null });
@@ -69,12 +69,12 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
         return jsonResp({ result: [
           // tx1 pays our address 10 PRL at vout 0
           { txid: "11".repeat(32), vin: [], vout: [
-            { value: 10.0, n: 0, scriptPubKey: { address: ADDR } },
+            { value: 10.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } },
           ] },
           // tx2 spends tx1:0 as input — so the 10 PRL UTXO is gone
           { txid: "22".repeat(32),
             vin: [{ txid: "11".repeat(32), vout: 0 }],
-            vout: [{ value: 5.0, n: 0, scriptPubKey: { address: ADDR } }] },
+            vout: [{ value: 5.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }] },
         ], error: null });
       }
       return jsonResp({ result: [], error: null });
@@ -90,7 +90,7 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
       if (call === 1) return jsonResp({ result: [{
         txid: "ff".repeat(32),
         vin: [],
-        vout: [{ value: 1.0, n: 0, scriptPubKey: { addresses: [ADDR, "prl1pother…"] } }],
+        vout: [{ value: 1.0, n: 0, scriptPubKey: { addresses: [ADDR, "prl1pother…"], hex: "5120" + "01".repeat(32) } }],
       }], error: null });
       return jsonResp({ result: [], error: null });
     }));
@@ -107,7 +107,7 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
         const txs = Array.from({ length: PAGE }, (_, i) => ({
           txid: i.toString(16).padStart(64, "0"),
           vin: [],
-          vout: [{ value: 1.0, n: 0, scriptPubKey: { address: ADDR } }],
+          vout: [{ value: 1.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
         }));
         return jsonResp({ result: txs, error: null });
       }

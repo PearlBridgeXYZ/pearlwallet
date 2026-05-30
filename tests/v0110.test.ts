@@ -229,6 +229,8 @@ describe("v0.1.11 / broadcastPearlPrecomposed", () => {
       tipGrains: 0n,
       changeGrains: 499_999_000n,
       degraded: false,
+      spendableGrains: 1_000_000_000n,
+      spendableUtxoCount: 1,
     };
   }
 

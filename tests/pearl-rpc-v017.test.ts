@@ -29,7 +29,11 @@ describe("C1: MAX_UTXO_WALK_PAGES cap", () => {
 
   it("exports a sane cap (small enough to never let a malicious sentry hang a tab)", () => {
     expect(MAX_UTXO_WALK_PAGES).toBeGreaterThan(0);
-    expect(MAX_UTXO_WALK_PAGES).toBeLessThanOrEqual(50);
+    // v0.3.1: raised from 50 → 200 to support high-activity wallets.
+    // 200 pages × 100 = 20k txs per address — still bounded; the wallet
+    // remains responsive on a hostile-sentry tarpit because the walker
+    // hard-stops at the cap regardless of what the sentry sends.
+    expect(MAX_UTXO_WALK_PAGES).toBeLessThanOrEqual(200);
   });
 
   it("returns degraded:true (not throw) when the sentry returns a full page forever", async () => {
@@ -47,7 +51,7 @@ describe("C1: MAX_UTXO_WALK_PAGES cap", () => {
         // unique txids per page so dedupe doesn't short-circuit us
         txid: `${calls.toString(16).padStart(4, "0")}${i.toString(16).padStart(60, "0")}`,
         vin: [],
-        vout: [{ value: 0.00000001, n: 0, scriptPubKey: { address: ADDR } }],
+        vout: [{ value: 0.00000001, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
       }));
       return jsonResp({ result: txs, error: null });
     }));
@@ -66,7 +70,7 @@ describe("C1: MAX_UTXO_WALK_PAGES cap", () => {
       result: [{
         txid: "aa".repeat(32),
         vin: [],
-        vout: [{ value: 1.0, n: 0, scriptPubKey: { address: ADDR } }],
+        vout: [{ value: 1.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
       }],
       error: null,
     })));
@@ -101,7 +105,7 @@ describe("C1: two-pass per-page walk (hostile vin-before-vout ordering)", () => 
             txid: "22".repeat(32),
             vin: [{ txid: "11".repeat(32), vout: 0 }],
             vout: [
-              { value: 7.0, n: 0, scriptPubKey: { address: ADDR } },
+              { value: 7.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } },
             ],
           },
           // tx1 (funding) appears SECOND — the UTXO it creates is the one
@@ -110,7 +114,7 @@ describe("C1: two-pass per-page walk (hostile vin-before-vout ordering)", () => 
             txid: "11".repeat(32),
             vin: [],
             vout: [
-              { value: 10.0, n: 0, scriptPubKey: { address: ADDR } },
+              { value: 10.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } },
             ],
           },
         ], error: null });
@@ -137,13 +141,13 @@ describe("C1: two-pass per-page walk (hostile vin-before-vout ordering)", () => 
           {
             txid: "44".repeat(32),
             vin: [{ txid: "33".repeat(32), vout: 0 }],
-            vout: [{ value: 2.0, n: 0, scriptPubKey: { address: ADDR } }],
+            vout: [{ value: 2.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
           },
           // Funding tx — vout pays a third party, not us.
           {
             txid: "33".repeat(32),
             vin: [],
-            vout: [{ value: 99.0, n: 0, scriptPubKey: { address: "prl1pother…" } }],
+            vout: [{ value: 99.0, n: 0, scriptPubKey: { address: "prl1pother…", hex: "5120" + "01".repeat(32) } }],
           },
         ], error: null });
       }
@@ -169,20 +173,20 @@ describe("C1: two-pass per-page walk (hostile vin-before-vout ordering)", () => 
           {
             txid: "aa".repeat(32),
             vin: [{ txid: "bb".repeat(32), vout: 0 }],
-            vout: [{ value: 0.1, n: 0, scriptPubKey: { address: "prl1pelsewhere…" } }],
+            vout: [{ value: 0.1, n: 0, scriptPubKey: { address: "prl1pelsewhere…", hex: "5120" + "02".repeat(32) } }],
           },
           {
             txid: "bb".repeat(32),
             vin: [],
             vout: [
-              { value: 5.0, n: 0, scriptPubKey: { address: ADDR } },
-              { value: 3.0, n: 1, scriptPubKey: { address: ADDR } },
+              { value: 5.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } },
+              { value: 3.0, n: 1, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } },
             ],
           },
           {
             txid: "cc".repeat(32),
             vin: [{ txid: "bb".repeat(32), vout: 1 }],
-            vout: [{ value: 0.1, n: 0, scriptPubKey: { address: "prl1pelsewhere…" } }],
+            vout: [{ value: 0.1, n: 0, scriptPubKey: { address: "prl1pelsewhere…", hex: "5120" + "02".repeat(32) } }],
           },
         ], error: null });
       }

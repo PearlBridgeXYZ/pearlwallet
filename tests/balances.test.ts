@@ -60,7 +60,7 @@ describe("fetchBalances — Pearl pool aggregation", () => {
               result: [{
                 txid: addr.slice(-32).padStart(64, "0"),
                 vin: [],
-                vout: [{ value: credits[addr], n: 0, scriptPubKey: { address: addr } }],
+                vout: [{ value: credits[addr], n: 0, scriptPubKey: { address: addr, hex: "5120" + "00".repeat(32) } }],
               }],
               error: null,
             });
@@ -94,7 +94,7 @@ describe("fetchBalances — Pearl pool aggregation", () => {
               result: [{
                 txid: "aa".repeat(32),
                 vin: [],
-                vout: [{ value: 7.0, n: 0, scriptPubKey: { address: POOL[0] } }],
+                vout: [{ value: 7.0, n: 0, scriptPubKey: { address: POOL[0], hex: "5120" + "00".repeat(32) } }],
               }],
               error: null,
             });
@@ -135,7 +135,7 @@ describe("fetchBalances — Pearl pool aggregation", () => {
               result: [{
                 txid: addr.slice(-32).padStart(64, "0"),
                 vin: [],
-                vout: [{ value: credits[addr], n: 0, scriptPubKey: { address: addr } }],
+                vout: [{ value: credits[addr], n: 0, scriptPubKey: { address: addr, hex: "5120" + "00".repeat(32) } }],
               }],
               error: null,
             });

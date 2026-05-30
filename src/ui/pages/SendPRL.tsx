@@ -1,8 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
+import { useUI } from "../../state/ui-store";
 import { validPearl } from "../../lib/validate";
 import { formatGrains, parsePRL } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
@@ -10,7 +11,12 @@ import { tipAddressFor } from "../../chains/pearl/tip";
 import {
   broadcastPearlPrecomposed,
   composePearlSend,
+  composePearlSendDeepRetry,
+  InsufficientFundsError,
+  PEARL_PREVIEW_FRESHNESS_MS,
+  PEARL_PREVIEW_REFRESH_AT_MS,
 } from "../../services/pearl-tx";
+import type { Balances } from "../../services/balances";
 
 type FeeTier = "low" | "normal" | "high";
 
@@ -23,6 +29,12 @@ const FEERATE_BY_TIER: Record<FeeTier, bigint> = {
   high: 4n,
 };
 
+// Cache freshness window for re-using the Dashboard's UTXO walk in
+// Send. Shorter than PEARL_PREVIEW_FRESHNESS_MS because we want fresh
+// coins at compose time; the preview-stamp window covers the user's
+// pause between compose and click.
+const UTXO_CACHE_FRESHNESS_MS = 30_000;
+
 interface ValidatedSend {
   dest: string;
   grains: bigint;
@@ -32,13 +44,18 @@ interface ValidatedSend {
 // take a few seconds on a cold sentry. A flat "Walking UTXOs…" line
 // looked frozen — users assumed the page was broken. Cycle through a
 // few status messages with a pulsing dot so it feels alive.
-function ComposingHint() {
-  const messages = [
-    "Walking your receive-address pool…",
-    "Reading UTXOs from the Pearl sentry…",
-    "Picking the smallest set of coins…",
-    "Almost there — a pool walk takes a few seconds.",
-  ];
+function ComposingHint({ usingCache }: { usingCache: boolean }) {
+  const messages = usingCache
+    ? [
+        "Using cached coins from your dashboard…",
+        "Picking the smallest set that covers this send…",
+      ]
+    : [
+        "Walking your receive-address pool…",
+        "Reading UTXOs from the Pearl sentry…",
+        "Picking the smallest set of coins…",
+        "Almost there — a pool walk takes a few seconds.",
+      ];
   const [idx, setIdx] = useState(0);
   useEffect(() => {
     const t = setInterval(() => {
@@ -56,28 +73,52 @@ function ComposingHint() {
 
 export default function SendPRL() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
+  const ethEnabled = useUI((s) => s.ethEnabled);
   const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
+  const addresses = useWallet((s) => s.addresses);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
   const [tier, setTier] = useState<FeeTier>("normal");
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
+  const [insufficient, setInsufficient] = useState<InsufficientFundsError | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
-  // The per-tx tip checkbox always starts on, independent of any
-  // previously persisted Settings toggle. The Settings page remains the
-  // way to opt out of all tips going forward; this default keeps the
-  // in-tx flow consistent with how the wallet should ship by default.
   const [tipThisTx, setTipThisTx] = useState(true);
   const [validated, setValidated] = useState<ValidatedSend | null>(null);
   const [sending, setSending] = useState(false);
+  // When true, force a deep walk on the next compose (used by the
+  // "Search deeper" button after an InsufficientFundsError on a
+  // degraded walk).
+  const [deepWalk, setDeepWalk] = useState(false);
+
+  // Read the dashboard's balance query out of the react-query cache so
+  // we can re-use its UTXO walk instead of repeating it. Cache key
+  // mirrors Dashboard.tsx exactly — if either side drifts, the cache
+  // misses and we just fall through to a live walk.
+  const balancesCacheKey = useMemo(
+    () => [
+      "balances",
+      addresses?.pearlPool?.join(",") ?? addresses?.pearl,
+      addresses?.eth,
+      ethEnabled,
+    ],
+    [addresses, ethEnabled],
+  );
+  const cachedBalances = queryClient.getQueryData<Balances>(balancesCacheKey);
+  const cachedUtxos =
+    cachedBalances &&
+    Date.now() - cachedBalances.prlUtxosFetchedAt < UTXO_CACHE_FRESHNESS_MS
+      ? cachedBalances.prlUtxos
+      : undefined;
 
   // Pre-flight: compose the tx so the user sees the actual fee + change
-  // + UTXO count BEFORE clicking Send. Same composePearlSend the
-  // broadcast path uses — no preview/broadcast drift. Refetches when any
-  // input changes; tightly keyed on validated state so the compose stage
-  // doesn't pre-walk the UTXO set on every keystroke.
+  // + UTXO count BEFORE clicking Send. When the dashboard's UTXO cache
+  // is fresh we reuse it (Preview opens instantly); otherwise we walk
+  // live with the default depth. A "Search deeper" retry forces a fresh
+  // walk at the hard maximum depth.
   const previewQ = useQuery({
     queryKey: [
       "prl-preview",
@@ -86,23 +127,75 @@ export default function SendPRL() {
       tipThisTx,
       validated?.dest,
       validated?.grains.toString(),
+      deepWalk,
     ],
     enabled: stage === "preview" && !!validated && pool.length > 0,
     queryFn: async () => {
-      const composed = await composePearlSend({
-        network: pearlNetwork,
-        pool,
-        destination: validated!.dest,
-        amountGrains: validated!.grains,
-        feerateSatPerVbyte: FEERATE_BY_TIER[tier],
-        includeTip: tipThisTx,
-      });
-      // Stamp so broadcast can refuse a stale preview. v0.1.9 audit
-      // O2-H-1: a hostile sentry can return a different UTXO set on a
-      // second walk — the user must sign the set they saw.
+      const composed = deepWalk
+        ? await composePearlSendDeepRetry({
+            network: pearlNetwork,
+            pool,
+            destination: validated!.dest,
+            amountGrains: validated!.grains,
+            feerateSatPerVbyte: FEERATE_BY_TIER[tier],
+            includeTip: tipThisTx,
+          })
+        : await composePearlSend({
+            network: pearlNetwork,
+            pool,
+            destination: validated!.dest,
+            amountGrains: validated!.grains,
+            feerateSatPerVbyte: FEERATE_BY_TIER[tier],
+            includeTip: tipThisTx,
+            cachedUtxos,
+          });
       return { ...composed, composedAt: Date.now() };
     },
+    // Disable react-query's own retry — we surface InsufficientFundsError
+    // structurally below and want the user to drive the deep-retry.
+    retry: false,
   });
+
+  // Capture InsufficientFundsError out of the query error so the UI
+  // can render structured diagnostics + a "Search deeper" CTA.
+  useEffect(() => {
+    if (previewQ.isError && previewQ.error instanceof InsufficientFundsError) {
+      setInsufficient(previewQ.error);
+    } else if (!previewQ.isError) {
+      setInsufficient(null);
+    }
+  }, [previewQ.isError, previewQ.error]);
+
+  // Background re-quote: if a fresh preview is sitting on screen and
+  // approaches the staleness window, refetch silently so the click-Send
+  // moment lands on fresh coins. The user sees the input count update
+  // but no spinner takes over — the existing composed preview stays
+  // visible until the new one arrives.
+  const composed = previewQ.data;
+  const composedAgeMs = composed ? Date.now() - composed.composedAt : 0;
+  useEffect(() => {
+    if (!composed || stage !== "preview") return;
+    const elapsed = Date.now() - composed.composedAt;
+    const refreshIn = Math.max(0, PEARL_PREVIEW_REFRESH_AT_MS - elapsed);
+    const t = setTimeout(() => {
+      previewQ.refetch();
+    }, refreshIn);
+    return () => clearTimeout(t);
+  }, [composed, stage, previewQ]);
+
+  // Tick-driver for the countdown render. setInterval rather than
+  // rAF — we only need second-level resolution for the visible timer.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!composed || stage !== "preview") return;
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [composed, stage]);
+
+  const secondsToStale = composed
+    ? Math.max(0, Math.ceil((PEARL_PREVIEW_FRESHNESS_MS - composedAgeMs) / 1000))
+    : 0;
+  const composeFresh = composedAgeMs < PEARL_PREVIEW_FRESHNESS_MS;
 
   function checkSend(): { ok: true; v: ValidatedSend } | { ok: false; reason: string } {
     if (!validPearl(destination, pearlNetwork)) {
@@ -127,9 +220,9 @@ export default function SendPRL() {
     setSending(true);
     setError(null);
     try {
-      const { composedAt, ...composed } = q;
+      const { composedAt, ...c } = q;
       const { txid: hash } = await broadcastPearlPrecomposed(
-        { composed, composedAt },
+        { composed: c, composedAt },
         pearlNetwork,
       );
       setTxid(hash);
@@ -137,10 +230,8 @@ export default function SendPRL() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg === "E_PREVIEW_STALE") {
-        setError("UTXO selection is stale — re-confirm to refresh.");
+        setError("UTXO selection expired — refreshing…");
         previewQ.refetch();
-      } else if (msg.includes("E_INSUFFICIENT_FUNDS")) {
-        setError("Insufficient PRL to cover amount + fee.");
       } else if (msg.includes("E_NO_UTXOS")) {
         setError("No spendable UTXOs found across your receive pool.");
       } else {
@@ -184,7 +275,6 @@ export default function SendPRL() {
 
   if (stage === "preview") {
     const v = validated;
-    const composed = previewQ.data;
     return (
       <Page title="Send PRL">
         <div className="card">
@@ -218,7 +308,15 @@ export default function SendPRL() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-ink-500">Inputs</dt>
-                  <dd>{composed.utxos.length} UTXO{composed.utxos.length === 1 ? "" : "s"}</dd>
+                  <dd>
+                    {composed.utxos.length} UTXO
+                    {composed.utxos.length === 1 ? "" : "s"}
+                    {composed.utxos.length > 50 && (
+                      <span className="ml-1 text-xs text-amber-700 dark:text-amber-400">
+                        (large tx — signing may take a moment)
+                      </span>
+                    )}
+                  </dd>
                 </div>
                 <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
                   <dt className="font-medium">Total leaving wallet</dt>
@@ -230,18 +328,70 @@ export default function SendPRL() {
             )}
           </dl>
 
-          {previewQ.isLoading && <ComposingHint />}
-          {previewQ.isError && (
+          {previewQ.isLoading && <ComposingHint usingCache={!!cachedUtxos && !deepWalk} />}
+          {previewQ.isFetching && !!composed && (
+            <p className="mt-2 text-xs text-ink-500">Refreshing UTXO selection…</p>
+          )}
+
+          {/* Structured insufficient-funds diagnostic + deep-retry CTA. */}
+          {insufficient && (
+            <div className="mt-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-900 dark:border-red-700 dark:bg-red-900/20 dark:text-red-200">
+              <div className="font-medium">Not enough spendable PRL for this send.</div>
+              <ul className="mt-1 list-disc pl-4">
+                <li>Need: {formatGrains(insufficient.need)} PRL (amount + fee + tip)</li>
+                <li>
+                  Found: {formatGrains(insufficient.have)} PRL across{" "}
+                  {insufficient.utxoCount} UTXO
+                  {insufficient.utxoCount === 1 ? "" : "s"}
+                </li>
+                <li>
+                  Short by: {formatGrains(insufficient.need - insufficient.have)} PRL
+                </li>
+              </ul>
+              {insufficient.degraded && (
+                <div className="mt-2">
+                  The UTXO walk hit its page cap before scanning everything —
+                  the chain may hold more coins than shown.
+                  <button
+                    className="ml-2 underline"
+                    onClick={() => {
+                      setDeepWalk(true);
+                      setInsufficient(null);
+                      previewQ.refetch();
+                    }}
+                  >
+                    Search deeper
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {previewQ.isError && !insufficient && (
             <p className="mt-3 text-sm text-red-600">
               Couldn't compose: {(previewQ.error as Error).message}
             </p>
           )}
-          {composed?.degraded && (
+          {composed?.degraded && !insufficient && (
             <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
               Some receive addresses returned partial UTXO sets. The send
-              may not use every available coin; consider retrying if it
-              fails for insufficient funds.
+              composed successfully but the visible balance may under-report
+              your actual chain balance.
             </div>
+          )}
+
+          {composed && composeFresh && (
+            <p className="mt-2 text-xs text-ink-500">
+              Preview fresh for {secondsToStale}s
+              {composed.spendableGrains > 0n && (
+                <>
+                  {" · "}
+                  {formatGrains(composed.spendableGrains)} PRL across{" "}
+                  {composed.spendableUtxoCount} UTXO
+                  {composed.spendableUtxoCount === 1 ? "" : "s"} spendable
+                </>
+              )}
+            </p>
           )}
 
           <label className="mt-4 flex items-start gap-2 rounded-xl border border-ink-200 p-3 text-sm dark:border-ink-700">
@@ -276,7 +426,7 @@ export default function SendPRL() {
               Back
             </button>
             <button
-              disabled={!composed || sending}
+              disabled={!composed || sending || !!insufficient}
               onClick={broadcast}
               className="btn-primary flex-1"
             >
@@ -349,6 +499,8 @@ export default function SendPRL() {
               return;
             }
             setError(null);
+            setDeepWalk(false);
+            setInsufficient(null);
             setValidated(result.v);
             setStage("preview");
           }}

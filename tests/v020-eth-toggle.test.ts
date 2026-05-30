@@ -184,9 +184,14 @@ describe("v0.2.0 / fetchBalances honors ethEnabled=false (no Eth RPC calls)", ()
     // Stub the pearl side + prices so the test is hermetic. The eth
     // side is gated by `if (ethEnabled)` — if the gate works, the
     // bridge module is never touched (we spy on it to assert that).
-    vi.spyOn(pearlRpc, "fetchPrlBalanceGrains").mockResolvedValue({
-      grains: 100n,
+    // v0.3.1: balances.ts now walks via fetchPrlUtxos directly so the
+    // visible balance and the spendable UTXO set can never diverge.
+    vi.spyOn(pearlRpc, "fetchPrlUtxos").mockResolvedValue({
+      utxos: [
+        { txid: "a".repeat(64), vout: 0, valueGrains: 100n, scriptHex: "5120" + "00".repeat(32) },
+      ],
       degraded: false,
+      droppedNoScript: 0,
     });
     vi.spyOn(prices, "fetchPrlPriceUsd").mockResolvedValue(1.23);
     const readWprl = vi.spyOn(bridge, "readWprlBalance");

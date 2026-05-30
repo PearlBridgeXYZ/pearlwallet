@@ -11,7 +11,7 @@
 // funds that were sent to a non-zero index.
 
 import { readWprlBalance } from "./bridge";
-import { fetchPrlBalanceGrains } from "./pearl-rpc";
+import { fetchPrlUtxos, type PrlUtxo } from "./pearl-rpc";
 import { fetchPrlPriceUsd } from "./prices";
 import { ethClient } from "../chains/ethereum/rpc";
 import type { EthNetwork } from "../chains/ethereum/network";
@@ -46,18 +46,35 @@ interface PoolWalkResult {
   // result. The total is still summed but under-reports — UI surfaces
   // a "partial" label so the user doesn't trust the visible balance.
   degraded: boolean;
+  /** UTXO list aggregated across the pool, tagged with poolIndex.
+   *  Surfaced so the wallet store can cache it; Send then opens the
+   *  Preview instantly instead of repeating the ~6s pool walk. */
+  utxos: PoolUtxoRecord[];
+}
+
+export interface PoolUtxoRecord extends PrlUtxo {
+  poolIndex: number;
 }
 
 async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
   const grains: bigint[] = new Array(pool.length).fill(0n);
+  const utxos: PoolUtxoRecord[] = [];
   let failures = 0;
   let degraded = false;
   for (let i = 0; i < pool.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, 300));
     try {
-      const r = await fetchPrlBalanceGrains(pool[i]!);
-      grains[i] = r.grains;
-      if (r.degraded) degraded = true;
+      // v0.3.1: single unified walk. Same call Send uses — balance and
+      // spendable can never diverge for any reason other than a UTXO
+      // being spent between the two walks.
+      const r = await fetchPrlUtxos(pool[i]!);
+      let addrGrains = 0n;
+      for (const u of r.utxos) {
+        utxos.push({ ...u, poolIndex: i });
+        addrGrains += u.valueGrains;
+      }
+      grains[i] = addrGrains;
+      if (r.degraded || r.droppedNoScript > 0) degraded = true;
     } catch {
       failures++;
     }
@@ -65,7 +82,7 @@ async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
   // If MORE than half the pool failed we treat the whole walk as a
   // bust — the visible balance would be too suspect to show.
   if (failures > pool.length / 2) throw new Error("pool walk failed");
-  return { grains, failures, degraded };
+  return { grains, failures, degraded, utxos };
 }
 
 export interface Balances {
@@ -82,6 +99,13 @@ export interface Balances {
   wprlSource: "live" | "error" | "off";
   ethSource: "live" | "error" | "off";
   priceSource: "live" | "error";
+  /** UTXO set returned by the pool walk, kept around so Send can skip
+   *  its own walk and open Preview instantly. Empty array on walk
+   *  failure ("error" source) — Send falls back to a live walk. */
+  prlUtxos: PoolUtxoRecord[];
+  /** Wall-clock timestamp the walk completed. Used by Send to decide
+   *  whether the cache is fresh enough to use as-is. */
+  prlUtxosFetchedAt: number;
 }
 
 export interface FetchBalancesOpts {
@@ -103,9 +127,12 @@ export async function fetchBalances(
 
   let prl = 0n;
   let prlSource: Balances["prlSource"] = "live";
+  let prlUtxos: PoolUtxoRecord[] = [];
+  const prlUtxosFetchedAt = Date.now();
   try {
     const result = await fetchPoolBalances(pool);
     prl = result.grains.reduce((acc, g) => acc + g, 0n);
+    prlUtxos = result.utxos;
     // Either a per-address failure OR a page-cap hit makes the sum
     // a lower bound rather than a true balance — both surface as
     // "partial" so the UI can warn the user.
@@ -153,5 +180,7 @@ export async function fetchBalances(
     wprlSource,
     ethSource,
     priceSource,
+    prlUtxos,
+    prlUtxosFetchedAt,
   };
 }

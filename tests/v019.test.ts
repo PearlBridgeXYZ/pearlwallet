@@ -204,9 +204,10 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
             { txid: TXID_A, vout: 0, valueGrains: 1_000_000_000n, scriptHex: "5120" + "00".repeat(32) },
           ],
           degraded: false,
+          droppedNoScript: 0,
         };
       }
-      return { utxos: [], degraded: false };
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
     });
 
     const c = await composePearlSend({
@@ -235,9 +236,10 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
         return {
           utxos: [{ txid: TXID_A, vout: 0, valueGrains: 1_000_000_000n, scriptHex: "5120" + "00".repeat(32) }],
           degraded: false,
+          droppedNoScript: 0,
         };
       }
-      return { utxos: [], degraded: false };
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
     });
 
     const c = await composePearlSend({
@@ -260,15 +262,17 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
         return {
           utxos: [{ txid: TXID_A, vout: 0, valueGrains: 100_000_000n, scriptHex: "5120" + "00".repeat(32) }],
           degraded: false,
+          droppedNoScript: 0,
         };
       }
       if (addr === POOL[1]) {
         return {
           utxos: [{ txid: TXID_B, vout: 0, valueGrains: 800_000_000n, scriptHex: "5120" + "00".repeat(32) }],
           degraded: false,
+          droppedNoScript: 0,
         };
       }
-      return { utxos: [], degraded: false };
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
     });
 
     const c = await composePearlSend({
@@ -296,9 +300,10 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
         return {
           utxos: [{ txid: TXID_C, vout: 0, valueGrains: utxoValue, scriptHex: "5120" + "00".repeat(32) }],
           degraded: false,
+          droppedNoScript: 0,
         };
       }
-      return { utxos: [], degraded: false };
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
     });
     const c = await composePearlSend({
       network: "mainnet",
@@ -321,9 +326,10 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
         return {
           utxos: [{ txid: TXID_A, vout: 0, valueGrains: 1_000_000_000n, scriptHex: "5120" + "00".repeat(32) }],
           degraded: true, // pretend page-cap hit
+          droppedNoScript: 0,
         };
       }
-      return { utxos: [], degraded: false };
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
     });
     const c = await composePearlSend({
       network: "mainnet",
@@ -341,9 +347,10 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
         return {
           utxos: [{ txid: TXID_A, vout: 0, valueGrains: 100n, scriptHex: "5120" + "00".repeat(32) }],
           degraded: false,
+          droppedNoScript: 0,
         };
       }
-      return { utxos: [], degraded: false };
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
     });
     await expect(
       composePearlSend({
@@ -357,7 +364,7 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
   });
 
   it("throws E_NO_UTXOS when the pool has no spendable outputs", async () => {
-    vi.spyOn(pearlRpc, "fetchPrlUtxos").mockResolvedValue({ utxos: [], degraded: false });
+    vi.spyOn(pearlRpc, "fetchPrlUtxos").mockResolvedValue({ utxos: [], degraded: false, droppedNoScript: 0 });
     await expect(
       composePearlSend({
         network: "mainnet",

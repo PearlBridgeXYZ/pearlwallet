@@ -254,13 +254,26 @@ function voutPaysAddress(vout: RawTxVout, address: string): boolean {
     vout.scriptPubKey.addresses.includes(address);
 }
 
-// Hard cap on pagination depth. A hostile or buggy sentry that returns
+// Default pagination depth. A hostile or buggy sentry that returns
 // `page.length === PAGE` on every request (looping cursor, dummy data,
 // reorg replay) would otherwise spin the tab indefinitely — 100% CPU,
-// memory growth, no observable error. 20 pages × 100 = 2000 txs is
-// already more activity than any reasonable retail wallet sees, and
-// well past the point where we should stop trusting the RPC anyway.
-export const MAX_UTXO_WALK_PAGES = 20;
+// memory growth, no observable error.
+//
+// v0.3.1: raised from 20 → 60. The old 2000-tx ceiling was masking
+// spendable funds on high-activity wallets — balance walks would
+// degrade and Send would throw E_INSUFFICIENT_FUNDS even though the
+// chain held more coins than the cap-truncated walk found. Callers
+// that *need* to go deeper (e.g. a Send retry after E_INSUFFICIENT_FUNDS
+// on a degraded walk) can pass a higher `maxPages` to ratchet up to
+// MAX_UTXO_WALK_PAGES_HARD before we genuinely give up.
+export const MAX_UTXO_WALK_PAGES = 60;
+
+// Hard ceiling. Callers passing larger maxPages are clamped here.
+// 200 pages × 100 = 20,000 txs per address. At 20 addresses in the
+// pool that's 400k txs — beyond which we refuse to spin further to
+// keep the tab responsive even on a hostile-sentry tarpit. A retail
+// wallet hitting this number genuinely needs a desktop client.
+export const MAX_UTXO_WALK_PAGES_HARD = 200;
 
 // Per-page item cap. A sentry that returns 50k entries in a single page
 // (intentional flood, JSON-RPC misconfig) would blow the worker heap
@@ -278,89 +291,27 @@ export interface PrlBalanceResult {
 }
 
 /**
- * Returns the confirmed + mempool balance (in grains) for `address`,
- * by walking searchrawtransactions in pages and tracking a UTXO set.
+ * Returns the confirmed + mempool balance (in grains) for `address`.
  *
- * The per-page walk runs in TWO passes (vouts first, vins second).
- * A hostile sentry could otherwise order vins before their funding
- * vouts on the same page — the vin delete would no-op against an
- * uncredited UTXO and the later vout credit would survive, leaving
- * a spent UTXO in the running total. Two-pass guarantees every vin
- * sees the page's full vout set before deleting.
+ * v0.3.1: now a thin wrapper around fetchPrlUtxos so balance and spend
+ * walks can never diverge. Previously balance walked one way and Send
+ * walked another; a sentry returning some vouts without scriptPubKey.hex
+ * (which Send can't sign against) would inflate the displayed balance
+ * over what was actually spendable, producing the mysterious "500k PRL
+ * displayed but Send says insufficient" failure mode.
  *
- * On hitting the pagination/page-length caps we return `degraded:true`
- * instead of throwing. A throw caused a single hostile-sentry-tarpitted
- * address to flip the entire pool walk to `error` (failures >= 1 was
- * enough on a 20-address pool where most other addresses returned
- * empty), masking real funds. v0.1.7 audit (opus1 M-3 + minimax cross).
+ * `degraded` here means either the walk hit the page cap OR at least
+ * one vout was dropped for missing scriptHex. Both are signals that
+ * the displayed total is a lower bound on the chain's real balance.
  */
-export async function fetchPrlBalanceGrains(address: string): Promise<PrlBalanceResult> {
-  const PAGE = 100;
-  let skip = 0;
-  const utxo = new Map<string, bigint>();
-  // Some sentry paginators have been observed to re-emit a tx across
-  // page boundaries during a reorg, or skip-then-replay during cursor
-  // drift. Deduping outputs by `${txid}:${vout}` across the whole walk
-  // — not just within a page — prevents double-counting a UTXO that we
-  // already credited in an earlier page.
-  const seenOutputs = new Set<string>();
-  let pageCount = 0;
-  let degraded = false;
-
-  while (true) {
-    if (pageCount >= MAX_UTXO_WALK_PAGES) {
-      degraded = true;
-      break;
-    }
-    let page: RawTx[];
-    try {
-      page = await call<RawTx[]>("searchrawtransactions", [address, 1, skip, PAGE]);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      // Zero-activity addresses come back as -5; treat as empty wallet.
-      if (msg.includes("No information available about address")) {
-        return { grains: 0n, degraded: false };
-      }
-      throw err;
-    }
-    if (!page || page.length === 0) break;
-    if (page.length > MAX_RPC_PAGE_LENGTH) {
-      // Server returned a flood. Don't iterate further — that page
-      // alone is already past the policy ceiling — but still process
-      // up to the cap so we surface a partial total rather than 0.
-      degraded = true;
-      page = page.slice(0, MAX_RPC_PAGE_LENGTH);
-    }
-
-    // Pass 1: credit every vout that pays this address.
-    for (const tx of page) {
-      for (const vout of tx.vout) {
-        if (!voutPaysAddress(vout, address)) continue;
-        const key = `${tx.txid}:${vout.n}`;
-        if (seenOutputs.has(key)) continue;
-        seenOutputs.add(key);
-        utxo.set(key, prlToGrains(vout.value));
-      }
-    }
-    // Pass 2: debit every vin's referenced output. After pass 1, any
-    // funding vout that appears later in the same page is already in
-    // `utxo`, so the delete is correct.
-    for (const tx of page) {
-      for (const vin of tx.vin) {
-        if (!vin.txid || vin.vout === undefined) continue;
-        utxo.delete(`${vin.txid}:${vin.vout}`);
-      }
-    }
-
-    pageCount++;
-    if (degraded) break;
-    if (page.length < PAGE) break;
-    skip += page.length;
-  }
-
+export async function fetchPrlBalanceGrains(
+  address: string,
+  opts: FetchUtxosOptions = {},
+): Promise<PrlBalanceResult> {
+  const { utxos, degraded, droppedNoScript } = await fetchPrlUtxos(address, opts);
   let total = 0n;
-  for (const amt of utxo.values()) total += amt;
-  return { grains: total, degraded };
+  for (const u of utxos) total += u.valueGrains;
+  return { grains: total, degraded: degraded || droppedNoScript > 0 };
 }
 
 export interface PrlUtxo {
@@ -373,6 +324,18 @@ export interface PrlUtxo {
 export interface PrlUtxoSet {
   utxos: PrlUtxo[];
   degraded: boolean;
+  /** Number of vouts dropped because scriptPubKey.hex was missing/invalid.
+   *  When nonzero the visible chain balance exceeds spendable — the UI
+   *  surfaces it so a "500k displayed but Send says insufficient" gap
+   *  becomes legible instead of mysterious. */
+  droppedNoScript: number;
+}
+
+export interface FetchUtxosOptions {
+  /** Override the default walk depth. Clamped to MAX_UTXO_WALK_PAGES_HARD.
+   *  Use this when a previous walk came back `degraded:true` and the
+   *  caller wants to dig deeper before throwing E_INSUFFICIENT_FUNDS. */
+  maxPages?: number;
 }
 
 /**
@@ -391,17 +354,25 @@ export interface PrlUtxoSet {
  * numbers is the safer failure mode (user notices, sentry is asked
  * for full data) than silently broadcasting an invalid tx.
  */
-export async function fetchPrlUtxos(address: string): Promise<PrlUtxoSet> {
+export async function fetchPrlUtxos(
+  address: string,
+  opts: FetchUtxosOptions = {},
+): Promise<PrlUtxoSet> {
   const PAGE = 100;
+  const maxPages = Math.min(
+    Math.max(1, opts.maxPages ?? MAX_UTXO_WALK_PAGES),
+    MAX_UTXO_WALK_PAGES_HARD,
+  );
   let skip = 0;
   type Held = { valueGrains: bigint; scriptHex: string };
   const utxo = new Map<string, Held>();
   const seenOutputs = new Set<string>();
   let pageCount = 0;
   let degraded = false;
+  let droppedNoScript = 0;
 
   while (true) {
-    if (pageCount >= MAX_UTXO_WALK_PAGES) {
+    if (pageCount >= maxPages) {
       degraded = true;
       break;
     }
@@ -411,7 +382,7 @@ export async function fetchPrlUtxos(address: string): Promise<PrlUtxoSet> {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("No information available about address")) {
-        return { utxos: [], degraded: false };
+        return { utxos: [], degraded: false, droppedNoScript: 0 };
       }
       throw err;
     }
@@ -428,7 +399,10 @@ export async function fetchPrlUtxos(address: string): Promise<PrlUtxoSet> {
         if (seenOutputs.has(key)) continue;
         seenOutputs.add(key);
         const scriptHex = vout.scriptPubKey.hex;
-        if (!scriptHex || !/^[0-9a-fA-F]+$/.test(scriptHex)) continue;
+        if (!scriptHex || !/^[0-9a-fA-F]+$/.test(scriptHex)) {
+          droppedNoScript++;
+          continue;
+        }
         utxo.set(key, { valueGrains: prlToGrains(vout.value), scriptHex });
       }
     }
@@ -455,7 +429,7 @@ export async function fetchPrlUtxos(address: string): Promise<PrlUtxoSet> {
       scriptHex: held.scriptHex,
     });
   }
-  return { utxos: out, degraded };
+  return { utxos: out, degraded, droppedNoScript };
 }
 
 /** Broadcasts a signed raw transaction. Returns the txid on success. */

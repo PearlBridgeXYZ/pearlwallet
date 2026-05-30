@@ -5,6 +5,7 @@
 import {
   fetchPrlUtxos,
   broadcastPearlTx,
+  MAX_UTXO_WALK_PAGES_HARD,
   type PrlUtxo,
 } from "./pearl-rpc";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
@@ -37,6 +38,13 @@ export interface ComposedPearlTx {
   tipGrains: bigint;
   changeGrains: bigint;
   degraded: boolean;
+  /** Total spendable grains the walk found across the pool, regardless
+   *  of how many UTXOs were ultimately picked. Surfaced so the UI can
+   *  show "X PRL across N inputs" diagnostics. */
+  spendableGrains: bigint;
+  /** UTXO count the walk found across the pool. Pairs with spendableGrains
+   *  for diagnostics. */
+  spendableUtxoCount: number;
 }
 
 export interface ComposeOptions {
@@ -49,6 +57,16 @@ export interface ComposeOptions {
   /** When true, include the v0.1.4 tip output to the PearlBridge dev
    *  team address. UI exposes a per-tx toggle bound to a global pref. */
   includeTip: boolean;
+  /** Optional pre-fetched UTXO set from the dashboard balance walk.
+   *  When fresh and present, skip the per-address re-walk entirely —
+   *  the Send preview opens instantly instead of waiting ~6s. The
+   *  cache is treated as a hint; if it's empty or doesn't satisfy
+   *  the amount, fall back to a live walk. */
+  cachedUtxos?: PoolUtxo[];
+  /** Override walk depth. Caller bumps this on retry after a degraded
+   *  walk produced E_INSUFFICIENT_FUNDS. Clamped server-side to
+   *  MAX_UTXO_WALK_PAGES_HARD. */
+  maxPages?: number;
 }
 
 function estimateFee(numInputs: number, numOutputs: number, feerate: bigint): bigint {
@@ -59,15 +77,18 @@ function estimateFee(numInputs: number, numOutputs: number, feerate: bigint): bi
   return vbytes * feerate;
 }
 
-interface PoolUtxo extends PrlUtxo { poolIndex: number }
+export interface PoolUtxo extends PrlUtxo { poolIndex: number }
 
-async function listPoolUtxos(pool: string[]): Promise<{ utxos: PoolUtxo[]; degraded: boolean }> {
+async function listPoolUtxos(
+  pool: string[],
+  opts: { maxPages?: number } = {},
+): Promise<{ utxos: PoolUtxo[]; degraded: boolean }> {
   let degraded = false;
   const out: PoolUtxo[] = [];
   for (let i = 0; i < pool.length; i++) {
     if (i > 0) await new Promise((r) => setTimeout(r, 300));
     try {
-      const r = await fetchPrlUtxos(pool[i]!);
+      const r = await fetchPrlUtxos(pool[i]!, { maxPages: opts.maxPages });
       if (r.degraded) degraded = true;
       for (const u of r.utxos) out.push({ ...u, poolIndex: i });
     } catch {
@@ -85,14 +106,76 @@ async function listPoolUtxos(pool: string[]): Promise<{ utxos: PoolUtxo[]; degra
   return { utxos: out, degraded };
 }
 
+function sumGrains(utxos: { valueGrains: bigint }[]): bigint {
+  let s = 0n;
+  for (const u of utxos) s += u.valueGrains;
+  return s;
+}
+
+/** Structured error a caller can switch on to render diagnostics
+ *  ("found X PRL across N inputs, need Y") and offer a deeper-walk
+ *  retry when degraded. */
+export class InsufficientFundsError extends Error {
+  readonly code = "E_INSUFFICIENT_FUNDS" as const;
+  constructor(
+    readonly need: bigint,
+    readonly have: bigint,
+    readonly utxoCount: number,
+    readonly degraded: boolean,
+  ) {
+    super("E_INSUFFICIENT_FUNDS");
+    this.name = "InsufficientFundsError";
+  }
+}
+
 /**
  * Greedy coin selection. Adds UTXOs largest-first until total >= amount
  * + tip + estimated fee for the current input count. Re-estimates fee
  * on each input addition because adding a coin grows the tx.
+ *
+ * UTXO COMBINING: there's no per-tx input cap here — the loop walks
+ * the entire pool's UTXO set largest-first and stacks coins until the
+ * total covers amount + fee + tip. A 100k PRL send against a wallet
+ * holding 500k PRL spread across many smaller UTXOs WILL combine
+ * enough of them. If `cachedUtxos` covers the amount we use the cache
+ * (fast path, no network); otherwise we walk the pool live with
+ * `opts.maxPages` controlling depth. On a degraded walk that still
+ * comes up short we throw an InsufficientFundsError that includes
+ * the actual numbers — UI can offer a deeper-walk retry.
  */
 export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPearlTx> {
   const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
-  const { utxos: avail, degraded } = await listPoolUtxos(opts.pool);
+
+  // Decide whether to use the cache or do a live walk. The cache is a
+  // hint: trust it if it covers the requested amount + a generous
+  // worst-case fee headroom. If it doesn't, do a live walk anyway —
+  // the cache may have been built with a smaller maxPages and the
+  // user genuinely has more coins than the cache shows.
+  let avail: PoolUtxo[] = [];
+  let degraded = false;
+  const cache = opts.cachedUtxos;
+  const tipGrainsEarly = opts.includeTip ? computeTipGrains(opts.amountGrains) : 0n;
+  const cacheCovers =
+    !!cache &&
+    cache.length > 0 &&
+    sumGrains(cache) >=
+      opts.amountGrains +
+        tipGrainsEarly +
+        // Worst-case fee headroom: cache might pick many small inputs.
+        // Reserve fee for up to 100 inputs at the requested feerate —
+        // if we genuinely need more than that, fall through to live.
+        estimateFee(Math.min(cache.length, 100), 3, feerate);
+
+  if (cacheCovers) {
+    avail = [...cache!].sort((a, b) =>
+      a.valueGrains > b.valueGrains ? -1 : a.valueGrains < b.valueGrains ? 1 : 0,
+    );
+  } else {
+    const live = await listPoolUtxos(opts.pool, { maxPages: opts.maxPages });
+    avail = live.utxos;
+    degraded = live.degraded;
+  }
+
   if (avail.length === 0) throw new Error("E_NO_UTXOS");
 
   const tipGrains = opts.includeTip ? computeTipGrains(opts.amountGrains) : 0n;
@@ -110,7 +193,10 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
   }
   let fee = estimateFee(picked.length, numOutputs, feerate);
   let need = opts.amountGrains + tipGrains + fee;
-  if (sum < need) throw new Error("E_INSUFFICIENT_FUNDS");
+  const totalAvail = sumGrains(avail);
+  if (sum < need) {
+    throw new InsufficientFundsError(need, totalAvail, avail.length, degraded);
+  }
 
   let change = sum - need;
   if (change < DUST_LIMIT_GRAINS) {
@@ -120,7 +206,9 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
     numOutputs -= 1;
     fee = estimateFee(picked.length, numOutputs, feerate);
     need = opts.amountGrains + tipGrains + fee;
-    if (sum < need) throw new Error("E_INSUFFICIENT_FUNDS");
+    if (sum < need) {
+      throw new InsufficientFundsError(need, totalAvail, avail.length, degraded);
+    }
     change = 0n;
   }
 
@@ -141,7 +229,23 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
     tipGrains,
     changeGrains: change,
     degraded,
+    spendableGrains: totalAvail,
+    spendableUtxoCount: avail.length,
   };
+}
+
+/** Caller-side helper that re-tries composePearlSend with the hard
+ *  maximum walk depth. Use after catching an InsufficientFundsError
+ *  whose `degraded` flag is true — gives the user one more shot at
+ *  finding coins beyond the default cap before giving up. */
+export async function composePearlSendDeepRetry(
+  opts: ComposeOptions,
+): Promise<ComposedPearlTx> {
+  return composePearlSend({
+    ...opts,
+    cachedUtxos: undefined, // force live walk
+    maxPages: MAX_UTXO_WALK_PAGES_HARD,
+  });
 }
 
 export interface SendPearlResult {
@@ -156,9 +260,20 @@ export interface FrozenPearlTx {
   composedAt: number;
 }
 
-/** Max age of a frozen preview before broadcast refuses. Mirrors the
- *  ETH side so both paths fail consistently. */
-export const PEARL_PREVIEW_FRESHNESS_MS = 30_000;
+/** Max age of a frozen preview before broadcast refuses.
+ *  v0.3.1: bumped 30_000 → 120_000. The 30s window was too tight when
+ *  a user paused to read the confirmation (especially on mobile),
+ *  triggering E_PREVIEW_STALE and forcing them to re-confirm. 120s
+ *  is still well inside any meaningful chain-reorg window — a hostile
+ *  sentry can't swap our UTXO set out from under us in that span
+ *  without us seeing it next walk. The UI shows a visible countdown
+ *  and pre-empts staleness with a background re-quote at ~100s. */
+export const PEARL_PREVIEW_FRESHNESS_MS = 120_000;
+
+/** Background-refresh threshold. When a preview is older than this but
+ *  still inside PEARL_PREVIEW_FRESHNESS_MS, the UI silently triggers a
+ *  fresh compose so the user clicks Send against fresh coins. */
+export const PEARL_PREVIEW_REFRESH_AT_MS = 100_000;
 
 async function signAndBroadcast(
   composed: ComposedPearlTx,

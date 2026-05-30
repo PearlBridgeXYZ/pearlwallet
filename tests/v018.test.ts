@@ -52,7 +52,7 @@ describe("v0.1.8 / pearl-rpc — partial result instead of throw (opus1 M-3)", (
       const txs = Array.from({ length: PAGE }, (_, i) => ({
         txid: `${calls.toString(16).padStart(4, "0")}${i.toString(16).padStart(60, "0")}`,
         vin: [],
-        vout: [{ value: 0.00000001, n: 0, scriptPubKey: { address: ADDR } }],
+        vout: [{ value: 0.00000001, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
       }));
       return jsonResp({ result: txs, error: null });
     }));
@@ -69,7 +69,7 @@ describe("v0.1.8 / pearl-rpc — partial result instead of throw (opus1 M-3)", (
         result: Array.from({ length: flood }, (_, i) => ({
           txid: `f${i.toString(16).padStart(63, "0")}`,
           vin: [],
-          vout: [{ value: 0.00000001, n: 0, scriptPubKey: { address: ADDR } }],
+          vout: [{ value: 0.00000001, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
         })),
         error: null,
       }),
@@ -85,7 +85,7 @@ describe("v0.1.8 / pearl-rpc — partial result instead of throw (opus1 M-3)", (
       result: [{
         txid: "a".repeat(64),
         vin: [],
-        vout: [{ value: 1.0, n: 0, scriptPubKey: { address: ADDR } }],
+        vout: [{ value: 1.0, n: 0, scriptPubKey: { address: ADDR, hex: "5120" + "00".repeat(32) } }],
       }],
       error: null,
     })));
