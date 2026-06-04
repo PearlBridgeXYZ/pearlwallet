@@ -7,8 +7,8 @@ describe("pearlParams", () => {
     expect(p).toBe(PEARL_MAINNET);
     expect(p.hrp).toBe("prl");
     expect(p.decimals).toBe(8);
-    expect(p.rpcUrl).toBe("https://rpc.pearlwallet.xyz/");
-    expect(p.rpcLabel).toBe("rpc.pearlwallet.xyz");
+    expect(p.rpcUrl).toBe("/api/pearl-rpc");
+    expect(p.rpcLabel).toBe("pearlwallet.xyz/api");
   });
 
   it("applies an allowlisted RPC override without touching other params", () => {

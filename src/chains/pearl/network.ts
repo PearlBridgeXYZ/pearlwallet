@@ -15,17 +15,16 @@ export interface PearlNetworkParams {
   magic: number;
 }
 
-// Default rpcUrl points at the PearlBridgeXYZ public sentry RPC, terminated
-// behind Cloudflare (origin IP hidden). Origin is one of the outer Pearl
-// sentries running a btcd JSON-RPC method-whitelist proxy. See
-// docs/SENTRY-RPC-REQUIREMENTS.md for the public-RPC contract.
+// Default rpcUrl points at the same-origin Pages Function. It translates
+// the wallet's JSON-RPC calls to Blockbook server-side, so browsers do
+// not depend on third-party CORS for balance/activity scans.
 // Users can override via Settings → "Pearl RPC endpoint" (ui-store).
 export const PEARL_MAINNET: PearlNetworkParams = {
   name: "mainnet",
   hrp: "prl",
   decimals: 8,
-  rpcUrl: "https://rpc.pearlwallet.xyz/",
-  rpcLabel: "rpc.pearlwallet.xyz",
+  rpcUrl: "/api/pearl-rpc",
+  rpcLabel: "pearlwallet.xyz/api",
   explorerUrl: "https://explorer.pearlresearch.ai",
   magic: 0xd9b4bef9,
 };
@@ -43,6 +42,7 @@ export const PEARL_MAINNET: PearlNetworkParams = {
 // (state/ui-store.ts) must list the SAME hosts — otherwise the browser
 // blocks the fetch at runtime and rotation can't compensate.
 export const PEARL_RPC_POOL: readonly string[] = [
+  "/api/pearl-rpc",
   "https://rpc.pearlwallet.xyz/",
   "https://pearl-sentry-fsn1-1.pearlbridge.xyz/rpc",
   "https://pearl-sentry-nbg1-1.pearlbridge.xyz/rpc",

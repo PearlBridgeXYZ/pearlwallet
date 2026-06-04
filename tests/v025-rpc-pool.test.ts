@@ -38,12 +38,13 @@ describe("v0.2.5 — pool definition", () => {
     expect(unique.size).toBeGreaterThanOrEqual(2);
   });
 
-  it("primary entry is the CF-fronted hostname (today's prod)", () => {
-    expect(PEARL_RPC_POOL[0]).toBe("https://rpc.pearlwallet.xyz/");
+  it("primary entry is the same-origin Pages Function", () => {
+    expect(PEARL_RPC_POOL[0]).toBe("/api/pearl-rpc");
+    expect(PEARL_RPC_POOL[1]).toBe("https://rpc.pearlwallet.xyz/");
   });
 
-  it("every entry is https://", () => {
-    for (const url of PEARL_RPC_POOL) {
+  it("every external entry is https://", () => {
+    for (const url of PEARL_RPC_POOL.slice(1)) {
       expect(url.startsWith("https://")).toBe(true);
     }
   });
@@ -353,19 +354,22 @@ describe("v0.2.5 — override behaviour with the pool", () => {
     expect(calls[2]).toBe(PEARL_RPC_POOL[0]);
   });
 
-  it("override identical to the default pool primary is deduped (counts as one slot)", async () => {
+  it("external override is tried before the same-origin default pool primary", async () => {
     useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/");
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       calls.push(url);
-      if (url === PEARL_RPC_POOL[0]) return new Response("", { status: 503 });
+      if (url === "https://rpc.pearlwallet.xyz/") return new Response("", { status: 503 });
       return jsonResp(emptyResult());
     }));
     await fetchPrlBalanceGrains(ADDR);
     // Override-equals-primary collapses to one endpoint slot, which
     // gets PER_ENDPOINT_ATTEMPTS=2 — not 4. Then rotation continues to
     // the secondary.
-    const primaryHits = calls.filter((u) => u === PEARL_RPC_POOL[0]).length;
-    expect(primaryHits).toBe(2);
+    expect(calls.slice(0, 3)).toEqual([
+      "https://rpc.pearlwallet.xyz/",
+      "https://rpc.pearlwallet.xyz/",
+      PEARL_RPC_POOL[0],
+    ]);
   });
 });

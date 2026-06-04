@@ -35,9 +35,13 @@ function mockFetchOnce(
   forceErrorAddr?: string,
   transient5xx: Record<string, number> = {},
 ) {
-  queued = responses;
-  pearlForceError = forceErrorAddr ?? null;
-  pearlTransient5xx = { ...transient5xx };
+  queued = Object.fromEntries(
+    Object.entries(responses).map(([addr, value]) => [addr.toLowerCase(), value]),
+  );
+  pearlForceError = forceErrorAddr?.toLowerCase() ?? null;
+  pearlTransient5xx = Object.fromEntries(
+    Object.entries(transient5xx).map(([addr, value]) => [addr.toLowerCase(), value]),
+  );
 }
 
 beforeEach(() => {
@@ -255,6 +259,21 @@ describe("v0.1.13 / activity — Pearl classification", () => {
     const result = await fetchActivity(POOL, ETH_ADDR, "mainnet", 10);
     expect(result.pearlSource).toBe("live");
     expect(result.items.filter((i) => i.chain === "pearl")).toHaveLength(2);
+  });
+
+  it("normalizes mixed-case Pearl pool addresses before activity scans", async () => {
+    const mixedPool = ["PRL1PFVQd5FHGSCACWzL564YEPK0khktsFHHG9FFVUp7F5FQ8E8DdedrQRF3DM5"];
+    mockFetchOnce({ [mixedPool[0]!.toLowerCase()]: [] });
+    vi.spyOn(ethRpc, "ethClient").mockReturnValue({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getBlockNumber: async () => 18_000_000n,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      getLogs: async () => [],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any);
+
+    const result = await fetchActivity(mixedPool, ETH_ADDR, "mainnet", 10);
+    expect(result.pearlSource).toBe("live");
   });
 });
 

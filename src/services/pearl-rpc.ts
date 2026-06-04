@@ -134,6 +134,21 @@ function isTransientHttpStatus(status: number): boolean {
 // doesn't cascade to the dead pool entries.
 const PER_ENDPOINT_ATTEMPTS = 2;
 const INTRA_ENDPOINT_BACKOFF_MS = 250;
+export const PEARL_RPC_TIMEOUT_MS = 15_000;
+
+function normalizePearlRpcAddress(address: string): string {
+  return address.toLowerCase();
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), PEARL_RPC_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+}
 
 /**
  * One transport attempt against a single endpoint. Returns the parsed
@@ -148,7 +163,7 @@ const INTRA_ENDPOINT_BACKOFF_MS = 250;
  *   • `Error("rpc null result")` — protocol violation. Hard.
  */
 async function fetchOnce<T>(url: string, method: string, params: unknown[]): Promise<T> {
-  const res = await fetch(url, {
+  const res = await fetchWithTimeout(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ jsonrpc: "2.0", method, params, id: 1 }),
@@ -170,6 +185,7 @@ async function fetchOnce<T>(url: string, method: string, params: unknown[]): Pro
 function isRetryableSameEndpoint(err: unknown): boolean {
   if (err instanceof TypeError) return true;
   if (err instanceof Error) {
+    if (err.name === "AbortError") return true;
     const m = /^rpc http (\d+)$/.exec(err.message);
     if (m) return isTransientHttpStatus(Number(m[1]));
   }
@@ -249,9 +265,9 @@ function prlToGrains(value: number): bigint {
 }
 
 function voutPaysAddress(vout: RawTxVout, address: string): boolean {
-  if (vout.scriptPubKey.address === address) return true;
+  if (vout.scriptPubKey.address && normalizePearlRpcAddress(vout.scriptPubKey.address) === address) return true;
   return Array.isArray(vout.scriptPubKey.addresses) &&
-    vout.scriptPubKey.addresses.includes(address);
+    vout.scriptPubKey.addresses.some((a) => normalizePearlRpcAddress(a) === address);
 }
 
 // Default pagination depth. A hostile or buggy sentry that returns
@@ -358,6 +374,7 @@ export async function fetchPrlUtxos(
   address: string,
   opts: FetchUtxosOptions = {},
 ): Promise<PrlUtxoSet> {
+  const queryAddress = normalizePearlRpcAddress(address);
   const PAGE = 100;
   const maxPages = Math.min(
     Math.max(1, opts.maxPages ?? MAX_UTXO_WALK_PAGES),
@@ -378,7 +395,7 @@ export async function fetchPrlUtxos(
     }
     let page: RawTx[];
     try {
-      page = await call<RawTx[]>("searchrawtransactions", [address, 1, skip, PAGE]);
+      page = await call<RawTx[]>("searchrawtransactions", [queryAddress, 1, skip, PAGE]);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("No information available about address")) {
@@ -394,7 +411,7 @@ export async function fetchPrlUtxos(
 
     for (const tx of page) {
       for (const vout of tx.vout) {
-        if (!voutPaysAddress(vout, address)) continue;
+        if (!voutPaysAddress(vout, queryAddress)) continue;
         const key = `${tx.txid}:${vout.n}`;
         if (seenOutputs.has(key)) continue;
         seenOutputs.add(key);
