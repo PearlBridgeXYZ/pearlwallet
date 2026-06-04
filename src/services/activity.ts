@@ -91,27 +91,49 @@ function rpcUrl(): string {
 // as "partial" and surface a "sentry errors on some addresses" warning
 // to users with a perfectly healthy wallet. v0.1.14 hotfix.
 const ACTIVITY_RPC_ATTEMPTS = 3;
+const ACTIVITY_RPC_TIMEOUT_MS = 15_000;
+
+function normalizePearlRpcAddress(address: string): string {
+  return address.toLowerCase();
+}
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), ACTIVITY_RPC_TIMEOUT_MS);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+}
 
 async function searchrawtransactions(
   address: string,
   skip: number,
   count: number,
 ): Promise<RawTx[]> {
+  const queryAddress = normalizePearlRpcAddress(address);
   let lastErr: unknown;
   for (let attempt = 0; attempt < ACTIVITY_RPC_ATTEMPTS; attempt++) {
     if (attempt > 0) {
       await new Promise((r) => setTimeout(r, 250 * attempt));
     }
-    const res = await fetch(rpcUrl(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "searchrawtransactions",
-        params: [address, 1, skip, count],
-        id: 1,
-      }),
-    });
+    let res: Response;
+    try {
+      res = await fetchWithTimeout(rpcUrl(), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          method: "searchrawtransactions",
+          params: [queryAddress, 1, skip, count],
+          id: 1,
+        }),
+      });
+    } catch (err) {
+      lastErr = err;
+      continue;
+    }
     if (!res.ok) {
       lastErr = new Error(`rpc http ${res.status}`);
       if (res.status >= 500 && res.status < 600) continue;
@@ -133,24 +155,24 @@ async function searchrawtransactions(
 }
 
 function voutPaysAnyOf(vout: RawTxVout, addresses: Set<string>): string | null {
-  if (vout.scriptPubKey.address && addresses.has(vout.scriptPubKey.address)) {
+  if (vout.scriptPubKey.address && addresses.has(normalizePearlRpcAddress(vout.scriptPubKey.address))) {
     return vout.scriptPubKey.address;
   }
   if (Array.isArray(vout.scriptPubKey.addresses)) {
     for (const a of vout.scriptPubKey.addresses) {
-      if (addresses.has(a)) return a;
+      if (addresses.has(normalizePearlRpcAddress(a))) return a;
     }
   }
   return null;
 }
 
 function firstNonPoolAddress(vout: RawTxVout, pool: Set<string>): string | undefined {
-  if (vout.scriptPubKey.address && !pool.has(vout.scriptPubKey.address)) {
+  if (vout.scriptPubKey.address && !pool.has(normalizePearlRpcAddress(vout.scriptPubKey.address))) {
     return vout.scriptPubKey.address;
   }
   if (Array.isArray(vout.scriptPubKey.addresses)) {
     for (const a of vout.scriptPubKey.addresses) {
-      if (!pool.has(a)) return a;
+      if (!pool.has(normalizePearlRpcAddress(a))) return a;
     }
   }
   return undefined;
@@ -176,7 +198,7 @@ interface PearlWalkResult {
 async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWalkResult> {
   if (pool.length === 0) return { items: [], source: "live" };
 
-  const poolSet = new Set(pool);
+  const poolSet = new Set(pool.map(normalizePearlRpcAddress));
   const PAGE = 100;
   const PER_ADDR_MAX = limit * 2;  // small heuristic — gather more than we need so we can dedupe and sort.
 
@@ -482,4 +504,3 @@ export const __internal = {
   WPRL_LOG_WINDOW_BLOCKS,
   WPRL_LOG_FALLBACK_BLOCKS,
 };
-

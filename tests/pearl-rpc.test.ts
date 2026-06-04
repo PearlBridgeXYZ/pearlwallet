@@ -42,6 +42,19 @@ describe("fetchPrlBalanceGrains — UTXO walk", () => {
     expect((await fetchPrlBalanceGrains(ADDR)).grains).toBe(0n);
   });
 
+  it("normalizes mixed-case Pearl addresses before querying the sentry", async () => {
+    const mixed = "PRL1PFVQd5FHGSCACWzL564YEPK0khktsFHHG9FFVUp7F5FQ8E8DdedrQRF3DM5";
+    const mock = vi.fn(async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      expect(body.params[0]).toBe(mixed.toLowerCase());
+      return jsonResp({ jsonrpc: "2.0", id: 1, result: [], error: null });
+    });
+    vi.stubGlobal("fetch", mock);
+    const bal = await fetchPrlBalanceGrains(mixed);
+    expect(bal.grains).toBe(0n);
+    expect(mock).toHaveBeenCalled();
+  });
+
   it("sums a single unspent output", async () => {
     let call = 0;
     vi.stubGlobal("fetch", vi.fn(async () => {
@@ -133,7 +146,7 @@ describe("rpcUrl override settability", () => {
     await fetchPrlBalanceGrains(ADDR);
     expect(mock).toHaveBeenCalled();
     const url = (mock.mock.calls[0]![0] as string);
-    expect(url).toBe("https://rpc.pearlwallet.xyz/");
+    expect(url).toBe("/api/pearl-rpc");
     vi.restoreAllMocks();
   });
 
