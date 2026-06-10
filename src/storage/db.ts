@@ -111,12 +111,47 @@ export interface VaultPendingTxRecord {
   };
 }
 
+/**
+ * v0.4.0 native bridging — one row per in-flight or settled crossing.
+ * Holds NOTHING sensitive (txids + amounts only); the relay is the
+ * canonical lifecycle source, this is the wallet's resume pointer so a
+ * page reload doesn't orphan an in-progress wrap/unwrap.
+ */
+export interface BridgeCrossingRecord {
+  /** wrap: pearl txid. unwrap: eth requestBurn tx hash. */
+  id: string;
+  direction: "wrap" | "unwrap";
+  amountGrains: string;
+  netGrains: string;
+  createdAt: number;
+  /** wallet-side coarse phase; relay state string mirrored in `relayState`. */
+  phase: "confirming" | "relay" | "review" | "done" | "refunded" | "failed";
+  relayState: string | null;
+  confirmations: number;
+  /** wrap: WPRL mint tx once relay reports it. unwrap: pearl payout txid. */
+  settledRef: string | null;
+  /** unwrap only: the approve tx hash when one was needed. */
+  approveTxHash: string | null;
+  updatedAt: number;
+}
+
+/** TOFU pin for a bridge deposit address (audit N3) — dedicated table so
+ *  it never pollutes the user-facing address book. Keyed by lowercased
+ *  eth address. */
+export interface BridgeDepositPin {
+  ethAddress: string;
+  pearlAddress: string;
+  pinnedAt: number;
+}
+
 export class PearlWalletDB extends Dexie {
   keystore!: Table<KeystoreRecord, "primary">;
   addressBook!: Table<AddressBookEntry, number>;
   txCache!: Table<TxCacheEntry, number>;
   vaults!: Table<VaultRecord, string>;
   vaultPendingTxs!: Table<VaultPendingTxRecord, string>;
+  bridgeCrossings!: Table<BridgeCrossingRecord, string>;
+  bridgeDepositPins!: Table<BridgeDepositPin, string>;
 
   constructor() {
     super("pearl-web-wallet");
@@ -133,6 +168,26 @@ export class PearlWalletDB extends Dexie {
       txCache: "++id, txHash, chain, ts",
       vaults: "id, pearlAddress, createdAt",
       vaultPendingTxs: "id, vaultId, status, createdAt",
+    });
+    // v3: native bridge crossings (v0.4.0). New table only — additive.
+    this.version(3).stores({
+      keystore: "id",
+      addressBook: "++id, address, chain",
+      txCache: "++id, txHash, chain, ts",
+      vaults: "id, pearlAddress, createdAt",
+      vaultPendingTxs: "id, vaultId, status, createdAt",
+      bridgeCrossings: "id, direction, phase, createdAt",
+    });
+    // v4: dedicated deposit-address TOFU pin table (audit N3). New table
+    // only — additive; keyed by eth address so put() is idempotent.
+    this.version(4).stores({
+      keystore: "id",
+      addressBook: "++id, address, chain",
+      txCache: "++id, txHash, chain, ts",
+      vaults: "id, pearlAddress, createdAt",
+      vaultPendingTxs: "id, vaultId, status, createdAt",
+      bridgeCrossings: "id, direction, phase, createdAt",
+      bridgeDepositPins: "ethAddress",
     });
   }
 }
@@ -175,6 +230,11 @@ export async function wipeKeystore(): Promise<void> {
     // expects to leave the device clean.
     await db.vaults.clear();
     await db.vaultPendingTxs.clear();
+    // Bridge state reveals bridging history; the deposit-address pin would
+    // otherwise be silently inherited by a wallet re-imported in the same
+    // browser (audit round-2 item 1). Both must go on a clean wipe.
+    await db.bridgeCrossings.clear();
+    await db.bridgeDepositPins.clear();
   } finally {
     if (typeof localStorage !== "undefined") {
       for (const k of LOCAL_STORAGE_KEYS) {

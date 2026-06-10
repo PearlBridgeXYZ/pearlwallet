@@ -279,3 +279,104 @@ export function evaluateGasCoverage(
     covered: ethBalanceWei >= worstCaseWei,
   };
 }
+
+// ── PearlBridge unwrap (burn) primitives — v0.4.0 native bridging ──────
+//
+// Both calls go to addresses PINNED in network.ts (never to addresses
+// from an API response — the Bridge page cross-checks the quote's plan
+// against these constants and refuses to sign on mismatch).
+
+const REQUEST_BURN_ABI = [
+  {
+    type: "function",
+    name: "requestBurn",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "grossAmount", type: "uint256" },
+      { name: "pearlAddress", type: "string" },
+    ],
+    outputs: [],
+  },
+] as const;
+
+export async function readWprlAllowance(
+  network: EthNetwork,
+  owner: `0x${string}`,
+): Promise<bigint> {
+  const cfg = bridgeConfig(network);
+  const client = ethClient(network);
+  return (await client.readContract({
+    address: cfg.wprl,
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [owner, cfg.bridgeController],
+  })) as bigint;
+}
+
+export interface ContractCallParams {
+  network: EthNetwork;
+  from: `0x${string}`;
+  tier: FeeTier;
+}
+
+/** ERC-20 approve(bridgeController, amount) on WPRL, signed locally. */
+export async function approveWprlForBridge(
+  p: ContractCallParams & { amount: bigint },
+): Promise<SendResult> {
+  const cfg = bridgeConfig(p.network);
+  const data = encodeFunctionData({
+    abi: erc20Abi,
+    functionName: "approve",
+    args: [cfg.bridgeController, p.amount],
+  });
+  return await sendContractCall(p.network, p.from, cfg.wprl, data, p.tier);
+}
+
+/** BridgeController.requestBurn(grossAmount, pearlAddress), signed locally. */
+export async function requestBurn(
+  p: ContractCallParams & { amount: bigint; pearlAddress: string },
+): Promise<SendResult> {
+  const cfg = bridgeConfig(p.network);
+  const data = encodeFunctionData({
+    abi: REQUEST_BURN_ABI,
+    functionName: "requestBurn",
+    args: [p.amount, p.pearlAddress],
+  });
+  return await sendContractCall(p.network, p.from, cfg.bridgeController, data, p.tier);
+}
+
+async function sendContractCall(
+  network: EthNetwork,
+  from: `0x${string}`,
+  to: `0x${string}`,
+  data: Hex,
+  tier: FeeTier,
+): Promise<SendResult> {
+  const chainId = await chainIdFor(network);
+  const client = ethClient(network);
+  const [gasEstimate, fees] = await Promise.all([
+    client.estimateGas({ account: from, to, data }),
+    suggestGas(network, tier),
+  ]);
+  // 20% headroom: requestBurn's gas varies with daily-window storage
+  // writes (first burn of a window pays for slot init). An exact-estimate
+  // tx that lands second pays slightly less gas but never reverts; an
+  // exact-estimate tx that lands FIRST can run out.
+  const gas = (gasEstimate * 120n) / 100n;
+  const nonce = await client.getTransactionCount({ address: from, blockTag: "pending" });
+  const composed: EthTxRequest = {
+    chainId,
+    nonce,
+    to,
+    value: "0",
+    data,
+    gas: gas.toString(),
+    maxFeePerGas: fees.maxFeePerGas.toString(),
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
+  };
+  const { raw } = await cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", {
+    tx: composed,
+  });
+  const txHash = await broadcastRaw(network, raw);
+  return { txHash, composed };
+}
