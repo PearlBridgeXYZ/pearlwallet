@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { resolveEthDestination } from "../../services/ens";
-import { formatWei, parseWPRL } from "../../lib/format";
+import { formatWei, parseEth } from "../../lib/format";
 import {
   estimateNativeGas,
   sendNative,
@@ -82,10 +82,7 @@ export default function SendETH() {
   function checkAmount(): { ok: true; wei: bigint } | { ok: false; reason: string } {
     let wei: bigint;
     try {
-      // ETH uses 18 decimals — same as WPRL — so parseWPRL is the right
-      // boundary parser. Keeps the precision rules consistent with the
-      // other 18-decimal field in the app.
-      wei = parseWPRL(amount);
+      wei = parseEth(amount); // native ETH = 18 decimals
     } catch {
       return { ok: false, reason: "Enter a valid ETH amount." };
     }

@@ -7,7 +7,7 @@ import InstallPWA from "../components/InstallPWA";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { fetchBalances } from "../../services/balances";
-import { formatGrains, formatWei, formatUSD } from "../../lib/format";
+import { formatGrains, formatWei, formatWprl, formatUSD } from "../../lib/format";
 
 export default function Dashboard() {
   const addresses = useWallet((s) => s.addresses);
@@ -33,7 +33,7 @@ export default function Dashboard() {
   const balances = balancesQ.data;
   const totalUsd = balances
     ? balances.prlUsd * Number(balances.prl) / 1e8
-      + (ethEnabled ? balances.wprlUsd * Number(balances.wprl) / 1e18 : 0)
+      + (ethEnabled ? balances.wprlUsd * Number(balances.wprl) / 1e8 : 0)
     : 0;
 
   return (
@@ -74,10 +74,10 @@ export default function Dashboard() {
               <div>
                 <div className="text-xs text-ink-500">WPRL</div>
                 <div className="text-xl font-medium">
-                  {balances ? formatWei(balances.wprl) : "—"}
+                  {balances ? formatWprl(balances.wprl) : "—"}
                 </div>
                 <div className="text-xs text-ink-500">
-                  {balances ? `≈ ${formatUSD(balances.wprlUsd * Number(balances.wprl) / 1e18)}` : ""}
+                  {balances ? `≈ ${formatUSD(balances.wprlUsd * Number(balances.wprl) / 1e8)}` : ""}
                 </div>
                 {balances?.wprlSource === "error" && (
                   <div className="mt-1 text-xs text-red-600 dark:text-red-400">

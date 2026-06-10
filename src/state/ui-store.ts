@@ -105,6 +105,12 @@ interface PersistedUI {
   multisigEnabled: boolean;
   ethEnabled: boolean;
   offlineSigningEnabled: boolean;
+  // One-time migration marker (v0.4.2): present + true once the
+  // "ETH surface on by default" migration has run for this device. Lets
+  // existing users get the surface enabled once WITHOUT a STORAGE_KEY bump
+  // (which would also wipe theme/RPC/multisig prefs), while a user who
+  // later turns ETH off keeps it off.
+  ethDefaultedOn: boolean;
 }
 
 const DEFAULT_UI: PersistedUI = {
@@ -113,8 +119,9 @@ const DEFAULT_UI: PersistedUI = {
   ethRpcOverride: "",
   tipEnabled: true,
   multisigEnabled: false,
-  ethEnabled: false,
+  ethEnabled: true,
   offlineSigningEnabled: false,
+  ethDefaultedOn: true,
 };
 
 function loadUI(): PersistedUI {
@@ -131,6 +138,14 @@ function loadUI(): PersistedUI {
     }
     if (!isAllowedEthRpcOverride(merged.ethRpcOverride)) {
       merged.ethRpcOverride = "";
+    }
+    // v0.4.2 one-time migration: a stored blob that predates the marker
+    // gets the ETH surface enabled once, then stamped so a later opt-out
+    // is respected. Other prefs in the blob are untouched.
+    if (parsed.ethDefaultedOn !== true) {
+      merged.ethEnabled = true;
+      merged.ethDefaultedOn = true;
+      saveUI(merged);
     }
     return merged;
   } catch {
@@ -202,5 +217,6 @@ function persistedSnapshot(s: UIState): PersistedUI {
     multisigEnabled: s.multisigEnabled,
     ethEnabled: s.ethEnabled,
     offlineSigningEnabled: s.offlineSigningEnabled,
+    ethDefaultedOn: true,
   };
 }

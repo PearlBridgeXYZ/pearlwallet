@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   formatGrains,
   formatWei,
+  formatWprl,
+  parseEth,
   parsePRL,
   parseWPRL,
   parseDecimal,
@@ -41,14 +43,31 @@ describe("parsePRL / formatGrains round-trip", () => {
   });
 });
 
-describe("parseWPRL / formatWei", () => {
-  it("uses 18 decimals", () => {
-    expect(parseWPRL("1")).toBe(10n ** 18n);
-    expect(formatWei(10n ** 18n)).toBe("1.0");
+describe("parseWPRL (8 decimals — WPRL matches PRL, on-chain decimals()==8)", () => {
+  it("uses 8 decimals", () => {
+    expect(parseWPRL("1")).toBe(10n ** 8n);
+    expect(parseWPRL("1.5")).toBe(150_000_000n);
   });
 
-  it("rejects more than 18 decimals", () => {
-    expect(() => parseWPRL("0." + "0".repeat(18) + "1")).toThrow();
+  it("rejects more than 8 decimals", () => {
+    expect(() => parseWPRL("0." + "0".repeat(8) + "1")).toThrow();
+  });
+});
+
+describe("formatWei / parseEth (native ETH is 18 decimals)", () => {
+  it("formats wei at 18 decimals", () => {
+    expect(formatWei(10n ** 18n)).toBe("1.0");
+  });
+  it("parses ETH at 18 decimals", () => {
+    expect(parseEth("1")).toBe(10n ** 18n);
+    expect(parseEth("0.5")).toBe(5n * 10n ** 17n);
+  });
+});
+
+describe("formatWprl (8 decimals)", () => {
+  it("formats WPRL base units at 8 decimals", () => {
+    expect(formatWprl(10n ** 8n)).toBe("1.0");
+    expect(formatWprl(150_000_000n)).toBe("1.5");
   });
 });
 

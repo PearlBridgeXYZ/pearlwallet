@@ -1,7 +1,12 @@
 // Number/amount formatting helpers.
 
 const PRL_DECIMALS = 8;
-const WPRL_DECIMALS = 18;
+// WPRL is the ERC-20 wrapper of PRL and shares its 8 decimals — VERIFIED
+// on-chain (decimals() == 8 at 0x07696DcaB55E62cfef953666b29Fe1970518cB00,
+// 2026-06-10). NOT 18. A prior 18 here mis-rendered every WPRL balance and
+// mis-scaled every WPRL send by 10^10. Native ETH (below) really is 18.
+const WPRL_DECIMALS = 8;
+const ETH_DECIMALS = 18;
 
 export function formatGrains(grains: bigint, decimals = PRL_DECIMALS): string {
   const neg = grains < 0n;
@@ -14,16 +19,28 @@ export function formatGrains(grains: bigint, decimals = PRL_DECIMALS): string {
   return `${neg ? "-" : ""}${whole.toString()}.${fracStr}`;
 }
 
-export function formatWei(wei: bigint, decimals = WPRL_DECIMALS): string {
+/** Format a native-ETH wei amount (18 decimals). */
+export function formatWei(wei: bigint, decimals = ETH_DECIMALS): string {
   return formatGrains(wei, decimals);
+}
+
+/** Format a WPRL base-unit amount (8 decimals). */
+export function formatWprl(units: bigint): string {
+  return formatGrains(units, WPRL_DECIMALS);
 }
 
 export function parsePRL(amount: string): bigint {
   return parseDecimal(amount, PRL_DECIMALS);
 }
 
+/** Parse a user WPRL amount into 8-decimal base units. */
 export function parseWPRL(amount: string): bigint {
   return parseDecimal(amount, WPRL_DECIMALS);
+}
+
+/** Parse a user native-ETH amount into 18-decimal wei. */
+export function parseEth(amount: string): bigint {
+  return parseDecimal(amount, ETH_DECIMALS);
 }
 
 export function parseDecimal(amount: string, decimals: number): bigint {

@@ -4,7 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useWallet } from "../../state/wallet-store";
 import { fetchActivity, type ActivityItem } from "../../services/activity";
-import { formatGrains, formatWei } from "../../lib/format";
+import { formatGrains, formatWprl } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
 
@@ -105,7 +105,7 @@ function ActivityRow({ item, ethNetwork }: { item: ActivityItem; ethNetwork: "ma
   const sign = isOut ? "−" : "+";
   const amountStr = item.chain === "pearl"
     ? `${formatGrains(item.amount)} PRL`
-    : `${formatWei(item.amount)} WPRL`;
+    : `${formatWprl(item.amount)} WPRL`;
   const url = item.chain === "pearl"
     ? pearlTxExplorerUrl("mainnet", item.txid)
     : ethTxExplorerUrl(ethNetwork, item.txid);

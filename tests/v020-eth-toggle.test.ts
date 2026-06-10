@@ -64,9 +64,9 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
     expect(v4).toBeNull();
   });
 
-  it("defaults ethEnabled to false on a fresh load", async () => {
+  it("defaults ethEnabled to TRUE on a fresh load (v0.4.2: surface on by default)", async () => {
     const { useUI } = await import("../src/state/ui-store");
-    expect(useUI.getState().ethEnabled).toBe(false);
+    expect(useUI.getState().ethEnabled).toBe(true);
   });
 
   it("defaults ethRpcOverride to empty string", async () => {
@@ -80,10 +80,10 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
       JSON.stringify({ theme: "dark", multisigEnabled: true, ethEnabled: true }),
     );
     const { useUI } = await import("../src/state/ui-store");
-    // v5 key empty → defaults — and crucially ethEnabled stays OFF, even
-    // though the stale v4 blob set it on.
+    // Stale v4 blob is ignored; current-key empty → fresh defaults. ETH is
+    // now ON by default (v0.4.2); multisig stays off.
     expect(useUI.getState().theme).toBe("system");
-    expect(useUI.getState().ethEnabled).toBe(false);
+    expect(useUI.getState().ethEnabled).toBe(true);
     expect(useUI.getState().multisigEnabled).toBe(false);
   });
 
@@ -216,5 +216,36 @@ describe("v0.2.0 / fetchBalances honors ethEnabled=false (no Eth RPC calls)", ()
     // but both live behind the same `if (ethEnabled)` gate — if this
     // spy never fires, neither did the in-module fetchEthBalanceWei.
     expect(readWprl).not.toHaveBeenCalled();
+  });
+});
+
+describe("v0.4.2 — ETH-on-by-default migration", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  it("force-enables ETH once for an existing blob that lacks the marker, preserving other prefs", async () => {
+    // An existing v0.3.x user: ETH was off, custom theme + multisig set.
+    localStorage.setItem(
+      "pearl-wallet-ui-v6",
+      JSON.stringify({ theme: "dark", multisigEnabled: true, ethEnabled: false }),
+    );
+    const { useUI } = await import("../src/state/ui-store");
+    expect(useUI.getState().ethEnabled).toBe(true); // migrated on
+    expect(useUI.getState().theme).toBe("dark"); // preserved
+    expect(useUI.getState().multisigEnabled).toBe(true); // preserved
+    // marker is persisted so it won't re-run
+    const stored = JSON.parse(localStorage.getItem("pearl-wallet-ui-v6")!);
+    expect(stored.ethDefaultedOn).toBe(true);
+  });
+
+  it("respects a user who turned ETH off AFTER the migration (marker already set)", async () => {
+    localStorage.setItem(
+      "pearl-wallet-ui-v6",
+      JSON.stringify({ theme: "system", ethEnabled: false, ethDefaultedOn: true }),
+    );
+    const { useUI } = await import("../src/state/ui-store");
+    expect(useUI.getState().ethEnabled).toBe(false); // NOT re-forced
   });
 });

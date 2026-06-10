@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { resolveEthDestination } from "../../services/ens";
-import { formatWei, parseWPRL } from "../../lib/format";
+import { formatWei, formatWprl, parseWPRL } from "../../lib/format";
 import {
   estimateWprlGas,
   evaluateGasCoverage,
@@ -201,7 +201,7 @@ export default function SendWPRL() {
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-500">Amount</dt>
-              <dd>{v ? formatWei(v.wei) : "—"} WPRL</dd>
+              <dd>{v ? formatWprl(v.wei) : "—"} WPRL</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-500">Gas tier</dt>

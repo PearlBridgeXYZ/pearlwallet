@@ -87,7 +87,7 @@ async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
 
 export interface Balances {
   prl: bigint;        // grains (10^8), summed across the pool
-  wprl: bigint;       // wei (10^18)
+  wprl: bigint;       // WPRL base units (8 decimals)
   eth: bigint;        // wei — native gas balance for WPRL sends + ETH txs
   prlUsd: number;
   wprlUsd: number;
