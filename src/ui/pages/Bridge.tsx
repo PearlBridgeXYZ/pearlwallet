@@ -6,8 +6,11 @@ import { db, type BridgeCrossingRecord } from "../../storage/db";
 import { bridgeConfig } from "../../services/bridge";
 import {
   approveWprlForBridge,
+  getEthReceiptStatus,
   readWprlAllowance,
+  readWprlBalanceOf,
   requestBurn,
+  waitForEthSuccess,
 } from "../../services/eth-tx";
 import { sendPearl } from "../../services/pearl-tx";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
@@ -65,6 +68,9 @@ const depositTofu: DepositTofuStore = {
 type Tab = "wrap" | "unwrap" | "activity";
 
 const POLL_MS = 15_000;
+// C3: hard ceiling on locally-tracked open crossings — bounds a hostile-API
+// phantom-crossing flood through the recovery tick.
+const MAX_OPEN_CROSSINGS = 25;
 
 function fmtPrl(g: bigint): string {
   return `${grainsToPrlString(g)} PRL`;
@@ -114,7 +120,12 @@ export default function Bridge() {
       // broadcast but whose tracking row was lost.
       if (ethAddr) {
         try {
-          const recent = await fetchRecentDeposit(ethAddr);
+          // C3: cap adoption. A hostile API returning a fresh random txid
+          // each tick would otherwise inject unbounded phantom crossings.
+          // fetchRecentDeposit already rejects non-64-hex txids; this bounds
+          // the row count even against a same-shape flood.
+          const openNow = await db.bridgeCrossings.where("phase").anyOf("confirming", "relay", "review").count();
+          const recent = openNow < MAX_OPEN_CROSSINGS ? await fetchRecentDeposit(ethAddr) : null;
           // Only adopt genuinely in-flight deposits (audit N1): never
           // resurrect a failed/cancelled/under_review/refunded mint as a
           // fresh "confirming" zombie.
@@ -128,6 +139,8 @@ export default function Bridge() {
               id: recent.txid,
               direction: "wrap",
               amountGrains: recent.amountGrains.toString(),
+              // C3: net is unknown for a recovered deposit (no fee context);
+              // leave it equal to gross rather than overstating a net.
               netGrains: recent.amountGrains.toString(),
               createdAt: recent.createdAt ?? now,
               phase: "confirming",
@@ -152,7 +165,7 @@ export default function Bridge() {
           if (c.direction === "wrap") {
             await pollWrap(c, status?.pearlMinConfirmations ?? 6);
           } else {
-            await pollUnwrap(c);
+            await pollUnwrap(c, ethNetwork);
           }
         } catch {
           // transient API failure — next tick retries; relay state is canonical
@@ -276,13 +289,18 @@ export async function pollWrap(c: BridgeCrossingRecord, requiredConfs: number): 
   await db.bridgeCrossings.update(c.id, patch);
 }
 
-export async function pollUnwrap(c: BridgeCrossingRecord): Promise<void> {
+export async function pollUnwrap(
+  c: BridgeCrossingRecord,
+  ethNetwork: "mainnet" | "sepolia" = "mainnet",
+): Promise<void> {
   const b = await fetchBurnStatus(c.id as `0x${string}`);
   const outcome = classifyBurn(b.state);
-  const patch: Partial<BridgeCrossingRecord> = {
-    relayState: b.anomalyReason ? `${b.state}: ${b.anomalyReason}` : b.state,
-    updatedAt: Date.now(),
-  };
+  const patch: Partial<BridgeCrossingRecord> = { updatedAt: Date.now() };
+  // C4: only overwrite relayState when the relay actually returned one;
+  // a null (not-yet-indexed) must not blank a previously-meaningful string.
+  if (b.state) {
+    patch.relayState = b.anomalyReason ? `${b.state}: ${b.anomalyReason}` : b.state;
+  }
   if (outcome === "ok") {
     patch.phase = "done";
     patch.settledRef = b.pearlTxId;
@@ -292,6 +310,23 @@ export async function pollUnwrap(c: BridgeCrossingRecord): Promise<void> {
     patch.phase = "review";
   } else if (b.state) {
     patch.phase = "relay";
+  } else {
+    // C5: relay hasn't indexed the burn. Cross-check our OWN ETH receipt —
+    // a reverted burn (over-cap / window race) or a dropped tx would
+    // otherwise hang in "bridging" forever while the WPRL never left.
+    const receipt = await getEthReceiptStatus(ethNetwork, c.id as `0x${string}`);
+    if (receipt === "reverted") {
+      patch.phase = "failed";
+      patch.relayState = "burn tx reverted on-chain — WPRL not spent";
+    } else if (receipt === null) {
+      // Not mined. After a grace window, surface "likely dropped".
+      const ageMs = Date.now() - c.createdAt;
+      if (ageMs > 30 * 60_000) {
+        patch.phase = "failed";
+        patch.relayState = "burn tx not mined (~30m) — likely dropped; your WPRL is untouched, retry";
+      }
+    }
+    // receipt === "success" but relay null = normal indexing lag; leave as-is.
   }
   await db.bridgeCrossings.update(c.id, patch);
 }
@@ -555,11 +590,12 @@ function UnwrapCard(props: {
     let approveTxHash: `0x${string}` | null = null;
     try {
       // Confirm-time re-quote: bind amount, re-check paused + pinned
-      // addresses, and RE-READ allowance just before signing (audit
-      // H1/M2/N2 — needsApprove from preview can be stale).
-      const [q2, allowance] = await Promise.all([
+      // addresses, RE-READ allowance + balance just before signing
+      // (audit H1/M2/N2/C1/C6).
+      const [q2, allowance, balance] = await Promise.all([
         fetchBurnQuote(burnGrains, pearlAddress),
         readWprlAllowance(ethNetwork, ethAddress),
+        readWprlBalanceOf(ethNetwork, ethAddress),
       ]);
       const cfg = bridgeConfig(ethNetwork);
       if (
@@ -574,11 +610,21 @@ function UnwrapCard(props: {
       if (q2.paused) {
         throw new Error("The bridge just paused — try again once it resumes.");
       }
+      // Balance precheck (audit C1): burning more WPRL than held would make
+      // requestBurn's burnFrom revert AFTER an approve's gas is spent.
+      if (balance < burnGrains) {
+        throw new Error("You don't have that much WPRL.");
+      }
+      // Daily burn cap (audit C6): burns have NO slow lane — over-cap the
+      // contract reverts outright, again after approve gas. Refuse here.
+      if (!q2.withinDailyCap) {
+        throw new Error("Amount exceeds today's remaining burn capacity — try a smaller amount.");
+      }
       if (allowance < burnGrains) {
         setBusy("approving");
         // Exact-amount approval (not infinite): allowance dies with this
         // burn, so a future contract compromise can't drain pre-approved
-        // WPRL. Burn re-reads pending nonce so it sequences after approve.
+        // WPRL.
         const a = await approveWprlForBridge({
           network: ethNetwork,
           from: ethAddress,
@@ -586,6 +632,15 @@ function UnwrapCard(props: {
           tier: "normal",
         });
         approveTxHash = a.txHash;
+        // C1: WAIT for the approve to MINE before burning. requestBurn's gas
+        // estimate runs against latest state; if allowance is still 0 it
+        // reverts and the burn throws. Blocking here also prevents a retry
+        // from broadcasting a SECOND approve (the catch no longer claims
+        // "no re-approve needed" falsely).
+        const ok = await waitForEthSuccess(ethNetwork, a.txHash);
+        if (!ok) {
+          throw new Error(`Approve tx ${a.txHash} reverted — nothing burned. Try again.`);
+        }
       }
       setBusy("burning");
       const r = await requestBurn({
@@ -621,7 +676,10 @@ function UnwrapCard(props: {
       // so explicitly.
       const msg = (e as Error).message;
       if (approveTxHash) {
-        setErr(`Approve landed (${approveTxHash}) but burn failed: ${msg}. Re-try Unwrap — no re-approve needed.`);
+        // The approve CONFIRMED (we waited on its receipt) before the burn
+        // step ran, so a retry re-reads the now-set allowance and skips
+        // straight to burning — no second approve (audit C1).
+        setErr(`Approve confirmed (${approveTxHash}) but burn failed: ${msg}. Re-try Unwrap — it will skip the approve.`);
       } else {
         setErr(msg);
       }
@@ -671,7 +729,7 @@ function UnwrapCard(props: {
 
       <button
         onClick={() => void unwrap()}
-        disabled={!quote || busy !== "idle" || status?.paused === true}
+        disabled={!quote || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false}
         className="btn-primary disabled:opacity-50"
       >
         {busy === "approving"

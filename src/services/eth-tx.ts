@@ -313,6 +313,50 @@ export async function readWprlAllowance(
   })) as bigint;
 }
 
+export async function readWprlBalanceOf(
+  network: EthNetwork,
+  owner: `0x${string}`,
+): Promise<bigint> {
+  const cfg = bridgeConfig(network);
+  const client = ethClient(network);
+  return (await client.readContract({
+    address: cfg.wprl,
+    abi: erc20Abi,
+    functionName: "balanceOf",
+    args: [owner],
+  })) as bigint;
+}
+
+/**
+ * Wait for an Ethereum tx receipt and return whether it succeeded. Used to
+ * gate requestBurn on the approve actually MINING (audit C1): approve
+ * returns at broadcast, so burning immediately runs requestBurn's gas
+ * estimate against pre-approve state where allowance is still 0 → estimate
+ * reverts and the burn throws nearly every time.
+ */
+export async function waitForEthSuccess(
+  network: EthNetwork,
+  hash: `0x${string}`,
+  timeoutMs = 180_000,
+): Promise<boolean> {
+  const client = ethClient(network);
+  const receipt = await client.waitForTransactionReceipt({ hash, timeout: timeoutMs });
+  return receipt.status === "success";
+}
+
+/** Read an ETH tx receipt status, or null if not mined yet (audit C5). */
+export async function getEthReceiptStatus(
+  network: EthNetwork,
+  hash: `0x${string}`,
+): Promise<"success" | "reverted" | null> {
+  try {
+    const r = await ethClient(network).getTransactionReceipt({ hash });
+    return r.status;
+  } catch {
+    return null;
+  }
+}
+
 export interface ContractCallParams {
   network: EthNetwork;
   from: `0x${string}`;

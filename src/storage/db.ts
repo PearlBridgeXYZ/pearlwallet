@@ -206,15 +206,18 @@ export async function saveKeystore(record: KeystoreRecord): Promise<void> {
 // rather than in ui-store so a "wipe everything from this browser"
 // command stays the single source of truth — if a future feature stashes
 // state under a new key, adding it here keeps wipe complete.
+// Every shipped UI storage-key generation, oldest → newest. Kept explicit
+// for clarity, but the wipe ALSO regex-scrubs any `pearl-wallet-ui-vN` so a
+// future STORAGE_KEY bump can never silently desync this list again (audit
+// C2 — the wipe previously stopped at v5 while the live key was v6, leaving
+// the entire prefs blob — RPC overrides included — behind after a "wipe").
 const LOCAL_STORAGE_KEYS: readonly string[] = [
-  // Every shipped storage-key generation, oldest → newest. We keep prior
-  // keys in the wipe so a user whose browser still holds a v3/v4 blob from
-  // an older release also gets it scrubbed. The current shape lives under
-  // `pearl-wallet-ui-v5` (v0.2.0 — see ui-store STORAGE_KEY).
   "pearl-wallet-ui-v3",
   "pearl-wallet-ui-v4",
   "pearl-wallet-ui-v5",
+  "pearl-wallet-ui-v6", // current (v0.2.8 — see ui-store STORAGE_KEY)
 ];
+const UI_STORAGE_KEY_RE = /^pearl-wallet-ui-v\d+$/;
 
 export async function wipeKeystore(): Promise<void> {
   // try/finally: a Dexie failure (quota exhaustion, corrupted IDB, locked
@@ -237,7 +240,19 @@ export async function wipeKeystore(): Promise<void> {
     await db.bridgeDepositPins.clear();
   } finally {
     if (typeof localStorage !== "undefined") {
-      for (const k of LOCAL_STORAGE_KEYS) {
+      // Explicit list first (covers the documented keys), then a regex sweep
+      // of any pearl-wallet-ui-vN currently present — future-proof against a
+      // STORAGE_KEY bump that forgets to update the list (audit C2).
+      const keys = new Set<string>(LOCAL_STORAGE_KEYS);
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && UI_STORAGE_KEY_RE.test(k)) keys.add(k);
+        }
+      } catch {
+        // length/key access can throw under partitioning; fall back to list.
+      }
+      for (const k of keys) {
         try {
           localStorage.removeItem(k);
         } catch {

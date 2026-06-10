@@ -222,3 +222,42 @@ describe("resolveDepositAddress — trust-on-first-use (audit H-2)", () => {
     await expect(resolveDepositAddress(ETH, store)).rejects.toThrow(/E_DEPOSIT_ADDRESS_CHANGED/);
   });
 });
+
+describe("API identifier validation (audit C3/C7)", () => {
+  const ETH = "0x1111111111111111111111111111111111111111" as const;
+
+  it("fetchRecentDeposit rejects a non-64-hex txid (path-traversal / phantom guard)", async () => {
+    fetchMock.mockResolvedValue(
+      okJson({ txid: "../status", state: "pending", amountGrains: "100000000" }),
+    );
+    const { fetchRecentDeposit } = await import("../src/services/bridge-v1");
+    expect(await fetchRecentDeposit(ETH)).toBeNull();
+  });
+
+  it("fetchRecentDeposit accepts a real 64-hex txid", async () => {
+    const txid = "a".repeat(64);
+    fetchMock.mockResolvedValue(
+      okJson({ txid, state: "pending", amountGrains: "100000000", createdAt: 1 }),
+    );
+    const { fetchRecentDeposit } = await import("../src/services/bridge-v1");
+    const r = await fetchRecentDeposit(ETH);
+    expect(r?.txid).toBe(txid);
+  });
+
+  it("fetchMintStatus null-outs a malformed mintTxHash (etherscan-link guard)", async () => {
+    fetchMock.mockResolvedValue(
+      okJson({ state: "minted", mintTxHash: "0x/../address/0xattacker" }),
+    );
+    const { fetchMintStatus } = await import("../src/services/bridge-v1");
+    const m = await fetchMintStatus("b".repeat(64));
+    expect(m.mintTxHash).toBeNull();
+  });
+
+  it("fetchMintStatus keeps a valid 0x-64hex mintTxHash", async () => {
+    const hash = "0x" + "c".repeat(64);
+    fetchMock.mockResolvedValue(okJson({ state: "minted", mintTxHash: hash }));
+    const { fetchMintStatus } = await import("../src/services/bridge-v1");
+    const m = await fetchMintStatus("b".repeat(64));
+    expect(m.mintTxHash).toBe(hash);
+  });
+});

@@ -102,6 +102,19 @@ function asGrains(v: unknown, ctx: string): bigint {
   return BigInt(v);
 }
 
+// Format validators for API-supplied identifiers (audit C3/C7). A hostile
+// API can return a "txid" like "../status" that URL-normalizes to a
+// different endpoint, or a "mintTxHash" that steers the explorer link to an
+// attacker path. Reject anything that isn't the exact expected shape.
+const PEARL_TXID_RE = /^[0-9a-f]{64}$/i;
+const ETH_HASH_RE = /^0x[0-9a-fA-F]{64}$/;
+function isPearlTxid(v: unknown): v is string {
+  return typeof v === "string" && PEARL_TXID_RE.test(v.startsWith("0x") ? v.slice(2) : v);
+}
+function isEthHash(v: unknown): v is `0x${string}` {
+  return typeof v === "string" && ETH_HASH_RE.test(v);
+}
+
 /** Render grains as a fixed-point PRL string, trimming trailing zeros. */
 export function grainsToPrlString(grains: bigint): string {
   const whole = grains / GRAINS_PER_PRL;
@@ -297,7 +310,10 @@ export async function fetchRecentDeposit(
   ethAddress: `0x${string}`,
 ): Promise<RecentDeposit | null> {
   const o = asObject(await getJson(`/deposits/recent?ethAddress=${ethAddress}`), "deposits/recent");
-  if (!o.txid || typeof o.txid !== "string") return null;
+  // Reject a hostile API's malformed txid (audit C3): a non-64-hex value
+  // would path-traverse the downstream /pearl-tx and /mints polls and would
+  // be adopted as a phantom crossing. Only a real Pearl txid is recoverable.
+  if (!isPearlTxid(o.txid)) return null;
   return {
     txid: o.txid,
     state: typeof o.state === "string" ? o.state : "pending",
@@ -312,7 +328,7 @@ export interface PearlTxStatus {
 }
 
 export async function fetchPearlTxStatus(txid: string): Promise<PearlTxStatus> {
-  const o = asObject(await getJson(`/pearl-tx/${txid}`), "pearl-tx");
+  const o = asObject(await getJson(`/pearl-tx/${encodeURIComponent(txid)}`), "pearl-tx");
   if (o.found !== true) return { found: false, confirmations: 0 };
   return { found: true, confirmations: Number(o.confirmations ?? 0) };
 }
@@ -328,19 +344,16 @@ export interface MintStatus {
 }
 
 export async function fetchMintStatus(pearlTxid: string): Promise<MintStatus> {
-  const o = asObject(await getJson(`/mints/${pearlTxid}`), "mints");
+  const o = asObject(await getJson(`/mints/${encodeURIComponent(pearlTxid)}`), "mints");
   return {
     state: typeof o.state === "string" ? o.state : null,
-    mintTxHash:
-      typeof o.mintTxHash === "string" && o.mintTxHash.startsWith("0x")
-        ? (o.mintTxHash as `0x${string}`)
-        : null,
+    mintTxHash: isEthHash(o.mintTxHash) ? o.mintTxHash : null,
     cancelReason: typeof o.cancelReason === "string" ? o.cancelReason : null,
     anomalyReason: typeof o.anomalyReason === "string" ? o.anomalyReason : null,
     // A non-null refundedAt is the authoritative "this deposit was refunded
     // on Pearl" signal regardless of the underlying state (relay F-13).
     refunded: o.refundedAt != null,
-    refundPrlTxId: typeof o.refundPrlTxId === "string" ? o.refundPrlTxId : null,
+    refundPrlTxId: isPearlTxid(o.refundPrlTxId) ? o.refundPrlTxId : null,
     readyAt: typeof o.readyAt === "number" ? o.readyAt : null,
   };
 }
@@ -354,10 +367,10 @@ export interface BurnStatus {
 }
 
 export async function fetchBurnStatus(ethTxHash: `0x${string}`): Promise<BurnStatus> {
-  const o = asObject(await getJson(`/burns/${ethTxHash}`), "burns");
+  const o = asObject(await getJson(`/burns/${encodeURIComponent(ethTxHash)}`), "burns");
   return {
     state: typeof o.state === "string" ? o.state : null,
-    pearlTxId: typeof o.pearlTxId === "string" ? o.pearlTxId : null,
+    pearlTxId: isPearlTxid(o.pearlTxId) ? o.pearlTxId : null,
     anomalyReason: typeof o.anomalyReason === "string" ? o.anomalyReason : null,
   };
 }

@@ -38,7 +38,7 @@ export interface ActivityItem {
   chain: ActivityChain;
   txid: string;            // pearl txid or eth tx hash (no 0x for pearl, 0x for eth)
   direction: ActivityDirection;
-  amount: bigint;          // pearl grains (10^8) OR wprl wei (10^18)
+  amount: bigint;          // pearl grains (10^8) OR WPRL base units (10^8 — decimals()==8 on-chain, NOT 18)
   // Unix seconds. 0 if unknown (rare — sentry returns `time` on most txs;
   // viem getBlock resolves Eth timestamps). Used purely for ordering;
   // the UI does not render absolute timestamps yet.
