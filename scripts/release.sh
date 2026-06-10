@@ -38,6 +38,15 @@ if [ -n "$(git status --porcelain)" ]; then
 fi
 VERSION=$(node -p "require('./package.json').version")
 TAG="v${VERSION}"
+# build-info.ts must already be synced to this version — otherwise the
+# build dirties the tree mid-release and the tag won't contain the
+# version it claims. Sync it as part of the version-bump commit.
+node scripts/sync-version.mjs
+if [ -n "$(git status --porcelain -- src/build-info.ts)" ]; then
+  echo "release: src/build-info.ts was out of sync with package.json —" >&2
+  echo "         commit it together with the version bump, then re-run" >&2
+  exit 1
+fi
 if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
   echo "release: ${TAG} already tagged — bump package.json version first" >&2
   exit 1
