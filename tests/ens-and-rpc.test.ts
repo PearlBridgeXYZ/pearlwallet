@@ -52,10 +52,13 @@ describe("RPC chain + presets", () => {
     }
   });
 
-  it("MEW and PublicNode are both offered (G ask 2026-06-10)", () => {
+  it("only browser-CORS-usable providers are offered (MEW/Llama excluded)", () => {
     const labels = ETH_RPC_PRESETS.map((p) => p.label.toLowerCase());
-    expect(labels.some((l) => l.includes("mew"))).toBe(true);
     expect(labels.some((l) => l.includes("publicnode"))).toBe(true);
+    // MEW + LlamaNodes send no CORS header → unusable in a browser → not offered
+    expect(labels.some((l) => l.includes("mew"))).toBe(false);
+    expect(labels.some((l) => l.includes("llama"))).toBe(false);
+    expect(ETH_RPC_PRESETS.length).toBe(3);
   });
 
   it("allowlist still rejects an arbitrary host and non-https", () => {

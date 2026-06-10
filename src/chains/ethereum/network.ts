@@ -33,20 +33,21 @@ export const ETH_RPC_DEFAULTS: Record<EthNetwork, readonly string[]> = {
 };
 
 // User-selectable RPC presets surfaced in Settings (G ask 2026-06-10:
-// "MEW RPC or PublicNode"). Each host must also be in the override
-// allowlist (ui-store) and the CSP connect-src. MEW's public endpoint is
-// browser-friendly (server-side it's Cloudflare-gated), so it's offered as
-// a choice but not in the default chain.
+// "MEW RPC or PublicNode"). ONLY browser-CORS-usable endpoints are listed —
+// a preset that a browser can't actually reach is worse than no preset.
+// MEW (nodes.mewapi.io) and LlamaNodes were evaluated and DROPPED: their
+// public endpoints send no Access-Control-Allow-Origin, so a browser
+// wallet gets a CORS failure regardless of our CSP. PublicNode (also named
+// by G) is the default and works perfectly. Each host below is in the
+// override allowlist (ui-store) and the CSP connect-src.
 export interface EthRpcPreset {
   label: string;
   url: string;
 }
 export const ETH_RPC_PRESETS: readonly EthRpcPreset[] = [
   { label: "PublicNode (default)", url: "https://ethereum-rpc.publicnode.com" },
-  { label: "MyEtherWallet (MEW)", url: "https://nodes.mewapi.io/rpc/eth" },
   { label: "Cloudflare", url: "https://cloudflare-eth.com" },
   { label: "dRPC", url: "https://eth.drpc.org" },
-  { label: "LlamaNodes", url: "https://eth.llamarpc.com" },
 ];
 
 // PearlBridge RC5 mainnet — UUPS proxies; addresses survive impl upgrades.

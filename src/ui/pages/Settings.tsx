@@ -447,12 +447,11 @@ export default function Settings() {
         <section className="card mb-4">
           <h2 className="text-sm font-semibold">Ethereum RPC endpoint</h2>
           <p className="mt-2 text-xs text-ink-500">
-            Defaults to{" "}
-            <span className="font-mono">{defaultEthRpcUrl}</span> with{" "}
-            <span className="font-mono">eth.drpc.org</span> as fallback
-            {ethRpcOverride && " (currently overridden — see below)"}.
-            Point at any Ethereum JSON-RPC endpoint you trust, or leave
-            blank to use the defaults.
+            Defaults to a diversified chain — PublicNode, then Cloudflare,
+            then dRPC as fallbacks
+            {ethRpcOverride && " (currently overridden — see below)"}. Pick a
+            provider preset below, point at any Ethereum JSON-RPC endpoint
+            you trust, or leave blank to use the defaults.
           </p>
           <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
             A malicious RPC can lie about your balance, gas market, and tx

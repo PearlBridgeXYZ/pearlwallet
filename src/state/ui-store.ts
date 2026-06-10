@@ -28,8 +28,6 @@ const ETH_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "eth.drpc.org",
   "sepolia.drpc.org",
   "cloudflare-eth.com",
-  "nodes.mewapi.io",
-  "eth.llamarpc.com",
 ];
 
 export function isAllowedRpcOverride(url: string): boolean {
