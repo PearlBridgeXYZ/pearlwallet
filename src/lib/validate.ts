@@ -1,4 +1,4 @@
-import { isAddress } from "viem";
+import { getAddress, isAddress } from "viem";
 import { isValidPearlAddress } from "../chains/pearl/address";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 
@@ -12,6 +12,33 @@ export function validEth(addr: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Normalize an Ethereum address to its EIP-55 checksummed form, or null if
+ * it isn't a valid address. A MIXED-case input that fails the checksum is
+ * rejected (a likely typo); an all-lowercase or all-uppercase input is
+ * accepted and checksummed (those carry no checksum to verify). Use the
+ * returned value for sends so the user always confirms the canonical form.
+ */
+export function normalizeEthAddress(addr: string): `0x${string}` | null {
+  const s = addr.trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(s)) return null;
+  let checksummed: `0x${string}`;
+  try {
+    checksummed = getAddress(s);
+  } catch {
+    return null;
+  }
+  // viem's getAddress re-checksums rather than throwing on a wrong
+  // mixed-case checksum, so verify explicitly: an input that carries case
+  // information (not all-lower/all-upper) MUST already equal the canonical
+  // checksum, else it's a likely typo and we reject it. All-lower /
+  // all-upper inputs carry no checksum to verify and are accepted.
+  const hex = s.slice(2);
+  const carriesCase = hex !== hex.toLowerCase() && hex !== hex.toUpperCase();
+  if (carriesCase && s !== checksummed) return null;
+  return checksummed;
 }
 
 export interface PasswordStrength {

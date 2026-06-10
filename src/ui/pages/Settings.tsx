@@ -5,6 +5,7 @@ import InstallPWA from "../components/InstallPWA";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { pearlParams } from "../../chains/pearl/network";
+import { ETH_RPC_PRESETS } from "../../chains/ethereum/network";
 import { passwordAcceptable } from "../../lib/validate";
 
 // Auto-mask exported mnemonic after this many seconds so a phrase left
@@ -466,10 +467,29 @@ export default function Settings() {
             you&apos;re running the wallet from source with an adjusted
             CSP.
           </p>
+          <label className="mt-3 block text-xs text-ink-500">
+            Provider preset
+            <select
+              className="input mt-1 w-full"
+              value={ETH_RPC_PRESETS.some((p) => p.url === ethRpcDraft) ? ethRpcDraft : ""}
+              onChange={(e) => {
+                const url = e.target.value;
+                setEthRpcDraft(url);
+                if (url) saveEthRpc(url); // presets are allowlisted — apply immediately
+              }}
+            >
+              <option value="">Default chain (PublicNode → Cloudflare → dRPC)</option>
+              {ETH_RPC_PRESETS.map((p) => (
+                <option key={p.url} value={p.url}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </label>
           <div className="mt-3 flex flex-col gap-2 sm:flex-row">
             <input
               className="input mono flex-1"
-              placeholder={defaultEthRpcUrl}
+              placeholder="Or paste a custom https:// RPC URL"
               value={ethRpcDraft}
               autoComplete="off"
               autoCapitalize="off"

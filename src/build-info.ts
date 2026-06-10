@@ -4,7 +4,7 @@ declare const __BUILD_TIME__: string;
 // BUILD_VERSION is kept in sync with package.json by a prebuild step
 // (scripts/sync-version.mjs). Do not hand-edit — bump package.json and
 // the next `npm run build` will rewrite this constant.
-export const BUILD_VERSION = "0.4.0";
+export const BUILD_VERSION = "0.4.1";
 
 export const BUILD_GIT_SHA: string = __BUILD_GIT_SHA__;
 export const BUILD_TIME: string = __BUILD_TIME__;

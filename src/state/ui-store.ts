@@ -24,7 +24,12 @@ const PEARL_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
 // browser would refuse to load (silent breakage = worst UX).
 const ETH_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "ethereum-rpc.publicnode.com",
+  "ethereum-sepolia-rpc.publicnode.com",
   "eth.drpc.org",
+  "sepolia.drpc.org",
+  "cloudflare-eth.com",
+  "nodes.mewapi.io",
+  "eth.llamarpc.com",
 ];
 
 export function isAllowedRpcOverride(url: string): boolean {

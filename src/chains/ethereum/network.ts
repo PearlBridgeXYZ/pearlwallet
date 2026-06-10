@@ -16,6 +16,39 @@ export const ETH_RPC_FALLBACK: Record<EthNetwork, string> = {
   sepolia: "https://sepolia.drpc.org",
 };
 
+// Default fallback chain (order matters: tried in sequence by viem
+// `fallback`). Diversified across independent providers so one operator's
+// outage doesn't blind the wallet — all verified live 2026-06-10. ENS
+// resolution rides this same chain.
+export const ETH_RPC_DEFAULTS: Record<EthNetwork, readonly string[]> = {
+  mainnet: [
+    "https://ethereum-rpc.publicnode.com",
+    "https://cloudflare-eth.com",
+    "https://eth.drpc.org",
+  ],
+  sepolia: [
+    "https://ethereum-sepolia-rpc.publicnode.com",
+    "https://sepolia.drpc.org",
+  ],
+};
+
+// User-selectable RPC presets surfaced in Settings (G ask 2026-06-10:
+// "MEW RPC or PublicNode"). Each host must also be in the override
+// allowlist (ui-store) and the CSP connect-src. MEW's public endpoint is
+// browser-friendly (server-side it's Cloudflare-gated), so it's offered as
+// a choice but not in the default chain.
+export interface EthRpcPreset {
+  label: string;
+  url: string;
+}
+export const ETH_RPC_PRESETS: readonly EthRpcPreset[] = [
+  { label: "PublicNode (default)", url: "https://ethereum-rpc.publicnode.com" },
+  { label: "MyEtherWallet (MEW)", url: "https://nodes.mewapi.io/rpc/eth" },
+  { label: "Cloudflare", url: "https://cloudflare-eth.com" },
+  { label: "dRPC", url: "https://eth.drpc.org" },
+  { label: "LlamaNodes", url: "https://eth.llamarpc.com" },
+];
+
 // PearlBridge RC5 mainnet — UUPS proxies; addresses survive impl upgrades.
 // Verified against PearlBridgeXYZ/frontend src/lib/contracts.ts on 2026-05-20.
 // RC3 (0x5b2C/0xbE0D) and earlier are deprecated and dead. Wallet builds

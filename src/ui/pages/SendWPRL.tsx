@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
-import { validEth } from "../../lib/validate";
+import { resolveEthDestination } from "../../services/ens";
 import { formatWei, parseWPRL } from "../../lib/format";
 import {
   estimateWprlGas,
@@ -38,6 +38,8 @@ export default function SendWPRL() {
   const [error, setError] = useState<string | null>(null);
   const [txHash, setTxHash] = useState<`0x${string}` | null>(null);
   const [validated, setValidated] = useState<ValidatedSend | null>(null);
+  const [resolvedEns, setResolvedEns] = useState<string | null>(null);
+  const [resolving, setResolving] = useState(false);
   const [sending, setSending] = useState(false);
 
   // Pre-flight quote: estimate gas + suggested fee market + current ETH
@@ -69,10 +71,7 @@ export default function SendWPRL() {
     },
   });
 
-  function checkSend(): { ok: true; v: ValidatedSend } | { ok: false; reason: string } {
-    if (!validEth(destination)) {
-      return { ok: false, reason: "That doesn't look like a valid Ethereum address." };
-    }
+  function checkAmount(): { ok: true; wei: bigint } | { ok: false; reason: string } {
     let wei: bigint;
     try {
       wei = parseWPRL(amount);
@@ -82,7 +81,34 @@ export default function SendWPRL() {
     if (wei <= 0n) {
       return { ok: false, reason: "Amount must be greater than 0." };
     }
-    return { ok: true, v: { dest: destination.trim() as `0x${string}`, wei } };
+    return { ok: true, wei };
+  }
+
+  // Resolve destination (0x address with EIP-55 checksum, OR ENS name on
+  // mainnet) then validate amount. Resolved 0x address always shown in the
+  // preview for confirmation.
+  async function reviewSend(): Promise<void> {
+    setError(null);
+    setResolvedEns(null);
+    const amt = checkAmount();
+    if (!amt.ok) {
+      setError(amt.reason);
+      return;
+    }
+    setResolving(true);
+    let res;
+    try {
+      res = await resolveEthDestination(destination, ethNetwork);
+    } finally {
+      setResolving(false);
+    }
+    if (!res.ok) {
+      setError(res.reason);
+      return;
+    }
+    setResolvedEns(res.ensName);
+    setValidated({ dest: res.address, wei: amt.wei });
+    setStage("preview");
   }
 
   async function broadcast() {
@@ -166,7 +192,12 @@ export default function SendWPRL() {
           <dl className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between">
               <dt className="text-ink-500">To</dt>
-              <dd className="break-all font-mono">{v?.dest}</dd>
+              <dd className="break-all text-right">
+                {resolvedEns && (
+                  <div className="font-medium text-pearl-700 dark:text-pearl-300">{resolvedEns}</div>
+                )}
+                <div className="font-mono text-xs">{v?.dest}</div>
+              </dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-ink-500">Amount</dt>
@@ -228,10 +259,10 @@ export default function SendWPRL() {
     <Page title="Send WPRL">
       <div className="card flex flex-col gap-3">
         <label className="block">
-          <span className="label">Destination address</span>
+          <span className="label">Destination address or ENS name</span>
           <input
             className="input mono"
-            placeholder="0x..."
+            placeholder="0x… or name.eth"
             value={destination}
             autoComplete="off"
             autoCapitalize="off"
@@ -274,19 +305,11 @@ export default function SendWPRL() {
         </fieldset>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <button
-          onClick={() => {
-            const result = checkSend();
-            if (!result.ok) {
-              setError(result.reason);
-              return;
-            }
-            setError(null);
-            setValidated(result.v);
-            setStage("preview");
-          }}
-          className="btn-primary"
+          onClick={() => void reviewSend()}
+          disabled={resolving}
+          className="btn-primary disabled:opacity-50"
         >
-          Review
+          {resolving ? "Resolving ENS…" : "Review"}
         </button>
       </div>
     </Page>

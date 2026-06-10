@@ -1,5 +1,5 @@
 import { createPublicClient, http, fallback } from "viem";
-import { ethChain, ETH_RPC_PRIMARY, ETH_RPC_FALLBACK, type EthNetwork } from "./network";
+import { ethChain, ETH_RPC_DEFAULTS, type EthNetwork } from "./network";
 import { useUI, isAllowedEthRpcOverride } from "../../state/ui-store";
 
 /**
@@ -13,15 +13,17 @@ import { useUI, isAllowedEthRpcOverride } from "../../state/ui-store";
  */
 export function ethClient(net: EthNetwork) {
   const override = readEthRpcOverride();
-  const transports = override
-    ? [http(override), http(ETH_RPC_PRIMARY[net]), http(ETH_RPC_FALLBACK[net])]
-    : [http(ETH_RPC_PRIMARY[net]), http(ETH_RPC_FALLBACK[net])];
+  const defaults = ETH_RPC_DEFAULTS[net];
+  // Override (if set + allowlisted) goes first, then the full diversified
+  // default chain as fallback. dedupe so an override that equals a default
+  // doesn't appear twice.
+  const urls = override ? [override, ...defaults.filter((u) => u !== override)] : [...defaults];
   return createPublicClient({
     chain: ethChain(net),
-    transport: fallback(transports, {
-      rank: false,
-      retryCount: 2,
-    }),
+    transport: fallback(
+      urls.map((u) => http(u)),
+      { rank: false, retryCount: 2 },
+    ),
   });
 }
 
