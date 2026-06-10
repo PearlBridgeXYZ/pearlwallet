@@ -28,7 +28,7 @@
   - Renovate PRs require manual approval; no auto-merge.
   - **CSP `connect-src` allowlist** limits where the bundle can `fetch` to: own RPC proxy, public Eth RPCs, price oracle. A malicious dep that tries to exfiltrate to `attacker.com` gets blocked by CSP.
   - Sub-Resource Integrity (SRI) on the served `index.html`'s script tags. If the deployed bundle is tampered with post-build, browsers refuse to load it.
-  - Reproducible builds + signed bundle hash announced on `pearlwallet.xyz/build-info` so the user (or a watcher) can verify what's served matches the git tag.
+  - Reproducible builds + signed bundle hash announced on `wallet.pearlbridge.xyz/build-info` so the user (or a watcher) can verify what's served matches the git tag.
 
 ### T3. XSS / DOM injection
 - **Vector:** A bug lets attacker inject JS that reads worker bridge or hijacks the password field.
@@ -44,7 +44,7 @@
 - **Mitigation:**
   - Register obvious lookalikes defensively: `prlwallet.xyz`, `pearlwallet.com`, `pearlwallet.app`, `pearl-wallet.xyz`. All 301 to canonical.
   - Domain monitoring (e.g. dnstwist run weekly via cron) to detect new lookalikes.
-  - On-app warning: "Always check the address bar says `pearlwallet.xyz` with the correct TLD before entering your password." Shown on unlock screen.
+  - On-app warning: "Always check the address bar says `wallet.pearlbridge.xyz` with the correct TLD before entering your password." Shown on unlock screen.
   - DNS CAA records prevent rogue CA issuance.
   - Optional: register on safelists like MetaMask phishing detector (out of v1 scope).
 
@@ -65,7 +65,7 @@
   - Don't ask user to type mnemonic into a single text field. Use 12/24 separate inputs, autocomplete=off, paste handled per-word.
   - Document in "How this works" page that browser-level compromise is out of our control. Recommend installing on a clean profile or using a dedicated browser.
 
-### T7. Server-side compromise of pearlwallet.xyz
+### T7. Server-side compromise of wallet.pearlbridge.xyz
 - **Vector:** Attacker gains push access to GitHub or Cloudflare and ships a malicious bundle.
 - **Mitigation:**
   - Branch protection on `main`: 2 approvals + signed commits required.

@@ -21,7 +21,7 @@ proxy** (method whitelist + CORS + rate-limit + body-size cap).
 ### Required CORS
 
 ```
-Access-Control-Allow-Origin: https://pearlwallet.xyz
+Access-Control-Allow-Origin: https://wallet.pearlbridge.xyz
 Access-Control-Allow-Methods: POST, OPTIONS
 Access-Control-Allow-Headers: Content-Type, Authorization
 Access-Control-Max-Age: 86400

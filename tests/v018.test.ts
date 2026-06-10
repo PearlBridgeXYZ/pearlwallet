@@ -210,12 +210,12 @@ describe("v0.1.8 / RPC override allowlist (minimax L)", () => {
   });
 
   it("isAllowedRpcOverride accepts the canonical sentry host", () => {
-    expect(isAllowedRpcOverride("https://rpc.pearlwallet.xyz/")).toBe(true);
-    expect(isAllowedRpcOverride("https://rpc.pearlwallet.xyz/v2/sub-path")).toBe(true);
+    expect(isAllowedRpcOverride("https://rpc.pearlbridge.xyz/")).toBe(true);
+    expect(isAllowedRpcOverride("https://rpc.pearlbridge.xyz/v2/sub-path")).toBe(true);
   });
 
   it("isAllowedRpcOverride rejects http (must be https)", () => {
-    expect(isAllowedRpcOverride("http://rpc.pearlwallet.xyz/")).toBe(false);
+    expect(isAllowedRpcOverride("http://rpc.pearlbridge.xyz/")).toBe(false);
   });
 
   it("isAllowedRpcOverride rejects an off-allowlist host", () => {
@@ -234,8 +234,8 @@ describe("v0.1.8 / RPC override allowlist (minimax L)", () => {
   });
 
   it("setPearlRpcOverride accepts an allowlisted host", () => {
-    useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/v2");
-    expect(useUI.getState().pearlRpcOverride).toBe("https://rpc.pearlwallet.xyz/v2");
+    useUI.getState().setPearlRpcOverride("https://rpc.pearlbridge.xyz/v2");
+    expect(useUI.getState().pearlRpcOverride).toBe("https://rpc.pearlbridge.xyz/v2");
     useUI.getState().setPearlRpcOverride("");
   });
 });

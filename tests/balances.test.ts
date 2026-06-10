@@ -45,7 +45,7 @@ describe("fetchBalances — Pearl pool aggregation", () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
       // Pearl RPC: searchrawtransactions returns credits then [] terminator.
-      if (u.startsWith("https://rpc.pearlwallet.xyz")) {
+      if (u.startsWith("https://rpc.pearlbridge.xyz")) {
         const body = JSON.parse(String(init?.body ?? "{}")) as {
           method: string;
           params: unknown[];
@@ -85,7 +85,7 @@ describe("fetchBalances — Pearl pool aggregation", () => {
   it("accepts a single string (legacy single-address callers)", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
-      if (u.startsWith("https://rpc.pearlwallet.xyz")) {
+      if (u.startsWith("https://rpc.pearlbridge.xyz")) {
         const body = JSON.parse(String(init?.body ?? "{}")) as { method: string; params: unknown[] };
         if (body.method === "searchrawtransactions") {
           const skip = body.params[2] as number;
@@ -122,7 +122,7 @@ describe("fetchBalances — Pearl pool aggregation", () => {
     };
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
-      if (u.startsWith("https://rpc.pearlwallet.xyz")) {
+      if (u.startsWith("https://rpc.pearlbridge.xyz")) {
         const body = JSON.parse(String(init?.body ?? "{}")) as { method: string; params: unknown[] };
         if (body.method === "searchrawtransactions") {
           const addr = body.params[0] as string;
@@ -158,7 +158,7 @@ describe("fetchBalances — Pearl pool aggregation", () => {
     // 2 of 3 (a majority) fail → balance is too suspect to surface.
     vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
       const u = String(url);
-      if (u.startsWith("https://rpc.pearlwallet.xyz")) {
+      if (u.startsWith("https://rpc.pearlbridge.xyz")) {
         const body = JSON.parse(String(init?.body ?? "{}")) as { method: string; params: unknown[] };
         if (body.method === "searchrawtransactions") {
           const addr = body.params[0] as string;

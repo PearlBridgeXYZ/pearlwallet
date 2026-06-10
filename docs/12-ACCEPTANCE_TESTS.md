@@ -166,7 +166,7 @@ Per-module, mostly pure functions. Coverage targets:
 
 Run before each release:
 ```
-ARTILLERY load test against rpc.pearlwallet.xyz:
+ARTILLERY load test against rpc.pearlbridge.xyz:
 - Ramp: 0 → 50 req/s over 60s, hold 5 min.
 - Mix: 70% getblockchaininfo, 20% listunspent, 10% sendrawtransaction (rejected via mocked node).
 - Success criteria: p95 latency < 500ms, error rate < 0.1%.

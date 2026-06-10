@@ -16,7 +16,7 @@ That's the whole product. Everything else is v2 or out of scope.
 - **U1.** As a new user, I can create a fresh wallet in under 60 seconds, with the app forcing me to back up my mnemonic.
 - **U2.** As an existing PRL holder, I can restore my wallet from a 12- or 24-word BIP-39 mnemonic.
 - **U3.** As a returning user, I can unlock my wallet with a password I set during onboarding.
-- **U4.** As any user, I can verify the wallet domain is `pearlwallet.xyz` and view a fingerprint of the served bundle (SRI / build hash) before trusting it with my keys.
+- **U4.** As any user, I can verify the wallet domain is `wallet.pearlbridge.xyz` and view a fingerprint of the served bundle (SRI / build hash) before trusting it with my keys.
 
 ### Holding & viewing
 - **U5.** As a user, I see my PRL and WPRL balances on one dashboard, in both native units and USD-equivalent (USD value from an oracle, clearly labeled "approx, not for tax").

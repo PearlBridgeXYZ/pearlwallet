@@ -185,7 +185,7 @@ export default function Settings() {
     } catch (e) {
       if (e instanceof Error && e.message === "E_RPC_OVERRIDE_NOT_ALLOWED") {
         setRpcStatus(
-          "That host isn't on the wallet's RPC allowlist. Use one of: rpc.pearlwallet.xyz, ethereum-rpc.publicnode.com, eth.drpc.org, or pearlbridge.xyz.",
+          "That host isn't on the wallet's RPC allowlist. Use one of: rpc.pearlbridge.xyz, ethereum-rpc.publicnode.com, eth.drpc.org, or pearlbridge.xyz.",
         );
       } else {
         setRpcStatus(e instanceof Error ? e.message : "Failed to save RPC override.");

@@ -2,7 +2,7 @@
 
 **A non-custodial, pure-web wallet for Pearl L1 (PRL) and Wrapped PRL (WPRL) on Ethereum, with native PearlBridge integration.**
 
-🔗 **Live:** [pearlwallet.xyz](https://pearlwallet.xyz)
+🔗 **Live:** [wallet.pearlbridge.xyz](https://wallet.pearlbridge.xyz)
 📦 **Releases:** [github.com/PearlBridgeXYZ/pearlwallet/releases](https://github.com/PearlBridgeXYZ/pearlwallet/releases) — every tag ships a single-file offline HTML for air-gapped use.
 🛠 **Status:** Shipping. Currently at `v0.1.18`. Pre-`v1.0` — flagged experimental until the public audit lands.
 
@@ -14,7 +14,7 @@
 
 **Hold PRL on Pearl L1 *and* WPRL on Ethereum, side by side.** Most PRL holders today have to juggle two different wallets, two different mnemonics, and a brittle manual bridge dance. This wallet derives both addresses from one BIP-39 seed (BIP-86 Taproot for Pearl, BIP-44 for Ethereum), shows both balances on one screen, and integrates the [PearlBridge](https://pearlbridge.xyz) contracts so moving value between the two chains is a one-click operation.
 
-**Run it from a USB stick on an air-gapped machine.** Every release tag ships a `pearlwallet-offline-vX.Y.Z.html` build — one self-contained HTML file, no network fetches, no `<script src="...">`, worker bundled in as a data URI. Open it in a browser on a laptop that has never seen the internet, generate a wallet, sign a transaction, walk the signed bytes back via QR or USB. The same code path that runs at `pearlwallet.xyz` runs offline.
+**Run it from a USB stick on an air-gapped machine.** Every release tag ships a `pearlwallet-offline-vX.Y.Z.html` build — one self-contained HTML file, no network fetches, no `<script src="...">`, worker bundled in as a data URI. Open it in a browser on a laptop that has never seen the internet, generate a wallet, sign a transaction, walk the signed bytes back via QR or USB. The same code path that runs at `wallet.pearlbridge.xyz` runs offline.
 
 ---
 
@@ -90,7 +90,7 @@ The wallet is built assuming the network is hostile, the host browser is partial
 
 ## Try it
 
-**Easiest:** open [pearlwallet.xyz](https://pearlwallet.xyz) and click *Create new wallet*. Write down the 12 words. Set a password. Done.
+**Easiest:** open [wallet.pearlbridge.xyz](https://wallet.pearlbridge.xyz) and click *Create new wallet*. Write down the 12 words. Set a password. Done.
 
 **Air-gapped:** grab `pearlwallet-offline-v0.1.18.html` from the [latest release](https://github.com/PearlBridgeXYZ/pearlwallet/releases/latest), move it to an offline machine, and open it in a browser. The whole wallet runs from `file://`.
 

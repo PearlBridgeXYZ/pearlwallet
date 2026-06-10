@@ -7,12 +7,12 @@ describe("pearlParams", () => {
     expect(p).toBe(PEARL_MAINNET);
     expect(p.hrp).toBe("prl");
     expect(p.decimals).toBe(8);
-    expect(p.rpcUrl).toBe("https://rpc.pearlwallet.xyz/");
-    expect(p.rpcLabel).toBe("rpc.pearlwallet.xyz");
+    expect(p.rpcUrl).toBe("https://rpc.pearlbridge.xyz/");
+    expect(p.rpcLabel).toBe("rpc.pearlbridge.xyz");
   });
 
   it("applies an allowlisted RPC override without touching other params", () => {
-    // v0.2.0 split: Pearl-side allowlist is rpc.pearlwallet.xyz + pearlbridge.xyz
+    // v0.2.0 split: Pearl-side allowlist is rpc.pearlbridge.xyz + pearlbridge.xyz
     // (ETH-side hosts moved to the dedicated ethRpcOverride allowlist).
     const p = pearlParams("mainnet", "https://pearlbridge.xyz/rpc");
     expect(p.rpcUrl).toBe("https://pearlbridge.xyz/rpc");

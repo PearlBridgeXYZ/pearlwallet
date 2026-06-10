@@ -1,7 +1,7 @@
 // Iframe bust. CSP `frame-ancestors` lives in public/_headers (the
 // Cloudflare deploy enforces it) but a non-CF mirror — local static
 // server, IPFS gateway, S3 bucket — would not serve those headers
-// and a malicious page could embed pearlwallet.xyz in a hidden iframe
+// and a malicious page could embed wallet.pearlbridge.xyz in a hidden iframe
 // to overlay/click-jack the unlock or send confirm. Loaded as an
 // external script with `script-src 'self'` so the wallet's own CSP
 // doesn't block it on non-CF deploys (v0.1.8 audit Opus2 H-1).
@@ -23,7 +23,7 @@
       h1.textContent = "PearlWallet cannot run inside an iframe.";
       var p = document.createElement("p");
       p.setAttribute("style", "font-size:14px");
-      p.textContent = "Open pearlwallet.xyz directly in a new tab.";
+      p.textContent = "Open wallet.pearlbridge.xyz directly in a new tab.";
       body.appendChild(h1);
       body.appendChild(p);
       html.appendChild(body);

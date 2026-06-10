@@ -129,7 +129,7 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
     );
     // Pearl-protocol host on Eth side is rejected — clean split.
     expect(() =>
-      useUI.getState().setEthRpcOverride("https://rpc.pearlwallet.xyz/"),
+      useUI.getState().setEthRpcOverride("https://rpc.pearlbridge.xyz/"),
     ).toThrow(/E_ETH_RPC_OVERRIDE_NOT_ALLOWED/);
   });
 
@@ -143,7 +143,7 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
 
 describe("v0.2.0 / Pearl ↔ Eth allowlist split (defense in depth)", () => {
   it("Pearl allowlist contains only Pearl-protocol hosts", () => {
-    expect(isAllowedRpcOverride("https://rpc.pearlwallet.xyz/")).toBe(true);
+    expect(isAllowedRpcOverride("https://rpc.pearlbridge.xyz/")).toBe(true);
     expect(isAllowedRpcOverride("https://pearlbridge.xyz/rpc")).toBe(true);
     // Eth-protocol hosts moved off the Pearl list — they would never
     // serve a Pearl RPC anyway, and accepting them here invites
@@ -155,7 +155,7 @@ describe("v0.2.0 / Pearl ↔ Eth allowlist split (defense in depth)", () => {
   it("Eth allowlist is the mirror image", () => {
     expect(isAllowedEthRpcOverride("https://eth.drpc.org/")).toBe(true);
     expect(isAllowedEthRpcOverride("https://ethereum-rpc.publicnode.com/")).toBe(true);
-    expect(isAllowedEthRpcOverride("https://rpc.pearlwallet.xyz/")).toBe(false);
+    expect(isAllowedEthRpcOverride("https://rpc.pearlbridge.xyz/")).toBe(false);
     expect(isAllowedEthRpcOverride("https://pearlbridge.xyz/rpc")).toBe(false);
   });
 

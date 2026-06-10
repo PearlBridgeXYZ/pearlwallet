@@ -29,7 +29,7 @@ export async function fetchEthBalanceWei(
 }
 
 // Serialized pool walk with a 300ms inter-request gap. The public
-// sentry behind rpc.pearlwallet.xyz is fronted by Cloudflare and rate
+// sentry behind rpc.pearlbridge.xyz is fronted by Cloudflare and rate
 // limits burst traffic from a single IP at ~10 req/s. Strict
 // serialization at ~3 req/s keeps us comfortably under the threshold.
 // 20 zero-activity addresses (which return JSON-RPC code -5 quickly)

@@ -13,21 +13,21 @@ const TEST_ADDR = process.env.PEARL_TEST_ADDRESS
   ?? "prl1p5f450a5540efskxv050tgscelscuztut6zfaqssq8vnlnw53wvdsmw4yvs";
 
 describe("Live Pearl RPC", () => {
-  it.skipIf(!LIVE)("rpc.pearlwallet.xyz responds to OPTIONS with CORS allow-origin = pearlwallet.xyz", async () => {
-    const r = await fetch("https://rpc.pearlwallet.xyz/", {
+  it.skipIf(!LIVE)("rpc.pearlbridge.xyz responds to OPTIONS with CORS allow-origin = wallet.pearlbridge.xyz", async () => {
+    const r = await fetch("https://rpc.pearlbridge.xyz/", {
       method: "OPTIONS",
       headers: {
-        "origin": "https://pearlwallet.xyz",
+        "origin": "https://wallet.pearlbridge.xyz",
         "access-control-request-method": "POST",
         "access-control-request-headers": "content-type",
       },
     });
     expect(r.status).toBeLessThan(300);
-    expect(r.headers.get("access-control-allow-origin")).toBe("https://pearlwallet.xyz");
+    expect(r.headers.get("access-control-allow-origin")).toBe("https://wallet.pearlbridge.xyz");
   });
 
-  it.skipIf(!LIVE)("rpc.pearlwallet.xyz answers getblockcount", async () => {
-    const r = await fetch("https://rpc.pearlwallet.xyz/", {
+  it.skipIf(!LIVE)("rpc.pearlbridge.xyz answers getblockcount", async () => {
+    const r = await fetch("https://rpc.pearlbridge.xyz/", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", method: "getblockcount", params: [], id: 1 }),

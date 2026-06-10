@@ -24,8 +24,8 @@ export const PEARL_MAINNET: PearlNetworkParams = {
   name: "mainnet",
   hrp: "prl",
   decimals: 8,
-  rpcUrl: "https://rpc.pearlwallet.xyz/",
-  rpcLabel: "rpc.pearlwallet.xyz",
+  rpcUrl: "https://rpc.pearlbridge.xyz/",
+  rpcLabel: "rpc.pearlbridge.xyz",
   explorerUrl: "https://explorer.pearlresearch.ai",
   magic: 0xd9b4bef9,
 };
@@ -43,7 +43,7 @@ export const PEARL_MAINNET: PearlNetworkParams = {
 // (state/ui-store.ts) must list the SAME hosts — otherwise the browser
 // blocks the fetch at runtime and rotation can't compensate.
 export const PEARL_RPC_POOL: readonly string[] = [
-  "https://rpc.pearlwallet.xyz/",
+  "https://rpc.pearlbridge.xyz/",
   "https://pearl-sentry-fsn1-1.pearlbridge.xyz/rpc",
   "https://pearl-sentry-nbg1-1.pearlbridge.xyz/rpc",
   "https://pearl-sentry-hel1-1.pearlbridge.xyz/rpc",

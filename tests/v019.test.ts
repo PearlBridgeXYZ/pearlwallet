@@ -67,7 +67,7 @@ describe("v0.1.9 / pearlParams allowlist re-validation (v0.1.8 Opus2 H-2)", () =
     // ETH-protocol hosts (drpc, publicnode) moved to the dedicated
     // ethRpcOverride allowlist — see isAllowedEthRpcOverride.
     for (const host of [
-      "https://rpc.pearlwallet.xyz/",
+      "https://rpc.pearlbridge.xyz/",
       "https://pearlbridge.xyz/rpc",
     ]) {
       expect(isAllowedRpcOverride(host)).toBe(true);
@@ -90,7 +90,7 @@ describe("v0.2.0 / isAllowedEthRpcOverride", () => {
   });
 
   it("rejects Pearl-protocol hosts and unknown hosts", () => {
-    expect(isAllowedEthRpcOverride("https://rpc.pearlwallet.xyz/")).toBe(false);
+    expect(isAllowedEthRpcOverride("https://rpc.pearlbridge.xyz/")).toBe(false);
     expect(isAllowedEthRpcOverride("https://pearlbridge.xyz/rpc")).toBe(false);
     expect(isAllowedEthRpcOverride("https://attacker.example/")).toBe(false);
   });

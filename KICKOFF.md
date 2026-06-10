@@ -3,7 +3,7 @@
 One-page TL;DR for the build team. Read this, then read `README.md`.
 
 ## What
-A non-custodial browser wallet at `pearlwallet.xyz` for retail PRL holders. Holds PRL (Pearl L1) and WPRL (Ethereum ERC-20), bridges between them natively via PearlBridge.
+A non-custodial browser wallet at `wallet.pearlbridge.xyz` for retail PRL holders. Holds PRL (Pearl L1) and WPRL (Ethereum ERC-20), bridges between them natively via PearlBridge.
 
 ## Constraints (non-negotiable)
 - **Non-custodial.** Keys never leave the browser.

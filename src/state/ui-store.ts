@@ -12,7 +12,7 @@ export type Theme = "system" | "light" | "dark";
 // auto-rotating RPC pool (see chains/pearl/network.ts PEARL_RPC_POOL).
 // Must stay in sync with public/_headers CSP `connect-src`.
 const PEARL_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
-  "rpc.pearlwallet.xyz",
+  "rpc.pearlbridge.xyz",
   "pearlbridge.xyz",
   "pearl-sentry-fsn1-1.pearlbridge.xyz",
   "pearl-sentry-nbg1-1.pearlbridge.xyz",

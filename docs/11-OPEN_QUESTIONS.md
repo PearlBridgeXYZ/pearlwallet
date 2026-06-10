@@ -102,7 +102,7 @@ These need answers BEFORE code starts (or BEFORE the milestone they block). Each
 ## Blocking domains
 
 ### Q16. Registrar choice given Namecheap block
-- **Question:** Namecheap's API rejected both `pearlwallet.xyz` and `prlwallet.xyz` (error 2018166, "restricted phrase" — almost certainly "wallet" on their abuse blocklist). Path options:
+- **Question:** Namecheap's API rejected both `wallet.pearlbridge.xyz` and `prlwallet.xyz` (error 2018166, "restricted phrase" — almost certainly "wallet" on their abuse blocklist). Path options:
   - (a) Register via Namecheap WEB UI manually (the block might only be on the API).
   - (b) Use Porkbun (has API, no known phrase block, similar pricing).
   - (c) Use Cloudflare Registrar (at-cost, no markup, integrates with our CF setup).

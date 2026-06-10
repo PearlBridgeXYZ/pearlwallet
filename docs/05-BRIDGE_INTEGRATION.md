@@ -7,7 +7,7 @@ A lock-and-mint bridge between **Pearl L1** (UTXO chain, btcd-fork) and **Ethere
 - **PRL → WPRL:** user sends PRL to a designated lock address on Pearl; relayer detects after N confirmations, signs an EIP-712 mint payload, user (or wallet, gaslessly via meta-tx if supported) submits to the WPRL contract on Eth which mints to the user's Eth address.
 - **WPRL → PRL:** user burns WPRL via the bridge contract on Eth; relayer detects burn event, signs a Pearl release tx, broadcasts it to send PRL back to the user's specified Pearl address.
 
-The wallet integrates this **natively** — meaning a "Bridge" button on the dashboard kicks off a flow that runs entirely inside `pearlwallet.xyz`, with no redirect to `pearlbridge.xyz` or any external surface.
+The wallet integrates this **natively** — meaning a "Bridge" button on the dashboard kicks off a flow that runs entirely inside `wallet.pearlbridge.xyz`, with no redirect to `pearlbridge.xyz` or any external surface.
 
 ## Why native (not just an iframe to PearlBridge frontend)
 

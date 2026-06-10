@@ -7,7 +7,7 @@ import { fetchVaultProposal, VaultRelayError } from "../../services/vault-relay"
 import { listVaults } from "../../services/multisig";
 
 // VaultProposal — lands here from a TG/email link like
-// pearlwallet.xyz/vault/tx/<43-char-token>. Behaviour:
+// wallet.pearlbridge.xyz/vault/tx/<43-char-token>. Behaviour:
 //
 //   1. If wallet is locked, prompt unlock with `?next=` so we come back.
 //   2. Otherwise fetch the artifact from the relay (one-time consume).

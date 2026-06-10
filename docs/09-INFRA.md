@@ -5,7 +5,7 @@
 ```
             ┌───────────────────────────────────┐
             │ Cloudflare DNS                    │
-            │ pearlwallet.xyz (A/AAAA → CF)     │
+            │ wallet.pearlbridge.xyz (A/AAAA → CF)     │
             │ prlwallet.xyz (CNAME → canonical) │
             └─────────────┬─────────────────────┘
                           │
@@ -13,7 +13,7 @@
             │ Cloudflare Pages                  │
             │ • Serves static SPA bundle        │
             │ • CSP/COOP/COEP/etc headers       │
-            │ • Custom domain pearlwallet.xyz   │
+            │ • Custom domain wallet.pearlbridge.xyz   │
             │ • Build = github → CF on tag      │
             └─────────────┬─────────────────────┘
                           │
@@ -21,7 +21,7 @@
    │                      │                        │
    ▼                      ▼                        ▼
 ┌──────────┐    ┌─────────────────┐    ┌─────────────────────┐
-│ Public   │    │ rpc.pearlwallet │    │ idx.pearlwallet.xyz │
+│ Public   │    │ rpc.pearlwallet │    │ idx.wallet.pearlbridge.xyz │
 │ Eth RPCs │    │ .xyz            │    │ (esplora)           │
 │ (no auth)│    │ (Cloudflare     │    │ (small VPS)         │
 └──────────┘    │  Worker)        │    └─────────┬───────────┘
@@ -44,7 +44,7 @@
 - Atomic deploys from GitHub Action.
 - Preview deploys per PR (auth-gated).
 
-**Cloudflare Worker** for `rpc.pearlwallet.xyz`:
+**Cloudflare Worker** for `rpc.pearlbridge.xyz`:
 - Edge proxy = fast.
 - Free tier easily handles wallet load.
 - Easy method allowlist + rate limit.
@@ -52,15 +52,15 @@
 **Small VPS** (~€10/mo) for pearld + esplora:
 - Geographic redundancy: a second small VPS in another region as failover (~€10/mo).
 
-**Status page** at `status.pearlwallet.xyz`: a simple static page reading from a JSON file updated by a healthcheck cron. Or use `instatus.com` free tier.
+**Status page** at `status.wallet.pearlbridge.xyz`: a simple static page reading from a JSON file updated by a healthcheck cron. Or use `instatus.com` free tier.
 
 ## DNS records
 
 ```
-;; pearlwallet.xyz
+;; wallet.pearlbridge.xyz
 @                       A      → Cloudflare IPs (via CF proxy ON)
 @                       AAAA   → Cloudflare IPs (via CF proxy ON)
-www                     CNAME  → pearlwallet.xyz (CF proxy ON)
+www                     CNAME  → wallet.pearlbridge.xyz (CF proxy ON)
 rpc                     A      → CF Worker (via CF proxy ON)
 idx                     A      → indexer VPS IP (CF proxy ON)
 testnet-rpc             A      → CF Worker (testnet)
@@ -77,7 +77,7 @@ status                  CNAME  → instatus or static page (CF proxy ON)
 _dmarc                  TXT    "v=DMARC1; p=reject; rua=mailto:bridgedev@mailbox.org"
 
 ;; prlwallet.xyz
-@                       A      → Cloudflare IPs (with Page Rule: 301 → pearlwallet.xyz)
+@                       A      → Cloudflare IPs (with Page Rule: 301 → wallet.pearlbridge.xyz)
 www                     CNAME  → prlwallet.xyz
 ```
 
@@ -85,7 +85,7 @@ www                     CNAME  → prlwallet.xyz
 
 ```
 /*
-  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'sha256-...'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://rpc.pearlwallet.xyz https://idx.pearlwallet.xyz https://ethereum-rpc.publicnode.com https://eth.drpc.org https://api.coingecko.com https://api.etherscan.io; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'sha256-...'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://rpc.pearlbridge.xyz https://idx.wallet.pearlbridge.xyz https://ethereum-rpc.publicnode.com https://eth.drpc.org https://api.coingecko.com https://api.etherscan.io; worker-src 'self'; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
@@ -122,7 +122,7 @@ Published at `/build-info.json`:
 }
 ```
 
-A user (or a third-party watcher) can `curl https://pearlwallet.xyz/build-info.json` and verify it matches what they expected for a tagged release.
+A user (or a third-party watcher) can `curl https://wallet.pearlbridge.xyz/build-info.json` and verify it matches what they expected for a tagged release.
 
 ## CI/CD (GitHub Actions)
 
@@ -197,7 +197,7 @@ On `main`:
 ## Monitoring
 
 ### Wallet status page
-At `status.pearlwallet.xyz`. Reads JSON updated by a cron on the indexer VPS:
+At `status.wallet.pearlbridge.xyz`. Reads JSON updated by a cron on the indexer VPS:
 - Pearl RPC health (last successful `getblockchaininfo` < 60s ago)
 - Pearl indexer health
 - Eth RPC health (both endpoints)

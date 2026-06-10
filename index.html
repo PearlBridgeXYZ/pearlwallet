@@ -12,7 +12,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://rpc.pearlwallet.xyz https://ethereum-rpc.publicnode.com https://eth.drpc.org https://pearlbridge.xyz; worker-src 'self' blob:; base-uri 'self'; form-action 'self'; object-src 'none'; manifest-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://rpc.pearlbridge.xyz https://ethereum-rpc.publicnode.com https://eth.drpc.org https://pearlbridge.xyz; worker-src 'self' blob:; base-uri 'self'; form-action 'self'; object-src 'none'; manifest-src 'self'"
     />
     <meta name="color-scheme" content="light dark" />
     <meta name="referrer" content="strict-origin-when-cross-origin" />
@@ -54,7 +54,7 @@
       Iframe bust. CSP `frame-ancestors` lives in public/_headers (the
       Cloudflare deploy enforces it) but a non-CF mirror — local static
       server, IPFS gateway, S3 bucket — would not serve those headers
-      and a malicious page could embed pearlwallet.xyz in a hidden iframe
+      and a malicious page could embed wallet.pearlbridge.xyz in a hidden iframe
       to overlay/click-jack the unlock or send confirm.
 
       Served as an external blocking script so the CSP's strict

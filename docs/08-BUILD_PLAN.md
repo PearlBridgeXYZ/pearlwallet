@@ -49,8 +49,8 @@ Week 9   ████████      M6 — Mainnet beta launch (capped TVL)
 
 ### M2 — Send PRL on testnet (week 3)
 **Done when:**
-- [ ] Pearl RPC proxy live at `https://testnet-rpc.pearlwallet.xyz` proxying to a testnet pearld instance.
-- [ ] Esplora-like indexer live at `https://testnet-idx.pearlwallet.xyz`.
+- [ ] Pearl RPC proxy live at `https://testnet-rpc.pearlbridge.xyz` proxying to a testnet pearld instance.
+- [ ] Esplora-like indexer live at `https://testnet-idx.wallet.pearlbridge.xyz`.
 - [ ] Wallet shows PRL balance fetched from indexer.
 - [ ] Send PRL flow: input → preview → password → broadcast → confirmed.
 - [ ] Fee tier picker shows live estimates from `estimatesmartfee`.
@@ -104,7 +104,7 @@ Week 9   ████████      M6 — Mainnet beta launch (capped TVL)
 - [ ] Mainnet contract addresses loaded.
 - [ ] Mainnet Pearl RPC proxy live with monitoring.
 - [ ] Lighthouse score ≥ 90 Performance, ≥ 95 Accessibility, 100 Best Practices.
-- [ ] Status page (`https://status.pearlwallet.xyz`) live, monitoring RPC + relayer + indexer.
+- [ ] Status page (`https://status.wallet.pearlbridge.xyz`) live, monitoring RPC + relayer + indexer.
 - [ ] Launch blog post drafted, audit report linked.
 - [ ] Initial bridge TVL cap set conservatively (e.g. $100k mainnet) — adjustable later.
 - [ ] Core team sign-off recorded.

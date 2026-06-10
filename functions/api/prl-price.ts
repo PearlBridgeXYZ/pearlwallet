@@ -1,7 +1,7 @@
 // CF Pages Function: GET /api/prl-price
 //
 // Proxies api.pearl-otc.com/offers (which doesn't CORS to
-// pearlwallet.xyz) and computes a single indicative PRL/USDC price
+// wallet.pearlbridge.xyz) and computes a single indicative PRL/USDC price
 // from the active SELL_PRL asks. Mirrors the logic in
 // pearlbridge-relay/scripts/pearlbridge-tvl-alerter.py so the wallet,
 // the TVL alerter, and any future tooling all derive the same number

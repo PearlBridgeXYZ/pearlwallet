@@ -1,6 +1,6 @@
 // Unit tests for the Pearl RPC client.
 //
-// Live integration tests against rpc.pearlwallet.xyz are in
+// Live integration tests against rpc.pearlbridge.xyz are in
 // pearl-rpc-live.test.ts (gated behind PEARL_LIVE=1).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
@@ -133,7 +133,7 @@ describe("rpcUrl override settability", () => {
     await fetchPrlBalanceGrains(ADDR);
     expect(mock).toHaveBeenCalled();
     const url = (mock.mock.calls[0]![0] as string);
-    expect(url).toBe("https://rpc.pearlwallet.xyz/");
+    expect(url).toBe("https://rpc.pearlbridge.xyz/");
     vi.restoreAllMocks();
   });
 
@@ -141,12 +141,12 @@ describe("rpcUrl override settability", () => {
     // v0.1.8 added an allowlist to setPearlRpcOverride. The override
     // path is still settable for users who run their own sentry on the
     // allowlisted host with a path prefix.
-    useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/v2");
+    useUI.getState().setPearlRpcOverride("https://rpc.pearlbridge.xyz/v2");
     const mock = vi.fn(async () => jsonResp({ result: [], error: null }));
     vi.stubGlobal("fetch", mock);
     await fetchPrlBalanceGrains(ADDR);
     const url = (mock.mock.calls[0]![0] as string);
-    expect(url).toBe("https://rpc.pearlwallet.xyz/v2");
+    expect(url).toBe("https://rpc.pearlbridge.xyz/v2");
     // Reset for other tests.
     useUI.getState().setPearlRpcOverride("");
     vi.restoreAllMocks();

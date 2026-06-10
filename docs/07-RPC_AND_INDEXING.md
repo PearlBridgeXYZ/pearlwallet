@@ -25,12 +25,12 @@
 We do **not** expose pearld directly to browsers. Instead:
 
 ```
-Browser  ─── HTTPS ───►  rpc.pearlwallet.xyz  ─── HTTPS ───►  pearld (private)
+Browser  ─── HTTPS ───►  rpc.pearlbridge.xyz  ─── HTTPS ───►  pearld (private)
 ```
 
 The proxy:
 - Terminates TLS with our cert.
-- Adds CORS headers (`Access-Control-Allow-Origin: https://pearlwallet.xyz` only).
+- Adds CORS headers (`Access-Control-Allow-Origin: https://wallet.pearlbridge.xyz` only).
 - Rate-limits per IP (e.g. 10 req/s, 100 req/min).
 - Allowlists methods (no `stop`, `setban`, wallet methods, etc.).
 - Logs nothing identifying (no IPs, no method args beyond method name + status).
@@ -49,7 +49,7 @@ The wallet must function during pearld outages. Mitigation:
 
 ### Endpoint discovery
 
-The wallet's RPC URL is **baked in** at build time (`PEARL_RPC_URL = "https://rpc.pearlwallet.xyz"`). NOT user-configurable in v1 (custom RPCs are a vector for fake-balance attacks). v2 may add advanced RPC override behind a "Developer mode" toggle with a scary warning.
+The wallet's RPC URL is **baked in** at build time (`PEARL_RPC_URL = "https://rpc.pearlbridge.xyz"`). NOT user-configurable in v1 (custom RPCs are a vector for fake-balance attacks). v2 may add advanced RPC override behind a "Developer mode" toggle with a scary warning.
 
 ## Pearl indexer (for tx history)
 
@@ -71,7 +71,7 @@ Wallet asks the proxy "give me last 50 txs for `prl1p...`" — the proxy queries
 
 Build team should evaluate which of electrs/esplora compiles cleanest against Pearl (test on testnet first). This is a meaningful infra cost (1 small VPS) but eliminates a class of indexing pain.
 
-**Recommended:** esplora-style HTTP service, exposed at `idx.pearlwallet.xyz`.
+**Recommended:** esplora-style HTTP service, exposed at `idx.wallet.pearlbridge.xyz`.
 
 ## Ethereum RPC
 
@@ -121,7 +121,7 @@ For USD-equivalent display:
 - Show "≈ $X.XX" with disclaimer it's approximate.
 - If oracle down: hide USD column, show native units only.
 
-PRL needs a CoinGecko listing. If not yet listed, fall back to a manual oracle published at `https://pearlwallet.xyz/oracle.json` (build team updates).
+PRL needs a CoinGecko listing. If not yet listed, fall back to a manual oracle published at `https://wallet.pearlbridge.xyz/oracle.json` (build team updates).
 
 ## RPC error handling
 
@@ -149,8 +149,8 @@ A small (~€10/mo) VPS comfortably handles pearld + esplora for that load.
 // src/services/rpc-endpoints.ts
 export const ENDPOINTS = {
   pearl: {
-    mainnet: { rpc: "https://rpc.pearlwallet.xyz", idx: "https://idx.pearlwallet.xyz" },
-    testnet: { rpc: "https://testnet-rpc.pearlwallet.xyz", idx: "https://testnet-idx.pearlwallet.xyz" },
+    mainnet: { rpc: "https://rpc.pearlbridge.xyz", idx: "https://idx.wallet.pearlbridge.xyz" },
+    testnet: { rpc: "https://testnet-rpc.pearlbridge.xyz", idx: "https://testnet-idx.wallet.pearlbridge.xyz" },
   },
   ethereum: {
     mainnet: {

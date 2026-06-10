@@ -39,7 +39,7 @@ describe("v0.2.5 — pool definition", () => {
   });
 
   it("primary entry is the CF-fronted hostname (today's prod)", () => {
-    expect(PEARL_RPC_POOL[0]).toBe("https://rpc.pearlwallet.xyz/");
+    expect(PEARL_RPC_POOL[0]).toBe("https://rpc.pearlbridge.xyz/");
   });
 
   it("every entry is https://", () => {
@@ -335,11 +335,11 @@ describe("v0.2.5 — override behaviour with the pool", () => {
   it("an allowlisted override is tried FIRST (with retry); pool is the fallback", async () => {
     // Override path on the existing allowlisted host — a power user
     // running a custom sentry on a versioned endpoint.
-    useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/v2");
+    useUI.getState().setPearlRpcOverride("https://rpc.pearlbridge.xyz/v2");
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       calls.push(url);
-      if (url === "https://rpc.pearlwallet.xyz/v2") {
+      if (url === "https://rpc.pearlbridge.xyz/v2") {
         return new Response("", { status: 503 });
       }
       return jsonResp(emptyResult());
@@ -347,14 +347,14 @@ describe("v0.2.5 — override behaviour with the pool", () => {
     await fetchPrlBalanceGrains(ADDR);
     // Override tried twice (intra-endpoint retry) before pool kicks in.
     expect(calls.slice(0, 2)).toEqual([
-      "https://rpc.pearlwallet.xyz/v2",
-      "https://rpc.pearlwallet.xyz/v2",
+      "https://rpc.pearlbridge.xyz/v2",
+      "https://rpc.pearlbridge.xyz/v2",
     ]);
     expect(calls[2]).toBe(PEARL_RPC_POOL[0]);
   });
 
   it("override identical to the default pool primary is deduped (counts as one slot)", async () => {
-    useUI.getState().setPearlRpcOverride("https://rpc.pearlwallet.xyz/");
+    useUI.getState().setPearlRpcOverride("https://rpc.pearlbridge.xyz/");
     const calls: string[] = [];
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       calls.push(url);
