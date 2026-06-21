@@ -18,13 +18,16 @@
 
 export interface PrlPrice {
   usdPerPrl: number;
-  source: "vwap_median" | "lowest_ask";
+  // "coingecko" appears when the OTC book is down and the proxy falls back
+  // to CoinGecko (native pearl-2, then wrapped-pearl). UI treats all sources
+  // the same today; the field is informational.
+  source: "vwap_median" | "lowest_ask" | "coingecko";
   nActiveAsks: number;
 }
 
 interface PriceProxyResponse {
   usd_per_prl: number;
-  source: "vwap_median" | "lowest_ask";
+  source: "vwap_median" | "lowest_ask" | "coingecko";
   n_active_asks: number;
 }
 
