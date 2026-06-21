@@ -82,6 +82,14 @@ export interface VaultRecord {
   pearlAddress: string;
   network: "mainnet";
   createdAt: number;
+  /**
+   * How this vault entered the wallet. "manual" = the create/join wizard;
+   * "cosign-proposal" = auto-imported from a relay cosign request after the
+   * config was recovered from the PSBT and bound to this address, and local
+   * signer membership was proven. Optional/non-indexed — pre-existing
+   * records (and the wizard path) simply omit it; no schema migration.
+   */
+  importedFrom?: "manual" | "cosign-proposal";
 }
 
 // A drafting / partially-signed / ready / broadcast tx for a multisig vault.

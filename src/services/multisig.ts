@@ -116,6 +116,8 @@ export interface CreateVaultInput {
   myKeyIndex: number;
   /** Network — only "mainnet" is supported in v0.2.0. */
   network: "mainnet";
+  /** Provenance marker. Defaults to "manual" (the create/join wizard). */
+  importedFrom?: "manual" | "cosign-proposal";
 }
 
 /**
@@ -189,6 +191,7 @@ export async function createVault(input: CreateVaultInput): Promise<VaultRecord>
     pearlAddress: descriptor.address,
     network: input.network,
     createdAt: Date.now(),
+    importedFrom: input.importedFrom ?? "manual",
   };
   await db.vaults.put(record);
   return record;

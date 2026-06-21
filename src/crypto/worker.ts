@@ -12,6 +12,7 @@ import {
   RECEIVE_GAP_LIMIT,
   pearlReceivePath,
   pearlMultisigPath,
+  findMultisigSlot,
 } from "./hd";
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
@@ -317,6 +318,13 @@ export type WorkerCmd =
   | { id: string; cmd: "signEthTx"; tx: EthTxRequest }
   | { id: string; cmd: "signPearlTx"; req: PearlTxRequest }
   | { id: string; cmd: "derivePearlMultisigPubkey"; vaultAccount: number; keyIndex: number }
+  | {
+      id: string;
+      cmd: "findPearlMultisigSlot";
+      targetPubkeysHex: string[];
+      maxAccount: number;
+      maxIndex: number;
+    }
   | { id: string; cmd: "composePearlMultisigPsbt"; req: PearlMultisigComposePsbtRequest }
   | { id: string; cmd: "signPearlMultisigPsbt"; req: PearlMultisigSignPsbtRequest }
   | { id: string; cmd: "signSigProofForVault"; req: PearlSigProofRequest };
@@ -584,6 +592,49 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // this worker for taproot.
       const xOnly = child.publicKey.slice(1);
       return { pubkeyHex: bytesToHex(xOnly), originPath: path };
+    }
+
+    case "findPearlMultisigSlot": {
+      // Local membership proof for vault auto-import: derive our cosigner
+      // pubkey across a bounded (vaultAccount, keyIndex) grid and return the
+      // first slot whose x-only pubkey is in the target set. Seed/privkey
+      // never leave the worker — only the matched slot's public data does.
+      // Returns { found: null } when we hold no key in the set.
+      if (!session) throw new Error("E_LOCKED");
+      if (
+        !Number.isInteger(msg.maxAccount) ||
+        msg.maxAccount < 1 ||
+        !Number.isInteger(msg.maxIndex) ||
+        msg.maxIndex < 1
+      ) {
+        throw new Error("E_MULTISIG_BAD_SCAN_BOUNDS");
+      }
+      // Hard cap on total derivations so a malformed/hostile request can't
+      // pin the worker. 50 × 10 = 500 is the sanctioned ceiling.
+      if (msg.maxAccount * msg.maxIndex > 1000) {
+        throw new Error("E_MULTISIG_SCAN_TOO_LARGE");
+      }
+      if (!Array.isArray(msg.targetPubkeysHex) || msg.targetPubkeysHex.length === 0) {
+        throw new Error("E_MULTISIG_BAD_TARGET_SET");
+      }
+      const targets = new Set<string>();
+      for (const h of msg.targetPubkeysHex) {
+        if (typeof h !== "string" || !/^[0-9a-f]{64}$/.test(h)) {
+          throw new Error("E_MULTISIG_BAD_TARGET_SET");
+        }
+        targets.add(h);
+      }
+      const master = masterFromSeed(session.seed);
+      const match = findMultisigSlot(master, targets, msg.maxAccount, msg.maxIndex);
+      if (!match) return { found: null };
+      return {
+        found: {
+          vaultAccount: match.vaultAccount,
+          keyIndex: match.keyIndex,
+          myPubkeyHex: match.pubkeyHex,
+          originPath: match.originPath,
+        },
+      };
     }
 
     case "composePearlMultisigPsbt": {

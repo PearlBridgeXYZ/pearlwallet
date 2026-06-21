@@ -22,7 +22,27 @@ import {
   fetchProposalStatus,
   type ProposalStatus,
 } from "../../services/vault-relay";
+import {
+  recoverVaultFromPsbt,
+  findMySlotForVault,
+  importRecoveredVault,
+  defaultVaultLabel,
+  VaultRecoveryError,
+  type RecoveredVault,
+  type MySlot,
+} from "../../services/vault-import";
+import ImportVaultPrompt from "../components/ImportVaultPrompt";
 import type { VaultRecord } from "../../storage/db";
+
+// Auto-import flow state for a PSBT that matches no local vault. We try to
+// reconstruct the vault from the proposal (trustlessly, bound to the
+// address) and prove local signer membership, then offer a one-tap import.
+type ImportFlow =
+  | { kind: "idle" }
+  | { kind: "checking" }
+  | { kind: "offer"; recovered: RecoveredVault; slot: MySlot }
+  | { kind: "not-signer"; address: string }
+  | { kind: "not-vault"; reason: string };
 
 // SignMultisigPsbt — paste a PSBT, match it to a local vault by its
 // witness script (which uniquely identifies the vault address), then
@@ -181,6 +201,93 @@ export default function SignMultisigPsbt() {
   const psbt = psbtCurrent ?? psbtIn;
   const analysis = useMemo(() => (psbt.trim() ? analyse(psbt.trim()) : null), [psbt, vaultByScriptHex]);
 
+  // ── Vault auto-import ────────────────────────────────────────────────
+  // When a pasted/relayed PSBT matches no local vault, try to reconstruct
+  // the vault from the PSBT (bound to its address) and prove we hold a
+  // signing key in it. If so, offer a one-tap import so the user never has
+  // to re-enter the cosigner set by hand. See services/vault-import.ts.
+  const [importFlow, setImportFlow] = useState<ImportFlow>({ kind: "idle" });
+  const [importBusy, setImportBusy] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
+  // De-dupe the recovery attempt per distinct PSBT — the membership scan is
+  // a worker round-trip we don't want to fire on every render.
+  const importAttemptedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    // Only relevant when the PSBT parsed but matched no local vault.
+    if (!analysis || analysis.match.kind !== "unknown" || analysis.error) {
+      setImportFlow({ kind: "idle" });
+      setImportError(null);
+      return;
+    }
+    const psbtTrim = psbt.trim();
+    if (importAttemptedRef.current === psbtTrim) return;
+    importAttemptedRef.current = psbtTrim;
+
+    let cancelled = false;
+    (async () => {
+      setImportError(null);
+      setImportFlow({ kind: "checking" });
+      let recovered: RecoveredVault;
+      try {
+        recovered = recoverVaultFromPsbt(psbtTrim);
+      } catch (e) {
+        if (cancelled) return;
+        setImportFlow({
+          kind: "not-vault",
+          reason:
+            e instanceof VaultRecoveryError ? e.message : e instanceof Error ? e.message : String(e),
+        });
+        return;
+      }
+      let slot: MySlot | null;
+      try {
+        slot = await findMySlotForVault(recovered.sortedPubkeysHex);
+      } catch (e) {
+        if (cancelled) return;
+        setImportFlow({ kind: "not-vault", reason: e instanceof Error ? e.message : String(e) });
+        return;
+      }
+      if (cancelled) return;
+      if (!slot) {
+        setImportFlow({ kind: "not-signer", address: recovered.address });
+        return;
+      }
+      setImportFlow({ kind: "offer", recovered, slot });
+    })();
+
+    return () => {
+      cancelled = true;
+      // Release the per-PSBT latch when the run that owned it is torn down
+      // (StrictMode mount→cleanup→mount, or a dep change mid-scan). Without
+      // this, the cancelled run leaves importFlow stuck on "checking" and
+      // the re-mount early-returns on the still-set ref — the offer prompt
+      // would never render. Clearing here lets exactly one effective scan
+      // run; the cancelled one is discarded.
+      if (importAttemptedRef.current === psbtTrim) {
+        importAttemptedRef.current = null;
+      }
+    };
+  }, [analysis, psbt]);
+
+  async function doImport(recovered: RecoveredVault, slot: MySlot, label: string) {
+    setImportBusy(true);
+    setImportError(null);
+    try {
+      await importRecoveredVault({ recovered, slot, label });
+      // Reload vaults so the analysis memo now MATCHES this PSBT and the
+      // normal sign UI takes over. Clear the de-dupe latch so the effect
+      // re-evaluates against the refreshed vault set.
+      setVaults(await listVaults());
+      importAttemptedRef.current = null;
+      setImportFlow({ kind: "idle" });
+    } catch (e) {
+      setImportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setImportBusy(false);
+    }
+  }
+
   async function doSign() {
     if (!analysis || analysis.match.kind !== "matched") return;
     setBusy(true);
@@ -332,15 +439,60 @@ export default function SignMultisigPsbt() {
           <p className="text-sm text-red-600">Couldn't parse PSBT: {analysis.error}</p>
         )}
         {analysis && analysis.match.kind === "unknown" && !analysis.error && (
-          <p className="text-sm text-amber-700">
-            This PSBT doesn't match any vault on this device. Import the
-            vault first ({" "}
-            <Link to="/vaults/new" className="underline">
-              create or join
-            </Link>{" "}
-            ) — signing without the local vault record means we can't
-            verify the cosigner set, so we refuse.
-          </p>
+          <>
+            {importFlow.kind === "checking" && (
+              <p className="text-sm text-ink-600 dark:text-ink-400">
+                Checking whether this proposal is for a vault you can sign…
+              </p>
+            )}
+            {importFlow.kind === "offer" && (
+              <ImportVaultPrompt
+                recovered={importFlow.recovered}
+                slot={importFlow.slot}
+                defaultLabel={defaultVaultLabel(importFlow.recovered.address)}
+                busy={importBusy}
+                error={importError}
+                onImport={(label) => doImport(importFlow.recovered, importFlow.slot, label)}
+              />
+            )}
+            {importFlow.kind === "not-signer" && (
+              <div className="rounded-md border border-amber-500 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+                <p>
+                  This proposal spends from a vault (
+                  <span className="break-all font-mono text-xs">
+                    {importFlow.address}
+                  </span>
+                  ) that isn't on this device — and{" "}
+                  <span className="font-medium">
+                    no signing key on this wallet is in its cosigner set
+                  </span>
+                  . Refusing to import a vault you can't sign for.
+                </p>
+                <p className="mt-2 text-xs">
+                  If you expected to be a signer, the key you enrolled may live
+                  on a different wallet/seed.{" "}
+                  <Link to="/vaults/new" className="underline">
+                    Create or join a vault
+                  </Link>{" "}
+                  manually instead.
+                </p>
+              </div>
+            )}
+            {importFlow.kind === "not-vault" && (
+              <p className="text-sm text-amber-700 dark:text-amber-400">
+                This PSBT doesn't match any vault on this device and couldn't
+                be recognised as a Pearl vault spend ({importFlow.reason}).
+                Import the vault first ({" "}
+                <Link to="/vaults/new" className="underline">
+                  create or join
+                </Link>{" "}
+                ) — signing without a verified cosigner set is refused.
+              </p>
+            )}
+            {/* "idle" is the momentary pre-scan state; render nothing so we
+                don't flash a "no match" line one frame before the offer/
+                refusal the effect is about to set. */}
+          </>
         )}
         {analysis && analysis.match.kind === "matched" && analysis.info && (
           <>

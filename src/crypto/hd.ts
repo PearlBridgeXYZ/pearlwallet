@@ -74,3 +74,48 @@ export function childKeys(master: HDKey, path: string): ChildKeys {
     publicKey: node.publicKey,
   };
 }
+
+export interface MultisigSlotMatch {
+  vaultAccount: number;
+  keyIndex: number;
+  /** Lowercase x-only (32-byte) pubkey hex at the matched slot. */
+  pubkeyHex: string;
+  originPath: string;
+}
+
+function xOnlyHex(compressedPubkey: Uint8Array): string {
+  // Drop the 1-byte parity prefix → 32-byte x-only, lowercase hex.
+  let out = "";
+  for (let i = 1; i < compressedPubkey.length; i++) {
+    out += compressedPubkey[i]!.toString(16).padStart(2, "0");
+  }
+  return out;
+}
+
+/**
+ * Scan the multisig cosigner slot grid (vaultAccount × keyIndex) for a key
+ * whose x-only pubkey is in `targetPubkeysHex`, returning the first match
+ * or null. Used by vault auto-import to prove local membership in a vault
+ * recovered from a cosign request — no privkey leaves the caller.
+ *
+ * Pure over `master`; both the crypto worker and the test suite call it.
+ */
+export function findMultisigSlot(
+  master: HDKey,
+  targetPubkeysHex: ReadonlySet<string>,
+  maxAccount: number,
+  maxIndex: number,
+): MultisigSlotMatch | null {
+  for (let vaultAccount = 0; vaultAccount < maxAccount; vaultAccount++) {
+    for (let keyIndex = 0; keyIndex < maxIndex; keyIndex++) {
+      const path = pearlMultisigPath(vaultAccount, keyIndex);
+      const child = master.derive(path);
+      if (!child.publicKey) continue;
+      const hex = xOnlyHex(child.publicKey);
+      if (targetPubkeysHex.has(hex)) {
+        return { vaultAccount, keyIndex, pubkeyHex: hex, originPath: path };
+      }
+    }
+  }
+  return null;
+}
