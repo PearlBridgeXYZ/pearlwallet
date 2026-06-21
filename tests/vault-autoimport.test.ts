@@ -305,6 +305,63 @@ describe("findMultisigSlot — local membership proof", () => {
   });
 });
 
+// Build a PSBT the EXACT way the relay's pearl-vault-relay/src/presign.ts
+// does (p2tr(undefined, p2tr_ms(...)) → NUMS internal key, tapMerkleRoot
+// set on the input). This proves the existing top-up cosign requests are
+// already compatible with auto-import — no proposer/relay change needed.
+function buildPresignShapedPsbt(threshold: number, sortedPubkeysHex: string[]): string {
+  const sortedBytes = sortedPubkeysHex.map((h) => hexToBytes(h));
+  const ms = btc.p2tr_ms(threshold, sortedBytes);
+  const tr = btc.p2tr(undefined, ms as never, net, false) as unknown as {
+    address: string;
+    script: Uint8Array;
+    tapLeafScript: unknown;
+    tapInternalKey: Uint8Array;
+    tapMerkleRoot: Uint8Array;
+  };
+  const tx = new btc.Transaction({
+    allowUnknown: false,
+    allowUnknownInputs: false,
+    allowUnknownOutputs: false,
+  });
+  tx.addInput({
+    txid: hexToBytes("aa".repeat(32)),
+    index: 0,
+    witnessUtxo: { amount: 500_000n, script: tr.script },
+    tapLeafScript: tr.tapLeafScript as never,
+    tapInternalKey: tr.tapInternalKey,
+    tapMerkleRoot: tr.tapMerkleRoot,
+    sequence: 0xfffffffd,
+  });
+  tx.addOutputAddress(tr.address, 450_000n, net);
+  return base64.encode(tx.toPSBT());
+}
+
+describe("compatibility: presign.ts-shaped top-up cosign request", () => {
+  it("recovers a vault from a relay-presign-shaped PSBT (no proposer change needed)", async () => {
+    const me = await signerCosigner(2, 1);
+    const cs = [me.xOnly, await strangerXOnly(1), await strangerXOnly(2)];
+    // Use the BIP-67 sorted hex set, exactly like the relay's VaultConfig.
+    const sortedHex = vaultDescriptorFromPubkeys(2, cs, params).sortedPubkeys.map((p) =>
+      bytesToHex(p),
+    );
+    const psbt = buildPresignShapedPsbt(2, sortedHex);
+
+    const r = recoverVaultFromPsbt(psbt);
+    expect(r.threshold).toBe(2);
+    expect(r.total).toBe(3);
+    expect(r.sortedPubkeysHex).toEqual(sortedHex);
+
+    // And the genuine signer is provably a member.
+    const set = new Set(r.sortedPubkeysHex);
+    const master = await masterFor(SIGNER_M);
+    const match = findMultisigSlot(master, set, 5, 5);
+    expect(match).not.toBeNull();
+    expect(match!.vaultAccount).toBe(2);
+    expect(match!.keyIndex).toBe(1);
+  });
+});
+
 describe("end-to-end: recover then prove membership", () => {
   it("a presign-style PSBT yields a recoverable vault the signer is in", async () => {
     const me = await signerCosigner(1, 0);
