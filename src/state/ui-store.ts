@@ -63,10 +63,11 @@ interface UIState {
   // PearlBridge developer tip — opt-in by default. Disabling sends no
   // extra output and costs nothing beyond on-chain fees.
   tipEnabled: boolean;
-  // Experimental multisig surface. Default OFF — flips on a Vaults entry
-  // in the nav and exposes the multisig flows behind it. Off means the
-  // wallet behaves exactly as singlesig has shipped since v0.1.x. v0.2.0
-  // ships the full user flows behind this toggle.
+  // Multisig vault surface. Default ON as of v0.5.0 (graduated from the
+  // earlier opt-in/experimental toggle once create/sign/send + cosign
+  // auto-import shipped and were audited). Surfaces a Vaults entry in the
+  // nav. Users who prefer a pure-singlesig wallet can still turn it OFF
+  // (opt-out) in Settings; that choice is respected across reloads.
   multisigEnabled: boolean;
   // Ethereum surface (WPRL + ETH gas + PearlBridge). Default OFF in
   // v0.2.0 — a Pearl-native user who never touches Eth shouldn't be
@@ -111,6 +112,10 @@ interface PersistedUI {
   // (which would also wipe theme/RPC/multisig prefs), while a user who
   // later turns ETH off keeps it off.
   ethDefaultedOn: boolean;
+  // One-time migration marker (v0.5.0): same pattern as ethDefaultedOn, for
+  // graduating the multisig vault surface to default-on. Existing users get
+  // Vaults enabled once, stamped, so a later opt-out is preserved.
+  multisigDefaultedOn: boolean;
 }
 
 const DEFAULT_UI: PersistedUI = {
@@ -118,10 +123,11 @@ const DEFAULT_UI: PersistedUI = {
   pearlRpcOverride: "",
   ethRpcOverride: "",
   tipEnabled: true,
-  multisigEnabled: false,
+  multisigEnabled: true,
   ethEnabled: true,
   offlineSigningEnabled: false,
   ethDefaultedOn: true,
+  multisigDefaultedOn: true,
 };
 
 function loadUI(): PersistedUI {
@@ -139,14 +145,22 @@ function loadUI(): PersistedUI {
     if (!isAllowedEthRpcOverride(merged.ethRpcOverride)) {
       merged.ethRpcOverride = "";
     }
-    // v0.4.2 one-time migration: a stored blob that predates the marker
-    // gets the ETH surface enabled once, then stamped so a later opt-out
-    // is respected. Other prefs in the blob are untouched.
+    // One-time default-on migrations: a stored blob that predates a marker
+    // gets that surface enabled once, then stamped so a later opt-out is
+    // respected. Other prefs in the blob are untouched. v0.4.2: ETH;
+    // v0.5.0: multisig vaults.
+    let migrated = false;
     if (parsed.ethDefaultedOn !== true) {
       merged.ethEnabled = true;
       merged.ethDefaultedOn = true;
-      saveUI(merged);
+      migrated = true;
     }
+    if (parsed.multisigDefaultedOn !== true) {
+      merged.multisigEnabled = true;
+      merged.multisigDefaultedOn = true;
+      migrated = true;
+    }
+    if (migrated) saveUI(merged);
     return merged;
   } catch {
     return DEFAULT_UI;
@@ -218,5 +232,6 @@ function persistedSnapshot(s: UIState): PersistedUI {
     ethEnabled: s.ethEnabled,
     offlineSigningEnabled: s.offlineSigningEnabled,
     ethDefaultedOn: true,
+    multisigDefaultedOn: true,
   };
 }

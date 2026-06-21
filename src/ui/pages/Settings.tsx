@@ -186,7 +186,7 @@ export default function Settings() {
     } catch (e) {
       if (e instanceof Error && e.message === "E_RPC_OVERRIDE_NOT_ALLOWED") {
         setRpcStatus(
-          "That host isn't on the wallet's RPC allowlist. Use one of: rpc.pearlbridge.xyz, ethereum-rpc.publicnode.com, eth.drpc.org, or pearlbridge.xyz.",
+          "That host isn't on the wallet's Pearl RPC allowlist. Use one of: rpc.pearlbridge.xyz, pearlbridge.xyz, or a pearl-sentry-{fsn1,nbg1,hel1}-1.pearlbridge.xyz host.",
         );
       } else {
         setRpcStatus(e instanceof Error ? e.message : "Failed to save RPC override.");
@@ -414,11 +414,11 @@ export default function Settings() {
         <p className="mt-2 text-xs text-ink-500">
           The Ethereum side of the wallet — Wrapped PRL on Ethereum, native
           ETH for gas, and the PearlBridge mint/burn flow — is{" "}
-          <span className="font-medium">off by default</span> in v0.2.0.
-          If you only hold PRL on Pearl L1, leave it off and the wallet
+          <span className="font-medium">on by default</span> as of v0.4.2.
+          If you only hold PRL on Pearl L1, turn it off and the wallet
           stays Pearl-only: no Eth RPC calls, no WPRL/ETH tiles, no
-          Bridge button. Turning it on exposes the Send WPRL, Send ETH,
-          and Bridge surfaces and starts polling the Eth chain for
+          Bridge button. With it on you get the Send WPRL, Send ETH,
+          and Bridge surfaces and the wallet polls the Eth chain for
           balances.
         </p>
         <p className="mt-1 text-xs text-ink-500">
@@ -533,25 +533,22 @@ export default function Settings() {
         </p>
       </section>
 
-      <section className="card mb-4 border-amber-200 dark:border-amber-900/40">
+      <section className="card mb-4">
         <h2 className="text-sm font-semibold">
-          Experimental: multisig vaults
+          Multisig vaults
         </h2>
         <p className="mt-2 text-xs text-ink-500">
-          Multisig vaults are an opt-in experimental feature. Turning
-          this on adds a <span className="font-medium">Vaults</span>{" "}
-          surface to the wallet that exposes the on-chain primitives —
-          BIP-342 tapscript m-of-n under a NUMS-bound P2TR output,
-          BIP-67-sorted cosigner pubkeys, and the cosigner pubkey
-          descriptor format — so the construction can be independently
-          audited.
+          The <span className="font-medium">Vaults</span> surface lets you
+          create and co-sign m-of-n multisig vaults (BIP-342 tapscript
+          under a NUMS-bound P2TR output, BIP-67-sorted cosigner pubkeys)
+          and auto-imports a vault from a cosign request when you hold a
+          signing key in it. On by default.
         </p>
-        <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-          The user-facing flows (create vault, exchange cosigner
-          descriptors, draft and co-sign transactions) are{" "}
-          <span className="font-medium">in development</span> and not
-          yet shipped. Don't move funds into a vault until those
-          flows land. Off by default.
+        <p className="mt-1 text-xs text-ink-500">
+          Turn this off for a pure-singlesig wallet — the Vaults nav entry
+          and routes disappear and the wallet behaves exactly as singlesig.
+          Your existing vault records aren't deleted; they reappear if you
+          turn it back on.
         </p>
         <label className="mt-3 flex items-center gap-2 text-sm">
           <input
@@ -559,13 +556,13 @@ export default function Settings() {
             checked={multisigEnabled}
             onChange={(e) => setMultisigEnabled(e.target.checked)}
           />
-          Enable Vaults surface (experimental, default off)
+          Show the Vaults surface
         </label>
         <p className="mt-2 text-xs text-ink-500">
           Status:{" "}
           {multisigEnabled
-            ? "Vaults surface ON — primitives are visible at /vaults"
-            : "Vaults surface OFF — wallet behaves exactly as singlesig"}
+            ? "Vaults ON — available at /vaults"
+            : "Vaults OFF — wallet behaves exactly as singlesig"}
         </p>
       </section>
 

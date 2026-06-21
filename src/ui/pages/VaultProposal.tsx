@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
+import { useUI } from "../../state/ui-store";
 import { useProposal } from "../../state/proposal-store";
 import { fetchVaultProposal, VaultRelayError } from "../../services/vault-relay";
 import { listVaults } from "../../services/multisig";
+import { shouldConsumeProposal } from "../../services/vault-proposal-gate";
 
 // VaultProposal — lands here from a TG/email link like
 // wallet.pearlbridge.xyz/vault/tx/<43-char-token>. Behaviour:
@@ -34,6 +36,7 @@ export default function VaultProposal() {
   const { token } = useParams<{ token: string }>();
   const navigate = useNavigate();
   const status = useWallet((s) => s.status);
+  const multisigEnabled = useUI((s) => s.multisigEnabled);
   const setProposal = useProposal((s) => s.set);
 
   const [ui, setUi] = useState<UIState>({
@@ -47,8 +50,13 @@ export default function VaultProposal() {
   const fetchedRef = useRef(false);
 
   useEffect(() => {
-    if (status !== "unlocked") return;
-    if (!token) return;
+    // Don't consume the one-time relay token unless we can act on it: Vaults
+    // must be enabled (else the downstream pages bounce and the token burns
+    // for nothing — a "enable Vaults" message renders below instead), the
+    // wallet unlocked, and a token present. shouldConsumeProposal is the
+    // unit-tested policy; fetchedRef is the separate re-entrancy one-shot.
+    if (!shouldConsumeProposal({ multisigEnabled, status, token })) return;
+    if (!token) return; // already guaranteed by the gate; narrows the type
     if (fetchedRef.current) return;
     fetchedRef.current = true;
 
@@ -140,7 +148,7 @@ export default function VaultProposal() {
         }
       }
     })();
-  }, [status, token, navigate, setProposal]);
+  }, [multisigEnabled, status, token, navigate, setProposal]);
 
   if (!token) {
     return (
@@ -149,6 +157,29 @@ export default function VaultProposal() {
         <Link to="/dashboard" className="mt-3 inline-block text-sm text-pearl-700 hover:underline">
           Back to dashboard
         </Link>
+      </Page>
+    );
+  }
+
+  // Vaults turned off: don't fetch (don't burn the one-time token). Tell the
+  // user how to open it. Re-enabling Vaults and re-opening the link works as
+  // long as the proposal hasn't expired.
+  if (!multisigEnabled) {
+    return (
+      <Page title="Vault proposal">
+        <p className="text-sm text-ink-700">
+          This is a multisig cosign request, but the Vaults surface is turned
+          off on this wallet. Enable it in Settings, then open the link again
+          — it hasn't been used.
+        </p>
+        <div className="mt-4 flex gap-2">
+          <Link to="/settings" className="btn-primary">
+            Open Settings
+          </Link>
+          <Link to="/dashboard" className="btn-secondary">
+            Back to dashboard
+          </Link>
+        </div>
       </Page>
     );
   }

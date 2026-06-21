@@ -5,9 +5,9 @@ import { useUI } from "../../state/ui-store";
 import { listVaults } from "../../services/multisig";
 import type { VaultRecord } from "../../storage/db";
 
-// Multisig surface — gated by Settings → "Experimental: multisig".
-// v0.2.0 ships the full create / sign / send flow; the toggle stays
-// experimental until a public audit closes out the spend path.
+// Multisig vault surface — on by default (v0.5.0). Settings exposes an
+// opt-out for users who want a pure-singlesig wallet. Ships the full
+// create / sign / send flow plus cosign-request auto-import.
 export default function Vaults() {
   const navigate = useNavigate();
   const multisigEnabled = useUI((s) => s.multisigEnabled);
@@ -38,15 +38,16 @@ export default function Vaults() {
 
   return (
     <Page title="Vaults">
-      <section className="card mb-4 border-amber-200 bg-amber-50 dark:border-amber-900/40 dark:bg-amber-900/20">
-        <h2 className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-          Experimental
+      <section className="card mb-4 border-ink-200 bg-ink-50 dark:border-ink-800 dark:bg-ink-900/30">
+        <h2 className="text-sm font-semibold text-ink-700 dark:text-ink-200">
+          Before you fund a vault
         </h2>
-        <p className="mt-2 text-xs text-amber-800 dark:text-amber-300">
-          Multisig vaults are an opt-in feature. Test with small amounts
-          first. Verify the vault address out-of-band with every cosigner
-          before funding — a malicious enroller can hand different
-          cosigners different pubkey sets.
+        <p className="mt-2 text-xs text-ink-600 dark:text-ink-400">
+          Always verify the vault address out-of-band with every cosigner
+          before sending funds to it — a malicious enroller can hand
+          different cosigners different pubkey sets. A vault imported from a
+          cosign request is reconstructed from the proposal and bound to its
+          address, but the same out-of-band check still applies.
         </p>
       </section>
 

@@ -81,10 +81,11 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
     );
     const { useUI } = await import("../src/state/ui-store");
     // Stale v4 blob is ignored; current-key empty → fresh defaults. ETH is
-    // now ON by default (v0.4.2); multisig stays off.
+    // ON by default (v0.4.2) and multisig is ON by default (v0.5.0 — the
+    // Vaults surface graduated from experimental/opt-in).
     expect(useUI.getState().theme).toBe("system");
     expect(useUI.getState().ethEnabled).toBe(true);
-    expect(useUI.getState().multisigEnabled).toBe(false);
+    expect(useUI.getState().multisigEnabled).toBe(true);
   });
 
   it("re-validates ethRpcOverride on load — tampered value becomes empty", async () => {
@@ -247,5 +248,52 @@ describe("v0.4.2 — ETH-on-by-default migration", () => {
     );
     const { useUI } = await import("../src/state/ui-store");
     expect(useUI.getState().ethEnabled).toBe(false); // NOT re-forced
+  });
+});
+
+describe("v0.5.0 — multisig-on-by-default migration", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    vi.resetModules();
+  });
+
+  it("defaults multisigEnabled to TRUE on a fresh load (graduated from experimental)", async () => {
+    const { useUI } = await import("../src/state/ui-store");
+    expect(useUI.getState().multisigEnabled).toBe(true);
+  });
+
+  it("force-enables Vaults once for an existing blob lacking the marker, preserving other prefs", async () => {
+    // An existing user from before the graduation: multisig was off (old
+    // default), with a custom theme and ETH already migrated on.
+    localStorage.setItem(
+      "pearl-wallet-ui-v6",
+      JSON.stringify({
+        theme: "dark",
+        multisigEnabled: false,
+        ethEnabled: true,
+        ethDefaultedOn: true,
+      }),
+    );
+    const { useUI } = await import("../src/state/ui-store");
+    expect(useUI.getState().multisigEnabled).toBe(true); // migrated on
+    expect(useUI.getState().theme).toBe("dark"); // preserved
+    expect(useUI.getState().ethEnabled).toBe(true); // preserved
+    // marker persisted so it won't re-run
+    const stored = JSON.parse(localStorage.getItem("pearl-wallet-ui-v6")!);
+    expect(stored.multisigDefaultedOn).toBe(true);
+  });
+
+  it("respects a user who turned Vaults off AFTER the migration (marker already set)", async () => {
+    localStorage.setItem(
+      "pearl-wallet-ui-v6",
+      JSON.stringify({
+        theme: "system",
+        multisigEnabled: false,
+        multisigDefaultedOn: true,
+        ethDefaultedOn: true,
+      }),
+    );
+    const { useUI } = await import("../src/state/ui-store");
+    expect(useUI.getState().multisigEnabled).toBe(false); // NOT re-forced
   });
 });

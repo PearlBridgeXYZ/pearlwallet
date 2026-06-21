@@ -126,7 +126,7 @@ export default function Dashboard() {
         {multisigEnabled && (
           <div className="mt-2">
             <Link to="/vaults" className="btn-secondary block w-full text-center">
-              Vaults <span className="text-xs text-amber-700 dark:text-amber-400">(experimental)</span>
+              Vaults
             </Link>
           </div>
         )}
