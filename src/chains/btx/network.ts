@@ -47,6 +47,24 @@ export const BTX_MAINNET: BtxNetworkParams = {
   explorerUrl: "https://explorer.minebtx.com",
 };
 
+// Client-side failover pool — the wallet rotates through these on 5xx/timeout
+// (mirrors Pearl's PEARL_RPC_POOL). Each hostname is a CF-proxied method-
+// whitelist edge in front of a different BTX sentry's local btxd; "each a
+// fallback to the other" is achieved client-side (no paid CF load balancer,
+// no single point of failure). A host that errors or doesn't yet serve an
+// origin is skipped exactly like a 5xx, so we can list the full pool before
+// every sentry edge is provisioned.
+//   btx-rpc  -> s1-hel (46.62.146.11)   [LIVE]
+//   btx-rpc2 -> s2-nbg (188.245.32.30)  [edge pending nginx+aiohttp install]
+//   btx-rpc3 -> s5-ash (5.161.88.204)   [edge pending nginx+aiohttp install]
+// CSP connect-src (public/_headers) + the ui-store override allowlist MUST
+// list these same hosts or the browser blocks the fetch before rotation helps.
+export const BTX_RPC_POOL: readonly string[] = [
+  "https://btx-rpc.pearlbridge.xyz/",
+  "https://btx-rpc2.pearlbridge.xyz/",
+  "https://btx-rpc3.pearlbridge.xyz/",
+];
+
 // Confirmation tiers — size-scaled, lifted verbatim from the bridge relay's BTX
 // config (relay/src/btx/config.ts), itself derived from the 51% security
 // analysis: BTX shows organic depth-3/4 reorgs, so the floor sits well above 4.
