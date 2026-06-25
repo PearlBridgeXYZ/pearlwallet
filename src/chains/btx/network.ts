@@ -9,7 +9,7 @@
 // price only). This wallet surface ships to the *beta* first
 // (next.wallet.pearlbridge.xyz). Treat balances/price as best-effort.
 
-import { isAllowedRpcOverride } from "../../state/ui-store";
+import { isAllowedBtxRpcOverride } from "../../state/ui-store";
 
 export type BtxNetwork = "mainnet";
 
@@ -101,6 +101,6 @@ export function btxTxExplorerUrl(_network: BtxNetwork, txid: string): string {
 export function btxParams(_net: BtxNetwork = "mainnet", override?: string): BtxNetworkParams {
   const trimmed = override?.trim();
   if (!trimmed) return BTX_MAINNET;
-  if (!isAllowedRpcOverride(trimmed)) return BTX_MAINNET;
+  if (!isAllowedBtxRpcOverride(trimmed)) return BTX_MAINNET;
   return { ...BTX_MAINNET, rpcUrl: trimmed, rpcLabel: "custom" };
 }

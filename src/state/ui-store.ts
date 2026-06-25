@@ -30,6 +30,16 @@ const ETH_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "cloudflare-eth.com",
 ];
 
+// BTX RPC override allowlist. Separate chain, separate endpoints — must NOT
+// share the Pearl list (a BTX override validated against Pearl hosts would
+// always fall back silently). Mirror these EXACTLY in the CSP connect-src
+// (public/_headers) and chains/btx/network.ts BTX_RPC_POOL.
+const BTX_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
+  "btx-rpc.pearlbridge.xyz",
+  "btx-rpc2.pearlbridge.xyz",
+  "btx-rpc3.pearlbridge.xyz",
+];
+
 export function isAllowedRpcOverride(url: string): boolean {
   if (url === "") return true;
   try {
@@ -47,6 +57,17 @@ export function isAllowedEthRpcOverride(url: string): boolean {
     const u = new URL(url);
     if (u.protocol !== "https:") return false;
     return ETH_RPC_OVERRIDE_ALLOWED_HOSTS.includes(u.host);
+  } catch {
+    return false;
+  }
+}
+
+export function isAllowedBtxRpcOverride(url: string): boolean {
+  if (url === "") return true;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "https:") return false;
+    return BTX_RPC_OVERRIDE_ALLOWED_HOSTS.includes(u.host);
   } catch {
     return false;
   }
