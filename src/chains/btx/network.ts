@@ -13,13 +13,13 @@ import { isAllowedBtxRpcOverride } from "../../state/ui-store";
 
 export type BtxNetwork = "mainnet";
 
-// Fund-safety gate for the SEND path. The P2MR/ML-DSA sighash + serialization
-// are byte-verified against the spec and reviewed, but until the sighash is
-// empirically proven by verifying a real on-chain signature against our
-// computed digest (tests/btx-tx.test.ts on-chain TV-2, gated on node recovery),
-// send stays OFF — receive + balance are fully validated and ship now. Flip to
-// true only after the on-chain validation passes.
-export const BTX_SEND_ENABLED = false;
+// Fund-safety gate for the SEND path — now SATISFIED. The P2MR/ML-DSA sighash +
+// serialization are proven byte-exact against consensus: tests/btx-onchain.test.ts
+// reproduces a real on-chain spend's txid AND verifies that spend's real on-chain
+// ML-DSA signature against our computed sighash (a valid signature only verifies
+// vs the exact-correct digest). Send requires the public RPC edge to be reachable
+// for broadcast (a momentary edge outage fails gracefully, no fund risk).
+export const BTX_SEND_ENABLED = true;
 
 export interface BtxNetworkParams {
   name: BtxNetwork;
