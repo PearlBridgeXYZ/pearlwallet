@@ -1,6 +1,6 @@
 // BTX indexer client — balance / UTXOs / history for a BTX address.
 //
-// btxd has no address index, so a thin server-side service (scantxoutset) runs
+// btxd has no address index, so a thin server-side block-walk indexer runs
 // behind the same CF edge as the RPC, at /idx/. This client GETs those
 // endpoints with the same client-side pool failover as Pearl's RPC: on a 5xx/
 // 429/network error it cools the endpoint down and rotates to the next pool
@@ -14,6 +14,14 @@ const cooldownUntil = new Map<string, number>();
 
 /** Bad address / client error — same answer on every endpoint, so don't rotate. */
 export class BtxAddressError extends Error {}
+
+/** Safely coerce a JSON sat value to bigint — a non-integer/float/null from the
+ *  (rotatable) indexer throws rather than crashing the balance path. */
+function toSat(v: unknown): bigint {
+  const n = typeof v === "number" ? v : NaN;
+  if (!Number.isInteger(n) || n < 0) throw new BtxAddressError("invalid sat value from indexer");
+  return BigInt(n);
+}
 
 export interface BtxBalance {
   address: string;
@@ -74,7 +82,7 @@ export async function fetchBtxBalance(address: string, override?: string): Promi
     `address/${encodeURIComponent(address)}/balance`,
     override,
   );
-  return { address: r.address, confirmedSat: BigInt(r.confirmed_sat), utxoCount: r.utxo_count, tip: r.tip };
+  return { address: r.address, confirmedSat: toSat(r.confirmed_sat), utxoCount: r.utxo_count, tip: r.tip };
 }
 
 export async function fetchBtxUtxos(address: string, override?: string): Promise<BtxUtxo[]> {
@@ -84,7 +92,7 @@ export async function fetchBtxUtxos(address: string, override?: string): Promise
   return r.map((u) => ({
     txid: u.txid,
     vout: u.vout,
-    valueSat: BigInt(u.value_sat),
+    valueSat: toSat(u.value_sat),
     height: u.height,
     coinbase: u.coinbase,
     confirmations: u.confirmations,

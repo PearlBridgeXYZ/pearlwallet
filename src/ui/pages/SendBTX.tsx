@@ -39,7 +39,8 @@ export default function SendBTX() {
   } catch {
     amountSat = null;
   }
-  const canPreview = !!from && toValid && !!amountSat && amountSat > 0n;
+  const hasBalance = !!balQ.data && !!amountSat && amountSat <= balQ.data.confirmedSat;
+  const canPreview = !!from && toValid && !!amountSat && amountSat > 0n && hasBalance;
 
   async function onPreview() {
     setError(null);

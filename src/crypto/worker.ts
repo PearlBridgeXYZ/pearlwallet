@@ -16,7 +16,7 @@ import {
 } from "./hd";
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
-import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm } from "../chains/btx/derive";
+import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm, clearBtxAccountSecrets } from "../chains/btx/derive";
 import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
@@ -465,7 +465,8 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         }
       }
       for (const o of msg.outs) {
-        if (!(o.valueSat >= 0n && o.valueSat < 1n << 63n)) throw new Error("E_BTX_BAD_OUTPUT");
+        if (!(o.valueSat >= 0n && o.valueSat < 1n << 53n)) throw new Error("E_BTX_BAD_OUTPUT");
+        if (!o.scriptPubKey || o.scriptPubKey.length === 0) throw new Error("E_BTX_BAD_OUTPUT");
       }
       const signed = buildSignedBtxTx(
         {
@@ -476,7 +477,7 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         msg.ins,
         msg.outs,
       );
-      acct.mldsaSecretKey!.fill(0);
+      clearBtxAccountSecrets(acct);
       return signed;
     }
 

@@ -122,6 +122,13 @@ export function deriveBtxAccount(
   };
 }
 
+/** Zero an account's ML-DSA secret key. Callers that request withSecret=true
+ *  MUST call this when done (the worker's signing path already does). */
+export function clearBtxAccountSecrets(a: BtxAccount): void {
+  a.mldsaSecretKey?.fill(0);
+  a.mldsaSecretKey = undefined;
+}
+
 /** Convenience: just the receive address at change=0/index. */
 export function deriveBtxAddressFromIkm(ikm: Uint8Array, index = 0): string {
   return deriveBtxAccount(ikm, 0, index, false).address;

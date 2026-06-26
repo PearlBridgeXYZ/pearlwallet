@@ -106,7 +106,7 @@ export async function broadcastBtxTx(hex: string, override?: string): Promise<st
         continue;
       }
       if (j.error) throw new BtxBroadcastReject(j.error.message); // deterministic — surface
-      if (typeof j.result === "string" && j.result.length === 64) return j.result; // txid
+      if (typeof j.result === "string" && /^[0-9a-f]{64}$/i.test(j.result)) return j.result; // 32-byte hex txid
       lastErr = new Error("unexpected sendrawtransaction response");
     } catch (e) {
       if (e instanceof BtxBroadcastReject) throw e; // node reject — do not rotate
