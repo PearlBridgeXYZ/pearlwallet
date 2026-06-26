@@ -16,7 +16,8 @@ import {
 } from "./hd";
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
-import { deriveBtxAddressFromSeed } from "../chains/btx/derive";
+import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm } from "../chains/btx/derive";
+import { buildSignedBtxTx, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
@@ -316,6 +317,7 @@ export type WorkerCmd =
   | { id: string; cmd: "lock" }
   | { id: string; cmd: "deriveAddresses"; network: PearlNetwork }
   | { id: string; cmd: "deriveBtx" }
+  | { id: string; cmd: "signBtxTx"; ins: BtxTxInput[]; outs: BtxTxOutput[] }
   | { id: string; cmd: "exportMnemonic"; password: string; blob: BlobJSON }
   | { id: string; cmd: "validateMnemonic"; mnemonic: string }
   | { id: string; cmd: "generateMnemonic"; strength: 128 | 256 }
@@ -442,6 +444,25 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         session.btxAddress = deriveBtxAddressFromSeed(session.seed, 0);
       }
       return { btx: session.btxAddress };
+    }
+
+    case "signBtxTx": {
+      // Derive the index-0 account WITH its ML-DSA secret, sign every input,
+      // and return the signed tx. The secret is derived on demand and not
+      // retained past this call (the session keeps only the seed).
+      if (!session) throw new Error("E_LOCKED");
+      const acct = deriveBtxAccount(btxMasterIkm(session.seed), 0, 0, true);
+      const signed = buildSignedBtxTx(
+        {
+          mldsaPublicKey: acct.mldsaPublicKey,
+          mldsaSecretKey: acct.mldsaSecretKey!,
+          slhdsaPublicKey: acct.slhdsaPublicKey,
+        },
+        msg.ins,
+        msg.outs,
+      );
+      acct.mldsaSecretKey!.fill(0);
+      return signed;
     }
 
     case "exportMnemonic": {
