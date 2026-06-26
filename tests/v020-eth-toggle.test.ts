@@ -58,7 +58,7 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
   it("uses the current versioned storage key (and never writes v4)", async () => {
     const { useUI } = await import("../src/state/ui-store");
     useUI.getState().setTheme("dark");
-    const raw = localStorage.getItem("pearl-wallet-ui-v6");
+    const raw = localStorage.getItem("pearl-wallet-ui-v7");
     expect(raw).not.toBeNull();
     const v4 = localStorage.getItem("pearl-wallet-ui-v4");
     expect(v4).toBeNull();
@@ -229,7 +229,7 @@ describe("v0.4.2 — ETH-on-by-default migration", () => {
   it("force-enables ETH once for an existing blob that lacks the marker, preserving other prefs", async () => {
     // An existing v0.3.x user: ETH was off, custom theme + multisig set.
     localStorage.setItem(
-      "pearl-wallet-ui-v6",
+      "pearl-wallet-ui-v7",
       JSON.stringify({ theme: "dark", multisigEnabled: true, ethEnabled: false }),
     );
     const { useUI } = await import("../src/state/ui-store");
@@ -237,13 +237,13 @@ describe("v0.4.2 — ETH-on-by-default migration", () => {
     expect(useUI.getState().theme).toBe("dark"); // preserved
     expect(useUI.getState().multisigEnabled).toBe(true); // preserved
     // marker is persisted so it won't re-run
-    const stored = JSON.parse(localStorage.getItem("pearl-wallet-ui-v6")!);
+    const stored = JSON.parse(localStorage.getItem("pearl-wallet-ui-v7")!);
     expect(stored.ethDefaultedOn).toBe(true);
   });
 
   it("respects a user who turned ETH off AFTER the migration (marker already set)", async () => {
     localStorage.setItem(
-      "pearl-wallet-ui-v6",
+      "pearl-wallet-ui-v7",
       JSON.stringify({ theme: "system", ethEnabled: false, ethDefaultedOn: true }),
     );
     const { useUI } = await import("../src/state/ui-store");
@@ -266,7 +266,7 @@ describe("v0.5.0 — multisig-on-by-default migration", () => {
     // An existing user from before the graduation: multisig was off (old
     // default), with a custom theme and ETH already migrated on.
     localStorage.setItem(
-      "pearl-wallet-ui-v6",
+      "pearl-wallet-ui-v7",
       JSON.stringify({
         theme: "dark",
         multisigEnabled: false,
@@ -279,13 +279,13 @@ describe("v0.5.0 — multisig-on-by-default migration", () => {
     expect(useUI.getState().theme).toBe("dark"); // preserved
     expect(useUI.getState().ethEnabled).toBe(true); // preserved
     // marker persisted so it won't re-run
-    const stored = JSON.parse(localStorage.getItem("pearl-wallet-ui-v6")!);
+    const stored = JSON.parse(localStorage.getItem("pearl-wallet-ui-v7")!);
     expect(stored.multisigDefaultedOn).toBe(true);
   });
 
   it("respects a user who turned Vaults off AFTER the migration (marker already set)", async () => {
     localStorage.setItem(
-      "pearl-wallet-ui-v6",
+      "pearl-wallet-ui-v7",
       JSON.stringify({
         theme: "system",
         multisigEnabled: false,

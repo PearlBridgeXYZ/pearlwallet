@@ -104,6 +104,12 @@ interface UIState {
   // do NOT rely on a payload encoded today being decodable by a future
   // major version. See src/lib/offline-signing/payload.ts.
   offlineSigningEnabled: boolean;
+  // BTX (post-quantum) surface. On shows the BTX balance card + receive/send.
+  // Beta-first asset; additive to PRL/WPRL/ETH.
+  btxEnabled: boolean;
+  // Settings RPC override for the BTX indexer/RPC edge (validated against the
+  // BTX allowlist, mirrored in CSP). Empty = use the default pool.
+  btxRpcOverride: string;
   setTheme(t: Theme): void;
   setPearlRpcOverride(url: string): void;
   setEthRpcOverride(url: string): void;
@@ -111,13 +117,16 @@ interface UIState {
   setMultisigEnabled(v: boolean): void;
   setEthEnabled(v: boolean): void;
   setOfflineSigningEnabled(v: boolean): void;
+  setBtxEnabled(v: boolean): void;
+  setBtxRpcOverride(url: string): void;
 }
 
 // Bump the storage key whenever the shape changes so a stale persisted
 // blob doesn't carry forward a field that no longer exists (or worse,
 // is type-different). v4 → v5 in v0.2.0 for ethEnabled + ethRpcOverride.
 // v5 → v6 in v0.2.8 for offlineSigningEnabled.
-const STORAGE_KEY = "pearl-wallet-ui-v6";
+// v6 → v7 for btxEnabled + btxRpcOverride (BTX surface).
+const STORAGE_KEY = "pearl-wallet-ui-v7";
 
 interface PersistedUI {
   theme: Theme;
@@ -137,6 +146,8 @@ interface PersistedUI {
   // graduating the multisig vault surface to default-on. Existing users get
   // Vaults enabled once, stamped, so a later opt-out is preserved.
   multisigDefaultedOn: boolean;
+  btxEnabled: boolean;
+  btxRpcOverride: string;
 }
 
 const DEFAULT_UI: PersistedUI = {
@@ -149,6 +160,8 @@ const DEFAULT_UI: PersistedUI = {
   offlineSigningEnabled: false,
   ethDefaultedOn: true,
   multisigDefaultedOn: true,
+  btxEnabled: true,
+  btxRpcOverride: "",
 };
 
 function loadUI(): PersistedUI {
@@ -165,6 +178,9 @@ function loadUI(): PersistedUI {
     }
     if (!isAllowedEthRpcOverride(merged.ethRpcOverride)) {
       merged.ethRpcOverride = "";
+    }
+    if (!isAllowedBtxRpcOverride(merged.btxRpcOverride)) {
+      merged.btxRpcOverride = "";
     }
     // One-time default-on migrations: a stored blob that predates a marker
     // gets that surface enabled once, then stamped so a later opt-out is
@@ -203,6 +219,8 @@ export const useUI = create<UIState>((set, get) => ({
   multisigEnabled: initial.multisigEnabled,
   ethEnabled: initial.ethEnabled,
   offlineSigningEnabled: initial.offlineSigningEnabled,
+  btxEnabled: initial.btxEnabled,
+  btxRpcOverride: initial.btxRpcOverride,
   setTheme(t) {
     set({ theme: t });
     saveUI({ ...persistedSnapshot(get()), theme: t });
@@ -241,6 +259,17 @@ export const useUI = create<UIState>((set, get) => ({
     set({ offlineSigningEnabled: v });
     saveUI({ ...persistedSnapshot(get()), offlineSigningEnabled: v });
   },
+  setBtxEnabled(v) {
+    set({ btxEnabled: v });
+    saveUI({ ...persistedSnapshot(get()), btxEnabled: v });
+  },
+  setBtxRpcOverride(url) {
+    if (!isAllowedBtxRpcOverride(url)) {
+      throw new Error("E_BTX_RPC_OVERRIDE_NOT_ALLOWED");
+    }
+    set({ btxRpcOverride: url });
+    saveUI({ ...persistedSnapshot(get()), btxRpcOverride: url });
+  },
 }));
 
 function persistedSnapshot(s: UIState): PersistedUI {
@@ -254,5 +283,7 @@ function persistedSnapshot(s: UIState): PersistedUI {
     offlineSigningEnabled: s.offlineSigningEnabled,
     ethDefaultedOn: true,
     multisigDefaultedOn: true,
+    btxEnabled: s.btxEnabled,
+    btxRpcOverride: s.btxRpcOverride,
   };
 }

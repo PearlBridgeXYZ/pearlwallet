@@ -16,6 +16,7 @@ import {
 } from "./hd";
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
+import { deriveBtxAddressFromSeed } from "../chains/btx/derive";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
@@ -55,6 +56,9 @@ interface WorkerSession {
   // 64-byte BIP-39 seed retained for ad-hoc multisig child derivation. Wiped
   // on lock. See class-level comment above.
   seed: Uint8Array;
+  // Lazily-derived BTX (post-quantum) receive address at index 0. The ML-DSA +
+  // SLH-DSA keygen is ~1.8s, so we cache it rather than recompute per request.
+  btxAddress?: string;
 }
 
 let session: WorkerSession | null = null;
@@ -311,6 +315,7 @@ export type WorkerCmd =
   | { id: string; cmd: "unlock"; blob: BlobJSON; password: string; network: PearlNetwork }
   | { id: string; cmd: "lock" }
   | { id: string; cmd: "deriveAddresses"; network: PearlNetwork }
+  | { id: string; cmd: "deriveBtx" }
   | { id: string; cmd: "exportMnemonic"; password: string; blob: BlobJSON }
   | { id: string; cmd: "validateMnemonic"; mnemonic: string }
   | { id: string; cmd: "generateMnemonic"; strength: 128 | 256 }
@@ -427,6 +432,16 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       const eth = ethAddressFromPubkey(session.ethPubKey);
       const out: Addresses = { pearl: pool[0]!, pearlPool: pool, eth };
       return out;
+    }
+
+    case "deriveBtx": {
+      // BTX (post-quantum) receive address at index 0. ML-DSA + SLH-DSA keygen
+      // is ~1.8s, so derive once and cache on the session.
+      if (!session) throw new Error("E_LOCKED");
+      if (!session.btxAddress) {
+        session.btxAddress = deriveBtxAddressFromSeed(session.seed, 0);
+      }
+      return { btx: session.btxAddress };
     }
 
     case "exportMnemonic": {
