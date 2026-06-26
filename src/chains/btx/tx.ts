@@ -5,9 +5,10 @@
 // SignatureHashSchnorr with the P2MR epoch byte 0x02 (see btx-crypto-spec §4),
 // SIGHASH_DEFAULT only. Witness = [sig(2420), leafScript(1316), control(33)].
 //
-// Validated: serialization reproduces an on-chain txid; the sighash verifies the
-// existing on-chain ML-DSA signature (tests/btx-tx.test.ts). Wrong bytes = lost
-// funds — this is validated against consensus-accepted chain data, not guessed.
+// Spec-conformant against btx-crypto-spec §4 (sighash) / §5 (witness) and
+// reviewed byte-by-byte; tests/btx-tx.test.ts validates it against on-chain
+// spend 8e4929…e214 (txid reproduction + verifying the real on-chain ML-DSA
+// signature against the computed sighash). Wrong bytes = lost funds.
 
 import { sha256 } from "@noble/hashes/sha256";
 import { concatBytes, hexToBytes, bytesToHex } from "@noble/hashes/utils";
@@ -33,6 +34,9 @@ function u32le(n: number): Uint8Array {
   return b;
 }
 function u64le(n: bigint): Uint8Array {
+  // setBigUint64 silently two's-complements negatives and wraps >=2^64; reject
+  // both so a bad amount fails loudly rather than mis-serializing.
+  if (n < 0n || n >= 1n << 64n) throw new Error("value out of u64 range");
   const b = new Uint8Array(8);
   new DataView(b.buffer).setBigUint64(0, n, true);
   return b;

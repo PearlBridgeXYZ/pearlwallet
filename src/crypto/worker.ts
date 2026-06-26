@@ -17,7 +17,7 @@ import {
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
 import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm } from "../chains/btx/derive";
-import { buildSignedBtxTx, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
+import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
@@ -452,6 +452,21 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // retained past this call (the session keeps only the seed).
       if (!session) throw new Error("E_LOCKED");
       const acct = deriveBtxAccount(btxMasterIkm(session.seed), 0, 0, true);
+      // Bind every input to THIS wallet's own address before signing — never
+      // produce a signature over a sighash the main thread chose freely. Mirrors
+      // the Pearl/multisig signers' prevout-binding. A hostile/buggy caller
+      // cannot get us to sign foreign inputs or out-of-range amounts.
+      const ownSpk = p2mrScriptPubKey(acct.address);
+      const eq = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+      for (const i of msg.ins) {
+        if (!eq(i.scriptPubKey, ownSpk)) throw new Error("E_BTX_FOREIGN_INPUT");
+        if (!(i.valueSat >= 0n && i.valueSat < 1n << 53n) || !Number.isInteger(i.vout) || i.vout < 0) {
+          throw new Error("E_BTX_BAD_INPUT");
+        }
+      }
+      for (const o of msg.outs) {
+        if (!(o.valueSat >= 0n && o.valueSat < 1n << 63n)) throw new Error("E_BTX_BAD_OUTPUT");
+      }
       const signed = buildSignedBtxTx(
         {
           mldsaPublicKey: acct.mldsaPublicKey,

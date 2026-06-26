@@ -93,7 +93,8 @@ export async function broadcastBtxTx(hex: string, override?: string): Promise<st
       });
       const j = (await res.json()) as { result?: string; error?: { message: string } };
       if (j.error) throw new Error(j.error.message); // node rejected — do NOT rotate (deterministic)
-      if (j.result) return j.result;
+      if (typeof j.result === "string" && j.result.length === 64) return j.result; // txid
+      throw new Error("unexpected sendrawtransaction response"); // never silently rotate past this
     } catch (e) {
       // A node-level reject (RuntimeError from j.error) is deterministic — rethrow.
       if (e instanceof Error && !/fetch|network|timeout|5\d\d/i.test(e.message)) throw e;
