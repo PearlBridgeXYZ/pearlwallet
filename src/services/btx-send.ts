@@ -77,7 +77,13 @@ export async function prepareBtxSpend(
   return planBtxSpend(fromAddress, utxos, toAddress, amountSat, feeRatePerVb);
 }
 
-/** Broadcast a signed tx hex via the RPC edge pool (sendrawtransaction). */
+/** A definitive node rejection of the tx — same answer on every endpoint, so
+ *  it is surfaced immediately rather than rotated past. */
+export class BtxBroadcastReject extends Error {}
+
+/** Broadcast a signed tx hex via the RPC edge pool (sendrawtransaction).
+ *  Transport/parse failures (5xx, HTML error pages, network) rotate to the next
+ *  pool member; only a real node `error` (BtxBroadcastReject) stops + surfaces. */
 export async function broadcastBtxTx(hex: string, override?: string): Promise<string> {
   const params = btxParams("mainnet", override);
   const bases = Array.from(
@@ -91,14 +97,20 @@ export async function broadcastBtxTx(hex: string, override?: string): Promise<st
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ jsonrpc: "1.0", id: "send", method: "sendrawtransaction", params: [hex] }),
       });
-      const j = (await res.json()) as { result?: string; error?: { message: string } };
-      if (j.error) throw new Error(j.error.message); // node rejected — do NOT rotate (deterministic)
+      let j: { result?: string; error?: { message: string } };
+      try {
+        j = await res.json();
+      } catch {
+        // non-JSON (nginx/CF 5xx HTML) — transient, rotate to the next endpoint
+        lastErr = new Error(`btx broadcast non-json (${res.status})`);
+        continue;
+      }
+      if (j.error) throw new BtxBroadcastReject(j.error.message); // deterministic — surface
       if (typeof j.result === "string" && j.result.length === 64) return j.result; // txid
-      throw new Error("unexpected sendrawtransaction response"); // never silently rotate past this
+      lastErr = new Error("unexpected sendrawtransaction response");
     } catch (e) {
-      // A node-level reject (RuntimeError from j.error) is deterministic — rethrow.
-      if (e instanceof Error && !/fetch|network|timeout|5\d\d/i.test(e.message)) throw e;
-      lastErr = e;
+      if (e instanceof BtxBroadcastReject) throw e; // node reject — do not rotate
+      lastErr = e; // fetch/network error — rotate
     }
   }
   throw lastErr;

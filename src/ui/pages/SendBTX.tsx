@@ -6,7 +6,7 @@ import { cryptoWorker } from "../../crypto/worker-client";
 import { fetchBtxBalance } from "../../services/btx-indexer";
 import { prepareBtxSpend, broadcastBtxTx, assertValidBtxRecipient, type BtxSpendPlan } from "../../services/btx-send";
 import { isValidBtxAddress } from "../../chains/btx/address";
-import { btxTxExplorerUrl } from "../../chains/btx/network";
+import { btxTxExplorerUrl, BTX_SEND_ENABLED } from "../../chains/btx/network";
 import { formatGrains, parsePRL } from "../../lib/format";
 
 type Stage = "form" | "preview" | "sending" | "done";
@@ -69,6 +69,21 @@ export default function SendBTX() {
       setError(e instanceof Error ? e.message : "broadcast failed");
       setStage("preview");
     }
+  }
+
+  if (!BTX_SEND_ENABLED) {
+    return (
+      <Page>
+        <div className="card">
+          <h1 className="text-lg font-semibold">Send BTX</h1>
+          <p className="mt-3 text-sm text-ink-500">
+            BTX send is in final fund-safety validation (verifying the post-quantum signature
+            path against on-chain data). It will be enabled shortly. Receiving works now.
+          </p>
+          <Link to="/dashboard" className="btn-primary mt-4 block w-full text-center">Back</Link>
+        </div>
+      </Page>
+    );
   }
 
   return (

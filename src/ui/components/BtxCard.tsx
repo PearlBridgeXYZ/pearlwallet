@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import CopyAddress from "./CopyAddress";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { fetchBtxBalance } from "../../services/btx-indexer";
+import { BTX_SEND_ENABLED } from "../../chains/btx/network";
 import { formatGrains } from "../../lib/format";
 
 /**
@@ -57,7 +58,11 @@ export default function BtxCard() {
       </div>
 
       <div className="mt-3">
-        <Link to="/send/btx" className="btn-secondary tap block w-full text-center">Send BTX</Link>
+        {BTX_SEND_ENABLED ? (
+          <Link to="/send/btx" className="btn-secondary tap block w-full text-center">Send BTX</Link>
+        ) : (
+          <div className="text-center text-xs text-ink-500">Send — final validation in progress</div>
+        )}
       </div>
     </div>
   );
