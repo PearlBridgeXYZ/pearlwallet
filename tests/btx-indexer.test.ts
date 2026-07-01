@@ -5,6 +5,7 @@ import {
   BtxAddressError,
   _resetBtxIndexerCooldowns,
 } from "../src/services/btx-indexer";
+import { useUI } from "../src/state/ui-store";
 
 const ADDR = "btx1zhk7rx5psazv66jcgmaqdktwv357mgwdeu39pqxmfjy2gk0pctueq2vqd6e";
 
@@ -61,4 +62,19 @@ describe("btx-indexer client", () => {
     expect(b.confirmedSat).toBe(100n);
     expect(calls).toBe(2); // rotated once
   });
+  it("routes through a user-set btxRpcOverride first (Settings wiring)", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      seen.push(url);
+      return { ok: true, status: 200, json: async () => ({ address: ADDR, confirmed_sat: 1, utxo_count: 0, tip: 1 }) } as Response;
+    }));
+    useUI.getState().setBtxRpcOverride("https://btx-rpc3.pearlbridge.xyz");
+    try {
+      await fetchBtxBalance(ADDR);
+      expect(seen[0]).toContain("btx-rpc3.pearlbridge.xyz"); // override host tried first
+    } finally {
+      useUI.getState().setBtxRpcOverride("");
+    }
+  });
 });
+
