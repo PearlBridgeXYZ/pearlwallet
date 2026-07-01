@@ -36,6 +36,10 @@ export default function Settings() {
   const setEthEnabled = useUI((s) => s.setEthEnabled);
   const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
   const setOfflineSigningEnabled = useUI((s) => s.setOfflineSigningEnabled);
+  const btxEnabled = useUI((s) => s.btxEnabled);
+  const setBtxEnabled = useUI((s) => s.setBtxEnabled);
+  const btxRpcOverride = useUI((s) => s.btxRpcOverride);
+  const setBtxRpcOverride = useUI((s) => s.setBtxRpcOverride);
 
   const defaultRpcUrl = pearlParams().rpcUrl;
   const defaultEthRpcUrl = "https://ethereum-rpc.publicnode.com";
@@ -43,6 +47,7 @@ export default function Settings() {
   const [rpcStatus, setRpcStatus] = useState<string | null>(null);
   const [ethRpcDraft, setEthRpcDraft] = useState(ethRpcOverride);
   const [ethRpcStatus, setEthRpcStatus] = useState<string | null>(null);
+  const [btxRpcDraft, setBtxRpcDraft] = useState(btxRpcOverride);
 
   const [showMnemonic, setShowMnemonic] = useState(false);
   const [mnemonicValue, setMnemonicValue] = useState<string | null>(null);
@@ -442,6 +447,85 @@ export default function Settings() {
             : "Eth surface OFF — Pearl-only wallet"}
         </p>
       </section>
+
+      <section className="card mb-4">
+        <h2 className="text-sm font-semibold">
+          BTX surface{" "}
+          <span className="text-xs font-normal text-amber-700 dark:text-amber-400">
+            (beta · post-quantum)
+          </span>
+        </h2>
+        <p className="mt-2 text-xs text-ink-500">
+          BTX is a post-quantum L1 (ML-DSA / SLH-DSA keys, P2MR{" "}
+          <span className="font-mono">btx1z…</span> addresses). With the surface
+          on you get the BTX balance card, a BTX receive tab, and Send BTX. Same
+          seed — the toggle is purely a UI gate, not a key change.
+        </p>
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={btxEnabled}
+            onChange={(e) => setBtxEnabled(e.target.checked)}
+          />
+          Enable BTX surface (balance, receive, send)
+        </label>
+        <p className="mt-2 text-xs text-ink-500">
+          Status:{" "}
+          {btxEnabled
+            ? "BTX surface ON — balance, receive, and send are visible"
+            : "BTX surface OFF — hidden from the wallet"}
+        </p>
+      </section>
+
+      {btxEnabled && (
+        <section className="card mb-4">
+          <h2 className="text-sm font-semibold">BTX RPC endpoint</h2>
+          <p className="mt-2 text-xs text-ink-500">
+            Defaults to the public BTX edge pool (btx-rpc, btx-rpc2, btx-rpc3)
+            {btxRpcOverride && " (currently overridden)"}. Point at any BTX
+            RPC/indexer endpoint you trust, or leave blank for the defaults.
+          </p>
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+            A malicious RPC can lie about your balance and UTXOs, and can see
+            your address. It cannot move funds — your keys never leave this
+            browser — so point only at endpoints you trust.
+          </p>
+          <p className="mt-1 text-xs text-ink-500">
+            Note: the wallet&apos;s CSP only permits the default BTX edge hosts;
+            a custom host is blocked unless you run from source with an adjusted
+            CSP.
+          </p>
+          <label className="mt-3 block text-xs text-ink-500">
+            RPC URL
+            <input
+              type="text"
+              value={btxRpcDraft}
+              onChange={(e) => setBtxRpcDraft(e.target.value)}
+              placeholder="https://btx-rpc.pearlbridge.xyz"
+              className="input mt-1 w-full font-mono text-xs"
+            />
+          </label>
+          <div className="mt-3 flex gap-2">
+            <button
+              onClick={() => setBtxRpcOverride(btxRpcDraft.trim())}
+              className="btn-secondary"
+              disabled={btxRpcDraft.trim() === btxRpcOverride}
+            >
+              Save
+            </button>
+            <button
+              onClick={() => {
+                setBtxRpcOverride("");
+                setBtxRpcDraft("");
+              }}
+              className="btn-secondary"
+              disabled={!btxRpcOverride && !btxRpcDraft}
+            >
+              Reset to default
+            </button>
+          </div>
+        </section>
+      )}
 
       {ethEnabled && (
         <section className="card mb-4">

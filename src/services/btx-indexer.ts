@@ -8,6 +8,7 @@
 // pool, so we surface it immediately.
 
 import { BTX_RPC_POOL, btxParams } from "../chains/btx/network";
+import { useUI } from "../state/ui-store";
 
 const COOLDOWN_MS = 60_000;
 const cooldownUntil = new Map<string, number>();
@@ -53,7 +54,9 @@ function endpointBases(override?: string): string[] {
 }
 
 async function idxGet<T>(path: string, override?: string): Promise<T> {
-  const bases = endpointBases(override);
+  // Honour a user-set BTX RPC override (Settings) when the caller didn't pass one.
+  const ov = (override ?? useUI.getState().btxRpcOverride ?? "").trim() || undefined;
+  const bases = endpointBases(ov);
   let lastErr: unknown = new Error("no BTX endpoints configured");
   for (const base of bases) {
     const url = `${base}/idx/${path}`;

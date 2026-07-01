@@ -3,21 +3,33 @@ import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { dataUrl } from "../../lib/qr";
+import { useQuery } from "@tanstack/react-query";
+import { cryptoWorker } from "../../crypto/worker-client";
 
-type Tab = "prl" | "wprl";
+type Tab = "prl" | "wprl" | "btx";
 
 export default function Receive() {
   const addresses = useWallet((s) => s.addresses);
   const ethEnabled = useUI((s) => s.ethEnabled);
+  const btxEnabled = useUI((s) => s.btxEnabled);
   const [tab, setTab] = useState<Tab>("prl");
 
-  // If the user turns the Ethereum surface off while sitting on the
-  // WPRL tab, snap back to PRL so we don't try to render a tab that's
-  // hidden anyway. The state is cheap to flip; no need to bounce the
-  // whole page.
+  // BTX receive address — derived in the crypto worker (ML-DSA/SLH-DSA keygen,
+  // ~1.8s, cached on the session). Same query key as BtxCard so it's shared.
+  const btxAddrQ = useQuery({
+    queryKey: ["btxAddress"],
+    queryFn: () => cryptoWorker.call<"deriveBtx", { btx: string }>("deriveBtx", {}),
+    staleTime: Infinity,
+    enabled: btxEnabled,
+  });
+  const btxAddress = btxAddrQ.data?.btx;
+
+  // If the user turns a surface off while sitting on its tab, snap back to PRL
+  // so we don't render a tab that's hidden anyway.
   useEffect(() => {
     if (!ethEnabled && tab === "wprl") setTab("prl");
-  }, [ethEnabled, tab]);
+    if (!btxEnabled && tab === "btx") setTab("prl");
+  }, [ethEnabled, btxEnabled, tab]);
   const [qr, setQr] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -34,7 +46,11 @@ export default function Receive() {
   );
 
   const addr =
-    tab === "prl" ? pearlPool[prlIndex] ?? addresses?.pearl : addresses?.eth;
+    tab === "prl"
+      ? pearlPool[prlIndex] ?? addresses?.pearl
+      : tab === "btx"
+      ? btxAddress
+      : addresses?.eth;
 
   useEffect(() => {
     if (!addr) return;
@@ -82,7 +98,7 @@ export default function Receive() {
 
   return (
     <Page title="Receive">
-      {ethEnabled && (
+      {(ethEnabled || btxEnabled) && (
         <div className="mb-4 inline-flex rounded-xl border border-ink-200 p-1 text-sm dark:border-ink-800">
           <button
             type="button"
@@ -95,17 +111,32 @@ export default function Receive() {
           >
             PRL
           </button>
-          <button
-            type="button"
-            onClick={() => setTab("wprl")}
-            className={
-              tab === "wprl"
-                ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
-                : "rounded-lg px-3 py-1 text-ink-500"
-            }
-          >
-            WPRL
-          </button>
+          {ethEnabled && (
+            <button
+              type="button"
+              onClick={() => setTab("wprl")}
+              className={
+                tab === "wprl"
+                  ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
+                  : "rounded-lg px-3 py-1 text-ink-500"
+              }
+            >
+              WPRL
+            </button>
+          )}
+          {btxEnabled && (
+            <button
+              type="button"
+              onClick={() => setTab("btx")}
+              className={
+                tab === "btx"
+                  ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
+                  : "rounded-lg px-3 py-1 text-ink-500"
+              }
+            >
+              BTX
+            </button>
+          )}
         </div>
       )}
 
@@ -170,7 +201,7 @@ export default function Receive() {
       ) : null}
 
       <p className="mt-4 text-xs text-ink-500">
-        Only send {tab.toUpperCase()} to this address. {tab === "wprl" ? "This is an Ethereum address — sending other ERC-20s to it works (you'll see them in a block explorer), but the wallet only tracks WPRL." : "Pearl L1 only — do not send other assets."}
+        Only send {tab.toUpperCase()} to this address. {tab === "wprl" ? "This is an Ethereum address — sending other ERC-20s to it works (you'll see them in a block explorer), but the wallet only tracks WPRL." : tab === "btx" ? "This is a post-quantum P2MR address (btx1z…) on the BTX L1 — send only native BTX. WBTX (wrapped BTX) lives on Ethereum; do not send it here." : "Pearl L1 only — do not send other assets."}
       </p>
     </Page>
   );
