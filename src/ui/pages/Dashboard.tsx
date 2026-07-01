@@ -4,6 +4,7 @@ import Page from "../components/Page";
 import ActivityList from "../components/ActivityList";
 import CopyAddress from "../components/CopyAddress";
 import InstallPWA from "../components/InstallPWA";
+import BtxCard from "../components/BtxCard";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { fetchBalances } from "../../services/balances";
@@ -14,6 +15,7 @@ export default function Dashboard() {
   const multisigEnabled = useUI((s) => s.multisigEnabled);
   const ethEnabled = useUI((s) => s.ethEnabled);
   const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
+  const btxEnabled = useUI((s) => s.btxEnabled);
 
   const balancesQ = useQuery({
     queryKey: [
@@ -151,6 +153,8 @@ export default function Dashboard() {
           )}
         </div>
       </div>
+
+      {btxEnabled && <BtxCard />}
 
       <div className="card mt-4">
         <div className="flex items-center justify-between">

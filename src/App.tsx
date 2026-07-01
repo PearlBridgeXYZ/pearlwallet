@@ -12,6 +12,7 @@ import Receive from "./ui/pages/Receive";
 import SendPRL from "./ui/pages/SendPRL";
 import SendWPRL from "./ui/pages/SendWPRL";
 import SendETH from "./ui/pages/SendETH";
+import SendBTX from "./ui/pages/SendBTX";
 import Bridge from "./ui/pages/Bridge";
 import History from "./ui/pages/History";
 import Settings from "./ui/pages/Settings";
@@ -87,6 +88,7 @@ export default function App() {
   const ethEnabled = useUI((s) => s.ethEnabled);
   const multisigEnabled = useUI((s) => s.multisigEnabled);
   const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
+  const btxEnabled = useUI((s) => s.btxEnabled);
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -238,6 +240,15 @@ export default function App() {
     }
   }, [offlineSigningEnabled, status, location.pathname, navigate]);
 
+  // BTX surface bounce: deep-linking /send/btx with BTX disabled returns home.
+  useEffect(() => {
+    if (status !== "unlocked") return;
+    if (btxEnabled) return;
+    if (location.pathname === "/send/btx") {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [btxEnabled, status, location.pathname, navigate]);
+
   return (
     <div className="flex min-h-full flex-col">
       <div className="flex-1">
@@ -251,6 +262,7 @@ export default function App() {
           <Route path="/send/prl" element={<SendPRL />} />
           <Route path="/send/wprl" element={<SendWPRL />} />
           <Route path="/send/eth" element={<SendETH />} />
+          <Route path="/send/btx" element={<SendBTX />} />
           <Route path="/bridge" element={<Bridge />} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
