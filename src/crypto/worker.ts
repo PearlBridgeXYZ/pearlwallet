@@ -452,33 +452,43 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // retained past this call (the session keeps only the seed).
       if (!session) throw new Error("E_LOCKED");
       const acct = deriveBtxAccount(btxMasterIkm(session.seed), 0, 0, true);
-      // Bind every input to THIS wallet's own address before signing — never
-      // produce a signature over a sighash the main thread chose freely. Mirrors
-      // the Pearl/multisig signers' prevout-binding. A hostile/buggy caller
-      // cannot get us to sign foreign inputs or out-of-range amounts.
-      const ownSpk = p2mrScriptPubKey(acct.address);
-      const eq = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
-      for (const i of msg.ins) {
-        if (!eq(i.scriptPubKey, ownSpk)) throw new Error("E_BTX_FOREIGN_INPUT");
-        if (!(i.valueSat >= 0n && i.valueSat < 1n << 53n) || !Number.isInteger(i.vout) || i.vout < 0) {
-          throw new Error("E_BTX_BAD_INPUT");
+      // Zero the ML-DSA secret on EVERY exit — success, a validation throw
+      // below, or a throw inside buildSignedBtxTx. A hostile/buggy main thread
+      // can deliberately trigger a validation throw, so the success-only zero
+      // left a live 2560-byte secret in worker heap. (Audit HIGH 2026-07-01.)
+      try {
+        // Bind every input to THIS wallet's own address before signing — never
+        // produce a signature over a sighash the main thread chose freely.
+        // Mirrors the Pearl/multisig signers' prevout-binding. A hostile/buggy
+        // caller cannot get us to sign foreign inputs or out-of-range amounts.
+        if (!Array.isArray(msg.ins) || msg.ins.length === 0) throw new Error("E_BTX_NO_INPUTS");
+        if (!Array.isArray(msg.outs) || msg.outs.length === 0) throw new Error("E_BTX_NO_OUTPUTS");
+        const ownSpk = p2mrScriptPubKey(acct.address);
+        const eq = (a: Uint8Array, b: Uint8Array) => a.length === b.length && a.every((x, i) => x === b[i]);
+        for (const i of msg.ins) {
+          if (!eq(i.scriptPubKey, ownSpk)) throw new Error("E_BTX_FOREIGN_INPUT");
+          // A 0-value input is never legitimate for a spend (audit MED): require > 0.
+          if (!(i.valueSat > 0n && i.valueSat < 1n << 53n) || !Number.isInteger(i.vout) || i.vout < 0) {
+            throw new Error("E_BTX_BAD_INPUT");
+          }
         }
+        for (const o of msg.outs) {
+          if (!(o.valueSat >= 0n && o.valueSat < 1n << 53n)) throw new Error("E_BTX_BAD_OUTPUT");
+          if (!o.scriptPubKey || o.scriptPubKey.length === 0) throw new Error("E_BTX_BAD_OUTPUT");
+        }
+        const signed = buildSignedBtxTx(
+          {
+            mldsaPublicKey: acct.mldsaPublicKey,
+            mldsaSecretKey: acct.mldsaSecretKey!,
+            slhdsaPublicKey: acct.slhdsaPublicKey,
+          },
+          msg.ins,
+          msg.outs,
+        );
+        return signed;
+      } finally {
+        clearBtxAccountSecrets(acct);
       }
-      for (const o of msg.outs) {
-        if (!(o.valueSat >= 0n && o.valueSat < 1n << 53n)) throw new Error("E_BTX_BAD_OUTPUT");
-        if (!o.scriptPubKey || o.scriptPubKey.length === 0) throw new Error("E_BTX_BAD_OUTPUT");
-      }
-      const signed = buildSignedBtxTx(
-        {
-          mldsaPublicKey: acct.mldsaPublicKey,
-          mldsaSecretKey: acct.mldsaSecretKey!,
-          slhdsaPublicKey: acct.slhdsaPublicKey,
-        },
-        msg.ins,
-        msg.outs,
-      );
-      clearBtxAccountSecrets(acct);
-      return signed;
     }
 
     case "exportMnemonic": {

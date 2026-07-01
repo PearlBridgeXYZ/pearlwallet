@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { hexToBytes } from "@noble/hashes/utils";
-import { deriveBtxAccount, btxMasterIkm, deriveBtxAddressFromSeed } from "../src/chains/btx/derive";
+import { deriveBtxAccount, btxMasterIkm, deriveBtxAddressFromSeed, clearBtxAccountSecrets } from "../src/chains/btx/derive";
 
 // GOLDEN VECTOR from a real btxd node (deriveaddresses / listdescriptors on a
 // throwaway wallet): master IKM 1c3ee382… at m/87h/0h/0h/0/0 produces this
@@ -39,5 +39,14 @@ describe("BTX key derivation — byte-exact vs btxd golden vector", () => {
     const addr = deriveBtxAddressFromSeed(seed, 0);
     expect(addr).toBe(deriveBtxAddressFromSeed(seed, 0));
     expect(addr.startsWith("btx1z")).toBe(true);
+  });
+  it("clearBtxAccountSecrets zeros the ML-DSA secret (heap hygiene; signBtxTx finally-path)", () => {
+    const acct = deriveBtxAccount(hexToBytes(GOLDEN_IKM), 0, 0, true);
+    const secretRef = acct.mldsaSecretKey!; // hold the buffer before it's dropped
+    expect(secretRef.length).toBe(2560);
+    expect(secretRef.some((b) => b !== 0)).toBe(true); // real key material
+    clearBtxAccountSecrets(acct);
+    expect(acct.mldsaSecretKey).toBeUndefined(); // field reference dropped
+    expect(secretRef.every((b) => b === 0)).toBe(true); // underlying buffer zeroed in place
   });
 });

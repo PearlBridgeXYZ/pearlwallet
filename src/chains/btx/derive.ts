@@ -112,13 +112,21 @@ export function deriveBtxAccount(
   const sKp = slh_dsa_shake_128s.keygen(pqEntropy(sSeed, 48)); // SLH reads 48 bytes
   const mldsaPublicKey = toU8(mKp.publicKey);
   const slhdsaPublicKey = toU8(sKp.publicKey);
+  // Copy out the ML-DSA secret into a buffer we own, then zero noble's original
+  // keypair buffers + the intermediate seeds so no unreferenced secret material
+  // lingers in worker heap for a memory-snapshot attacker. (Audit MED 2026-07-01.)
+  const mldsaSecretKey = withSecret ? toU8(mKp.secretKey) : undefined;
+  if (mKp.secretKey instanceof Uint8Array) mKp.secretKey.fill(0);
+  if (sKp.secretKey instanceof Uint8Array) sKp.secretKey.fill(0);
+  mSeed.fill(0);
+  sSeed.fill(0);
   return {
     address: defaultBtxAddress(mldsaPublicKey, slhdsaPublicKey),
     change,
     index,
     mldsaPublicKey,
     slhdsaPublicKey,
-    ...(withSecret ? { mldsaSecretKey: toU8(mKp.secretKey) } : {}),
+    ...(withSecret ? { mldsaSecretKey } : {}),
   };
 }
 

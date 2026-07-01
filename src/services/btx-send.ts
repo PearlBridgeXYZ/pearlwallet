@@ -6,6 +6,7 @@ import { BTX_RPC_POOL, btxParams } from "../chains/btx/network";
 import { p2mrScriptPubKey, estimateBtxVsize, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { decodeP2MRAddress } from "../chains/btx/address";
 import { fetchBtxUtxos, type BtxUtxo } from "./btx-indexer";
+import { useUI } from "../state/ui-store";
 
 const DUST_SAT = 546n;
 export const DEFAULT_FEE_RATE = 25; // sat/vByte (BTX mempool floor is generous; PQ txs are large)
@@ -85,7 +86,11 @@ export class BtxBroadcastReject extends Error {}
  *  Transport/parse failures (5xx, HTML error pages, network) rotate to the next
  *  pool member; only a real node `error` (BtxBroadcastReject) stops + surfaces. */
 export async function broadcastBtxTx(hex: string, override?: string): Promise<string> {
-  const params = btxParams("mainnet", override);
+  // Honour a user-set BTX RPC override (Settings) on the BROADCAST leg too —
+  // it already routed the read/indexer path, but a send would still broadcast
+  // to the default pool. (Audit MED 2026-07-01: routing asymmetry.)
+  const ov = (override ?? useUI.getState().btxRpcOverride ?? "").trim() || undefined;
+  const params = btxParams("mainnet", ov);
   const bases = Array.from(
     new Set((params.rpcLabel === "custom" ? [params.rpcUrl, ...BTX_RPC_POOL] : [...BTX_RPC_POOL]).map((u) => u.replace(/\/+$/, ""))),
   );
