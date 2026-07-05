@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          # No .nvmrc / engines pin in this repo — track Node 20 LTS.
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The `lint` script (eslint) has no eslint dependency or config committed
+      # to this repo, so it currently fails to run. Kept here per the intended
+      # CI shape and marked non-blocking so the tooling gap stays VISIBLE in the
+      # run without red-flagging the meaningful test gate below. Drop
+      # `continue-on-error` once eslint + a config are added to devDependencies.
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Unit tests (vitest)
+        run: npx vitest run
