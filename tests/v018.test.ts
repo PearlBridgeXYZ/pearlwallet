@@ -365,3 +365,55 @@ describe("v0.1.8 / CSP headers — COOP/COEP for worker isolation", () => {
     expect(src).toMatch(/Cross-Origin-Embedder-Policy:\s*require-corp/);
   });
 });
+
+// A browser enforces the INTERSECTION of the <meta> CSP (index.html) and the
+// header CSP (_headers), so any host in one but not the other is effectively
+// blocked. This drift is exactly what stranded the BTX indexer (btx-rpc*) — the
+// header allowlist got the hosts, the meta tag didn't, and the browser refused
+// every /idx/ connect. Guard the two connect-src lists at parity so it can't
+// silently regress again.
+describe("CSP parity — meta (index.html) vs header (_headers) connect-src", () => {
+  const connectSrc = (csp: string): Set<string> => {
+    const m = csp.match(/connect-src([^;]*)/i);
+    if (!m) throw new Error("no connect-src directive found");
+    return new Set(
+      m[1]
+        .split(/\s+/)
+        .map((t) => t.trim())
+        .filter((t) => t.length > 0),
+    );
+  };
+
+  it("index.html <meta> and public/_headers allow the same connect-src origins", async () => {
+    const fs = await import("node:fs/promises");
+    const html = await fs.readFile("index.html", "utf8");
+    const headers = await fs.readFile("public/_headers", "utf8");
+
+    const metaMatch = html.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i);
+    expect(metaMatch, "index.html meta CSP present").toBeTruthy();
+    const headerMatch = headers.match(/Content-Security-Policy:\s*([^\n]+)/i);
+    expect(headerMatch, "_headers CSP present").toBeTruthy();
+
+    const meta = connectSrc(metaMatch![1]);
+    const header = connectSrc(headerMatch![1]);
+
+    const onlyInHeader = [...header].filter((h) => !meta.has(h));
+    const onlyInMeta = [...meta].filter((h) => !header.has(h));
+    expect(onlyInHeader, `hosts in _headers but not meta (browser will block): ${onlyInHeader}`).toEqual([]);
+    expect(onlyInMeta, `hosts in meta but not _headers: ${onlyInMeta}`).toEqual([]);
+  });
+
+  it("both CSPs allow the BTX indexer edge pool", async () => {
+    const fs = await import("node:fs/promises");
+    const html = await fs.readFile("index.html", "utf8");
+    const headers = await fs.readFile("public/_headers", "utf8");
+    for (const host of [
+      "https://btx-rpc.pearlbridge.xyz",
+      "https://btx-rpc2.pearlbridge.xyz",
+      "https://btx-rpc3.pearlbridge.xyz",
+    ]) {
+      expect(html, `index.html allows ${host}`).toContain(host);
+      expect(headers, `_headers allows ${host}`).toContain(host);
+    }
+  });
+});
