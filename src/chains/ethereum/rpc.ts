@@ -11,6 +11,9 @@ import { useUI, isAllowedEthRpcOverride } from "../../state/ui-store";
  * persistence-shape regression must not silently turn into "user RPC
  * override points at attacker-controlled host".
  */
+/** Per-request timeout for every Ethereum JSON-RPC call. */
+export const ETH_RPC_TIMEOUT_MS = 10_000;
+
 export function ethClient(net: EthNetwork) {
   const override = readEthRpcOverride();
   const defaults = ETH_RPC_DEFAULTS[net];
@@ -20,9 +23,11 @@ export function ethClient(net: EthNetwork) {
   const urls = override ? [override, ...defaults.filter((u) => u !== override)] : [...defaults];
   return createPublicClient({
     chain: ethChain(net),
+    // Explicit per-request timeout so one hung provider can't stall the
+    // dashboard; fallback moves on to the next URL on timeout.
     transport: fallback(
-      urls.map((u) => http(u)),
-      { rank: false, retryCount: 2 },
+      urls.map((u) => http(u, { timeout: ETH_RPC_TIMEOUT_MS, retryCount: 1 })),
+      { rank: false, retryCount: 1 },
     ),
   });
 }

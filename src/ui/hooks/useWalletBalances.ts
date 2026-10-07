@@ -1,0 +1,324 @@
+// Progressive wallet balances for the dashboard.
+//
+// Replaces the single serial `fetchBalances` query with four independent
+// queries so each asset renders as soon as its own source answers:
+//
+//   • PRL   — pool scan (services/balances.ts scanPrlPool), with
+//             per-address progress ("Scanning 7/20")
+//   • WPRL  — ERC-20 balance on Ethereum
+//   • ETH   — native gas balance on Ethereum
+//   • price — /api/prl-price
+//
+// Display semantics (all asset states share one shape):
+//   value     best known value, or null if nothing is known yet
+//   status    "loading" — nothing known yet, first fetch in flight
+//             "ok"      — value is complete
+//             "partial" — value is a lower bound (some pool addresses
+//                         unreadable, or a page cap was hit)
+//             "error"   — no usable value (latest fetch failed and there
+//                         is nothing earlier to fall back on)
+//   stale     true when (part of) value comes from an EARLIER successful
+//             fetch because the latest one failed — keep-last-good: a
+//             failed refetch never overwrites a good value with 0
+//   updatedAt ms timestamp of the oldest data contributing to value
+//   error     message from the latest failed fetch, if any
+//
+// totalUsd is null whenever the price or the PRL balance is unknown —
+// the UI must show "price unavailable", never $0.00, in that case.
+//
+// SAFETY: keep-last-good merging is DISPLAY ONLY. The react-query cache
+// for the PRL scan holds the raw result of ONE fresh scan; its
+// `spendable` field (the UTXO set Send may reuse) is non-null only when
+// that single scan was complete. Nothing in this module writes merged,
+// partial or remembered data anywhere Send reads from.
+
+import { useSyncExternalStore } from "react";
+import { useQuery, type UseQueryResult } from "@tanstack/react-query";
+import {
+  scanPrlPool,
+  fetchWprlBalance,
+  fetchEthBalanceWei,
+  type PrlPoolScan,
+  type PrlPoolScanProgress,
+} from "../../services/balances";
+import { fetchPrlPriceUsd } from "../../services/prices";
+
+export type AssetStatus = "loading" | "ok" | "partial" | "error";
+
+export interface AssetState<T> {
+  value: T | null;
+  status: AssetStatus;
+  stale: boolean;
+  updatedAt: number | null;
+  error?: string;
+}
+
+export interface ScanProgress {
+  done: number;
+  total: number;
+  running: boolean;
+}
+
+export interface WalletBalancesView {
+  prl: AssetState<bigint>;
+  /** null when the Ethereum surface is disabled in Settings. */
+  wprl: AssetState<bigint> | null;
+  /** null when the Ethereum surface is disabled in Settings. */
+  eth: AssetState<bigint> | null;
+  price: AssetState<number>;
+  scan: ScanProgress;
+  /** USD value of PRL (+ WPRL when enabled). null when unknown. */
+  totalUsd: number | null;
+  /** "partial" when a component is missing/partial (e.g. WPRL errored). */
+  totalStatus: AssetStatus;
+  totalStale: boolean;
+  refetch: () => void;
+}
+
+// ─── Query keys / cadence ────────────────────────────────────────────────
+
+/** React-query key of the PRL pool scan. SendPRL reads `spendable` from
+ *  this cache entry, so both sides must build the key with this helper. */
+export function prlScanQueryKey(pool: readonly string[]): readonly [string, string] {
+  return ["prl-pool-scan", pool.join(",")] as const;
+}
+
+/** A full scan is ~20+ paced requests; refetch every minute. */
+export const PRL_SCAN_REFETCH_MS = 60_000;
+export const ETH_REFETCH_MS = 30_000;
+export const PRICE_REFETCH_MS = 60_000;
+
+// ─── Module stores: scan progress + per-address last-good ────────────────
+
+type Listener = () => void;
+const progressByPool = new Map<string, ScanProgress>();
+const progressListeners = new Set<Listener>();
+
+function setProgress(key: string, p: ScanProgress): void {
+  progressByPool.set(key, p);
+  for (const l of progressListeners) l();
+}
+
+function subscribeProgress(l: Listener): () => void {
+  progressListeners.add(l);
+  return () => progressListeners.delete(l);
+}
+
+/** Last successfully read balance per pool address (display only). */
+const lastGoodByAddress = new Map<string, { grains: bigint; at: number }>();
+
+/** Forget remembered per-address balances (e.g. on wallet switch/lock). */
+export function clearBalanceMemory(): void {
+  lastGoodByAddress.clear();
+  progressByPool.clear();
+  for (const l of progressListeners) l();
+}
+
+/** Records a complete per-address read into the display memory
+ *  (failed and page-capped reads are never remembered). */
+export function rememberAddressResult(
+  address: string,
+  p: PrlPoolScanProgress,
+  at: number,
+  memory: Map<string, { grains: bigint; at: number }> = lastGoodByAddress,
+): void {
+  if (p.result.status === "ok" && !p.result.degraded) {
+    memory.set(address, { grains: p.result.grains, at });
+  }
+}
+
+// ─── Pure state derivation (unit-tested) ─────────────────────────────────
+
+/**
+ * Display state for PRL from the latest raw scan plus remembered
+ * per-address values. An address that failed in this scan falls back to
+ * its last good value (marked stale) instead of counting as 0.
+ */
+export function derivePrlState(
+  scan: PrlPoolScan | undefined,
+  memory: ReadonlyMap<string, { grains: bigint; at: number }>,
+  queryError?: unknown,
+): AssetState<bigint> {
+  if (!scan) {
+    if (queryError) {
+      return { value: null, status: "error", stale: false, updatedAt: null, error: errMsg(queryError) };
+    }
+    return { value: null, status: "loading", stale: false, updatedAt: null };
+  }
+  let total = 0n;
+  let unknown = 0;
+  let staleCount = 0;
+  let degraded = false;
+  let oldest = scan.finishedAt;
+  let firstError: string | undefined;
+  scan.perAddress.forEach((r, i) => {
+    if (r.status === "ok") {
+      total += r.grains;
+      if (r.degraded) degraded = true;
+      return;
+    }
+    firstError ??= r.error;
+    const lg = memory.get(scan.pool[i]!);
+    if (lg) {
+      total += lg.grains;
+      staleCount++;
+      if (lg.at < oldest) oldest = lg.at;
+    } else {
+      unknown++;
+    }
+  });
+  const n = scan.perAddress.length;
+  const error = firstError ?? (queryError ? errMsg(queryError) : undefined);
+  if (unknown > n / 2) {
+    // Too little is known to show a number at all.
+    return { value: null, status: "error", stale: false, updatedAt: null, error };
+  }
+  const status: AssetStatus = unknown > 0 || degraded ? "partial" : "ok";
+  return {
+    value: total,
+    status,
+    stale: staleCount > 0 || !!queryError,
+    updatedAt: oldest,
+    ...(error ? { error } : {}),
+  };
+}
+
+/** Display state for a simple react-query-backed asset. React-query keeps
+ *  the previous `data` when a refetch fails — that is our last-good. */
+export function deriveQueryState<T>(
+  q: Pick<UseQueryResult<T>, "data" | "isError" | "error" | "dataUpdatedAt">,
+): AssetState<T> {
+  if (q.data !== undefined && q.data !== null) {
+    return {
+      value: q.data,
+      status: "ok",
+      stale: q.isError,
+      updatedAt: q.dataUpdatedAt || null,
+      ...(q.isError ? { error: errMsg(q.error) } : {}),
+    };
+  }
+  if (q.isError) return { value: null, status: "error", stale: false, updatedAt: null, error: errMsg(q.error) };
+  return { value: null, status: "loading", stale: false, updatedAt: null };
+}
+
+/** Total in USD. null whenever price or PRL is unknown (never $0.00 for
+ *  "don't know"). WPRL missing while enabled ⇒ total is "partial". */
+export function deriveTotal(
+  prl: AssetState<bigint>,
+  wprl: AssetState<bigint> | null,
+  price: AssetState<number>,
+): { totalUsd: number | null; totalStatus: AssetStatus; totalStale: boolean } {
+  const stale = prl.stale || price.stale || !!wprl?.stale;
+  if (price.value === null || prl.value === null) {
+    const loading = prl.status === "loading" || price.status === "loading";
+    return { totalUsd: null, totalStatus: loading ? "loading" : "error", totalStale: false };
+  }
+  let usd = (Number(prl.value) / 1e8) * price.value;
+  let partial = prl.status === "partial";
+  if (wprl) {
+    if (wprl.value === null) partial = true;
+    else usd += (Number(wprl.value) / 1e8) * price.value;
+  }
+  return { totalUsd: usd, totalStatus: partial ? "partial" : "ok", totalStale: stale };
+}
+
+function errMsg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+// ─── Hook ────────────────────────────────────────────────────────────────
+
+export interface UseWalletBalancesArgs {
+  pool: readonly string[];
+  ethAddr?: string;
+  ethEnabled: boolean;
+}
+
+export function useWalletBalances({ pool, ethAddr, ethEnabled }: UseWalletBalancesArgs): WalletBalancesView {
+  const poolKey = pool.join(",");
+  const key = prlScanQueryKey(pool);
+
+  const prlQ = useQuery({
+    queryKey: key,
+    queryFn: async ({ signal }) => {
+      const list = poolKey ? poolKey.split(",") : [];
+      setProgress(poolKey, { done: 0, total: list.length, running: true });
+      try {
+        return await scanPrlPool(list, {
+          signal,
+          onProgress: (p) => {
+            rememberAddressResult(list[p.index]!, p, Date.now());
+            setProgress(poolKey, { done: p.done, total: p.total, running: true });
+          },
+        });
+      } finally {
+        const cur = progressByPool.get(poolKey);
+        setProgress(poolKey, { done: cur?.done ?? 0, total: list.length, running: false });
+      }
+    },
+    enabled: pool.length > 0,
+    refetchInterval: PRL_SCAN_REFETCH_MS,
+    staleTime: 30_000,
+    // The RPC client already backs off and retries each request.
+    retry: false,
+  });
+
+  const wprlQ = useQuery({
+    queryKey: ["wprl-balance", ethAddr],
+    queryFn: () => fetchWprlBalance(ethAddr!),
+    enabled: ethEnabled && !!ethAddr,
+    refetchInterval: ETH_REFETCH_MS,
+    retry: 1,
+  });
+
+  const ethQ = useQuery({
+    queryKey: ["eth-balance", ethAddr],
+    queryFn: () => fetchEthBalanceWei(ethAddr as `0x${string}`, "mainnet"),
+    enabled: ethEnabled && !!ethAddr,
+    refetchInterval: ETH_REFETCH_MS,
+    retry: 1,
+  });
+
+  const priceQ = useQuery({
+    queryKey: ["prl-price"],
+    queryFn: () => fetchPrlPriceUsd(),
+    staleTime: PRICE_REFETCH_MS,
+    refetchInterval: PRICE_REFETCH_MS,
+    retry: 1,
+  });
+
+  const progress = useSyncExternalStore(
+    subscribeProgress,
+    () => progressByPool.get(poolKey),
+    () => undefined,
+  );
+
+  // Cheap pure derivation; recomputed each render so per-address memory
+  // written during a scan is picked up as progress re-renders arrive.
+  const prl = derivePrlState(prlQ.data, lastGoodByAddress, prlQ.isError ? prlQ.error : undefined);
+  const wprl = ethEnabled ? deriveQueryState(wprlQ) : null;
+  const eth = ethEnabled ? deriveQueryState(ethQ) : null;
+  const price = deriveQueryState(priceQ);
+  const total = deriveTotal(prl, wprl, price);
+
+  return {
+    prl,
+    wprl,
+    eth,
+    price,
+    scan: {
+      done: progress?.done ?? 0,
+      total: progress?.total ?? pool.length,
+      running: progress?.running ?? prlQ.isFetching,
+    },
+    ...total,
+    refetch: () => {
+      void prlQ.refetch();
+      if (ethEnabled) {
+        void wprlQ.refetch();
+        void ethQ.refetch();
+      }
+      void priceQ.refetch();
+    },
+  };
+}

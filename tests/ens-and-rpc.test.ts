@@ -39,9 +39,12 @@ describe("normalizeEthAddress — EIP-55 checksum", () => {
 });
 
 describe("RPC chain + presets", () => {
-  it("default mainnet chain is diversified across ≥3 independent providers", () => {
+  // v0.7: cloudflare-eth.com dropped from the automatic chain (it returns
+  // JSON-RPC errors), leaving two independent providers.
+  it("default mainnet chain is diversified across ≥2 independent providers", () => {
     const hosts = ETH_RPC_DEFAULTS.mainnet.map((u) => new URL(u).host);
-    expect(hosts.length).toBeGreaterThanOrEqual(3);
+    expect(hosts.length).toBeGreaterThanOrEqual(2);
+    expect(hosts).not.toContain("cloudflare-eth.com");
     expect(new Set(hosts).size).toBe(hosts.length); // no duplicates
     expect(hosts[0]).toBe("ethereum-rpc.publicnode.com"); // PublicNode primary
   });

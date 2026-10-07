@@ -40,6 +40,7 @@ import {
   fetchPrlUtxos,
   fetchPrlBalanceGrains,
   broadcastPearlTx,
+  BroadcastStatusUnknownError,
   type PrlUtxo,
 } from "./pearl-rpc";
 import type {
@@ -890,6 +891,10 @@ export async function broadcastPendingTx(opts: {
   try {
     txid = await broadcastPearlTx(rawHex);
   } catch (err) {
+    // Outcome unknown (timeout / dropped connection): the tx may be in the
+    // mempool. Leave the record as-is so the user can check the explorer
+    // or re-broadcast (idempotent) — never mark it failed.
+    if (err instanceof BroadcastStatusUnknownError) throw err;
     const failed: VaultPendingTxRecord = {
       ...opts.pending,
       status: "failed",

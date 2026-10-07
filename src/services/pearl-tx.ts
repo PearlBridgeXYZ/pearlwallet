@@ -5,9 +5,11 @@
 import {
   fetchPrlUtxos,
   broadcastPearlTx,
+  pearlRpcTuning,
   MAX_UTXO_WALK_PAGES_HARD,
   type PrlUtxo,
 } from "./pearl-rpc";
+import { mapWithConcurrency } from "./rpc-limiter";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
 import type { PearlNetwork } from "../chains/pearl/network";
 import { cryptoWorker } from "../crypto/worker-client";
@@ -84,18 +86,35 @@ async function listPoolUtxos(
   opts: { maxPages?: number } = {},
 ): Promise<{ utxos: PoolUtxo[]; degraded: boolean }> {
   let degraded = false;
+  let failures = 0;
   const out: PoolUtxo[] = [];
-  for (let i = 0; i < pool.length; i++) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 300));
+  // v0.7: pacing comes from the shared Pearl RPC token bucket (replaces
+  // the old fixed 300 ms gap); a few addresses walk in parallel. Results
+  // are collected per index so poolIndex tagging is order-independent.
+  const perAddr = await mapWithConcurrency(pool, pearlRpcTuning().scanConcurrency, async (addr) => {
     try {
-      const r = await fetchPrlUtxos(pool[i]!, { maxPages: opts.maxPages });
-      if (r.degraded) degraded = true;
-      for (const u of r.utxos) out.push({ ...u, poolIndex: i });
+      return await fetchPrlUtxos(addr, { maxPages: opts.maxPages });
     } catch {
+      return null;
+    }
+  });
+  perAddr.forEach((r, i) => {
+    if (!r) {
       // Mirror balances.ts tolerance — a single pool address being
       // unavailable shouldn't deny the user spending from the rest.
       degraded = true;
+      failures++;
+      return;
     }
+    if (r.degraded) degraded = true;
+    for (const u of r.utxos) out.push({ ...u, poolIndex: i });
+  });
+  // Nothing found AND some addresses could not be read: that is an RPC
+  // problem, not an empty wallet. Say so instead of E_NO_UTXOS.
+  if (out.length === 0 && failures > 0) {
+    throw new Error(
+      `E_UTXO_SCAN_INCOMPLETE: ${failures} of ${pool.length} addresses could not be read (Pearl RPC busy) — try again`,
+    );
   }
   // Largest-first selection is the simplest, lowest-input-count
   // strategy. We don't have on-chain confirmation height in the UTXO

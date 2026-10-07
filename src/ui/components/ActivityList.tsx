@@ -14,9 +14,12 @@ interface Props {
   truncate?: boolean;
   /** Optional filter: "all" | "prl" | "wprl". */
   filter?: "all" | "prl" | "wprl";
+  /** Defer the scan (Dashboard holds it until the first balance scan
+   *  settles so the two don't compete for the RPC budget). */
+  enabled?: boolean;
 }
 
-export default function ActivityList({ limit = 25, truncate = false, filter = "all" }: Props) {
+export default function ActivityList({ limit = 25, truncate = false, filter = "all", enabled = true }: Props) {
   const addresses = useWallet((s) => s.addresses);
   const ethNetwork = useWallet((s) => s.ethNetwork);
 
@@ -35,7 +38,7 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
         ethNetwork,
         limit,
       ),
-    enabled: !!addresses,
+    enabled: !!addresses && enabled,
     // Activity is more expensive than balances (pool walk + getLogs).
     // Refetch every 90s — fast enough to catch a fresh receive, slow
     // enough not to hammer the public sentry / public Eth RPC.
@@ -45,7 +48,7 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
 
   if (!addresses) return null;
 
-  if (activityQ.isLoading) {
+  if (activityQ.isLoading || (!enabled && !activityQ.data)) {
     return <p className="mt-3 text-sm text-ink-500">Scanning Pearl + Eth for recent activity…</p>;
   }
 

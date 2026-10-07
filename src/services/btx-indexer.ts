@@ -53,6 +53,19 @@ function endpointBases(override?: string): string[] {
   return bases.sort((a, b) => (cooldownUntil.get(a) ?? 0) - (cooldownUntil.get(b) ?? 0));
 }
 
+/** Per-request timeout for indexer reads; a timeout rotates like a 5xx. */
+const IDX_FETCH_TIMEOUT_MS = 10_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), IDX_FETCH_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function idxGet<T>(path: string, override?: string): Promise<T> {
   // Honour a user-set BTX RPC override (Settings) when the caller didn't pass one.
   const ov = (override ?? useUI.getState().btxRpcOverride ?? "").trim() || undefined;
@@ -61,7 +74,7 @@ async function idxGet<T>(path: string, override?: string): Promise<T> {
   for (const base of bases) {
     const url = `${base}/idx/${path}`;
     try {
-      const res = await fetch(url, { headers: { accept: "application/json" } });
+      const res = await fetchWithTimeout(url, { headers: { accept: "application/json" } });
       if (res.status === 400) {
         throw new BtxAddressError("invalid or unsupported BTX address");
       }

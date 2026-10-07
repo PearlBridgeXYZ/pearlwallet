@@ -25,11 +25,16 @@
 // each side independently.
 
 import { parseAbiItem } from "viem";
-import { pearlParams } from "../chains/pearl/network";
-import { useUI } from "../state/ui-store";
 import { ethClient } from "../chains/ethereum/rpc";
 import { WPRL_ADDRESS, type EthNetwork } from "../chains/ethereum/network";
-import { MAX_RPC_PAGE_LENGTH, MAX_UTXO_WALK_PAGES } from "./pearl-rpc";
+import {
+  MAX_RPC_PAGE_LENGTH,
+  MAX_UTXO_WALK_PAGES,
+  callPearlRpc,
+  getFreshAddressHistory,
+  pearlRpcTuning,
+} from "./pearl-rpc";
+import { mapWithConcurrency } from "./rpc-limiter";
 
 export type ActivityChain = "pearl" | "wprl";
 export type ActivityDirection = "in" | "out";
@@ -68,6 +73,13 @@ interface RawTxVout {
 interface RawTxVin {
   txid?: string;
   vout?: number;
+  // Present when searchrawtransactions is called with vinextra=1: the
+  // spent output's address(es) and value. Lets us classify "out" even when
+  // the funding tx is older than the scanned (newest-first) window.
+  prevOut?: {
+    addresses?: string[];
+    value?: number;
+  };
 }
 
 interface RawTx {
@@ -78,58 +90,40 @@ interface RawTx {
   blocktime?: number;
 }
 
-function rpcUrl(): string {
-  const override = useUI.getState().pearlRpcOverride;
-  return pearlParams("mainnet", override).rpcUrl;
-}
-
-// Sentry 5xx retry policy: mirror pearl-rpc.ts:call(). A pool walk fires
-// many heavyweight searchrawtransactions calls in sequence; the public
-// sentry has been observed to emit transient nginx-level 503s under
-// concurrent load (measured 2026-05-20: 9/20 parallel calls 503'd). A
-// single 503 on any pool address would otherwise flag the whole walk
-// as "partial" and surface a "sentry errors on some addresses" warning
-// to users with a perfectly healthy wallet. v0.1.14 hotfix.
-const ACTIVITY_RPC_ATTEMPTS = 3;
+// v0.7: activity goes through the SAME Pearl RPC client as the balance
+// walk and Send (services/pearl-rpc.ts callPearlRpc): same endpoint pool
+// and override handling, same per-request timeout, same backoff/retry on
+// 503/429, and — crucially — the same shared token bucket. Activity asks
+// for the "low" lane, so while the balance scan is running its requests
+// are served first and the two scans can no longer race each other into
+// the origin's rate limit.
+//
+// btcd signature: searchrawtransactions address verbose skip count
+// vinextra reverse filteraddrs. We request verbose=1, vinextra=1 (prevOut
+// data for classification) and reverse=true (NEWEST first — without it
+// the first page is the address's oldest history, verified live
+// 2026-10-07).
+/** How old a balance-walk history may be and still stand in for an
+ *  activity fetch (balances refetch every 60 s on the dashboard). */
+const HISTORY_REUSE_MAX_AGE_MS = 90_000;
 
 async function searchrawtransactions(
   address: string,
   skip: number,
   count: number,
 ): Promise<RawTx[]> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt < ACTIVITY_RPC_ATTEMPTS; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, 250 * attempt));
-    }
-    const res = await fetch(rpcUrl(), {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "searchrawtransactions",
-        params: [address, 1, skip, count],
-        id: 1,
-      }),
-    });
-    if (!res.ok) {
-      lastErr = new Error(`rpc http ${res.status}`);
-      if (res.status >= 500 && res.status < 600) continue;
-      throw lastErr;
-    }
-    const body = (await res.json()) as {
-      result: RawTx[] | null;
-      error: { code: number; message: string } | null;
-    };
-    if (body.error) {
-      if (body.error.message.includes("No information available about address")) {
-        return [];
-      }
-      throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
-    }
-    return body.result ?? [];
+  try {
+    const r = await callPearlRpc<RawTx[]>(
+      "searchrawtransactions",
+      [address, 1, skip, count, 1, true],
+      { priority: "low" },
+    );
+    return r ?? [];
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("No information available about address")) return [];
+    throw err;
   }
-  throw lastErr ?? new Error("rpc exhausted retries");
 }
 
 function voutPaysAnyOf(vout: RawTxVout, addresses: Set<string>): string | null {
@@ -200,37 +194,42 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
   let failures = 0;
   let degraded = false;
 
-  for (let i = 0; i < pool.length; i++) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 300));  // rate-limit cushion, mirrors balances.ts
-    const addr = pool[i]!;
+  // Pages come back newest-first, so the first PER_ADDR_MAX entries of
+  // each address ARE its most recent history. Pacing is the shared token
+  // bucket (no fixed sleeps); a few addresses run in parallel.
+  const perAddr = await mapWithConcurrency(pool, pearlRpcTuning().scanConcurrency, async (addr) => {
+    // Shared scan: if a recent balance walk already saw this address's
+    // complete history (one short page, or no history), reuse it instead
+    // of spending another request against the ~1 req/s origin budget.
+    const known = getFreshAddressHistory(addr, HISTORY_REUSE_MAX_AGE_MS);
+    if (known) return known.txs as RawTx[];
+    const txs: RawTx[] = [];
     try {
       let skip = 0;
       let pageCount = 0;
-      let collectedFromAddr = 0;
-      while (collectedFromAddr < PER_ADDR_MAX && pageCount < MAX_UTXO_WALK_PAGES) {
-        let page: RawTx[];
-        try {
-          page = await searchrawtransactions(addr, skip, PAGE);
-        } catch (err) {
-          // Empty-address (-5) is caught inside; anything else propagates.
-          throw err;
-        }
+      while (txs.length < PER_ADDR_MAX && pageCount < MAX_UTXO_WALK_PAGES) {
+        const want = Math.min(PAGE, PER_ADDR_MAX - txs.length);
+        // Empty-address (-5) is mapped to [] inside; anything else
+        // propagates (after the client's own backoff/retry).
+        let page = await searchrawtransactions(addr, skip, want);
         if (!page || page.length === 0) break;
         if (page.length > MAX_RPC_PAGE_LENGTH) {
           degraded = true;
           page = page.slice(0, MAX_RPC_PAGE_LENGTH);
         }
-        collected.push(...page);
-        collectedFromAddr += page.length;
+        txs.push(...page);
         pageCount++;
-        if (page.length < PAGE) break;
+        if (page.length < want) break;
         skip += page.length;
       }
       if (pageCount >= MAX_UTXO_WALK_PAGES) degraded = true;
+      return txs;
     } catch {
       failures++;
+      return null;
     }
-  }
+  });
+  for (const txs of perAddr) if (txs) collected.push(...txs);
 
   if (failures > pool.length / 2) return { items: [], source: "error" };
 
@@ -254,6 +253,12 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
   for (const tx of byTxid.values()) {
     let spendsOurs = false;
     for (const vin of tx.vin) {
+      // Preferred: prevOut data (vinextra=1) names the spent output's
+      // owner directly, even when the funding tx is outside the window.
+      if (vin.prevOut?.addresses?.some((a) => poolSet.has(a))) {
+        spendsOurs = true;
+        break;
+      }
       if (vin.txid === undefined || vin.vout === undefined) continue;
       if (owned.has(`${vin.txid}:${vin.vout}`)) {
         spendsOurs = true;

@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import ActivityList from "../components/ActivityList";
 import CopyAddress from "../components/CopyAddress";
@@ -7,7 +6,7 @@ import InstallPWA from "../components/InstallPWA";
 import BtxCard from "../components/BtxCard";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
-import { fetchBalances } from "../../services/balances";
+import { useWalletBalances } from "../hooks/useWalletBalances";
 import { formatGrains, formatWei, formatWprl, formatUSD } from "../../lib/format";
 
 export default function Dashboard() {
@@ -17,26 +16,14 @@ export default function Dashboard() {
   const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
   const btxEnabled = useUI((s) => s.btxEnabled);
 
-  const balancesQ = useQuery({
-    queryKey: [
-      "balances",
-      addresses?.pearlPool?.join(",") ?? addresses?.pearl,
-      addresses?.eth,
-      ethEnabled,
-    ],
-    queryFn: () =>
-      fetchBalances(addresses!.pearlPool ?? [addresses!.pearl], addresses!.eth, {
-        ethEnabled,
-      }),
-    enabled: !!addresses,
-    refetchInterval: 30_000,
-  });
-
-  const balances = balancesQ.data;
-  const totalUsd = balances
-    ? balances.prlUsd * Number(balances.prl) / 1e8
-      + (ethEnabled ? balances.wprlUsd * Number(balances.wprl) / 1e8 : 0)
-    : 0;
+  // v0.7: progressive per-asset balances (see ui/hooks/useWalletBalances.ts).
+  // Each asset shows as soon as its own source answers; the total needs
+  // only PRL + price and is null (never $0.00) while either is unknown.
+  const pool = addresses ? addresses.pearlPool ?? [addresses.pearl] : [];
+  const b = useWalletBalances({ pool, ethAddr: addresses?.eth, ethEnabled });
+  const price = b.price.value;
+  const usdOf = (v: bigint | null) =>
+    v !== null && price !== null ? `≈ ${formatUSD((price * Number(v)) / 1e8)}` : "";
 
   return (
     <Page>
@@ -50,22 +37,36 @@ export default function Dashboard() {
 
       <div className="card">
         <div className="text-xs uppercase tracking-wide text-ink-500">Total balance</div>
-        {balances ? (
-          <div className="mt-1 text-3xl font-semibold">{formatUSD(totalUsd)}</div>
+        {b.totalUsd !== null ? (
+          <div className="mt-1 text-3xl font-semibold">{formatUSD(b.totalUsd)}</div>
+        ) : b.prl.value !== null && b.price.status === "error" ? (
+          <div className="mt-1 text-sm text-ink-500">Price unavailable</div>
+        ) : b.prl.status === "error" && !b.scan.running ? (
+          <div className="mt-1 text-sm text-ink-500">Balance unavailable — retrying shortly.</div>
+        ) : b.scan.running && b.scan.total > 0 ? (
+          <div className="mt-1 text-sm text-ink-500">Scanning {b.scan.done}/{b.scan.total}…</div>
         ) : (
           <div className="mt-1 text-sm text-ink-500">Loading, please wait a few seconds…</div>
+        )}
+        {(b.totalStatus === "partial" || b.totalStale) && b.totalUsd !== null && (
+          <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+            {b.totalStatus === "partial" ? "Some balances couldn't be read — total may be low." : "Showing last known balance."}
+          </div>
         )}
 
         <div className={`mt-5 grid gap-4 ${ethEnabled ? "grid-cols-3" : "grid-cols-1"}`}>
           <div>
             <div className="text-xs text-ink-500">PRL</div>
             <div className="text-xl font-medium">
-              {balances ? formatGrains(balances.prl) : "—"}
+              {b.prl.value !== null ? formatGrains(b.prl.value) : "—"}
             </div>
-            <div className="text-xs text-ink-500">
-              {balances ? `≈ ${formatUSD(balances.prlUsd * Number(balances.prl) / 1e8)}` : ""}
-            </div>
-            {balances?.prlSource === "error" && (
+            <div className="text-xs text-ink-500">{usdOf(b.prl.value)}</div>
+            {b.prl.status === "partial" && (
+              <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                Partial — some addresses couldn't be read.
+              </div>
+            )}
+            {b.prl.status === "error" && (
               <div className="mt-1 text-xs text-red-600 dark:text-red-400">
                 Pearl RPC unreachable.
               </div>
@@ -76,12 +77,10 @@ export default function Dashboard() {
               <div>
                 <div className="text-xs text-ink-500">WPRL</div>
                 <div className="text-xl font-medium">
-                  {balances ? formatWprl(balances.wprl) : "—"}
+                  {b.wprl?.value != null ? formatWprl(b.wprl.value) : "—"}
                 </div>
-                <div className="text-xs text-ink-500">
-                  {balances ? `≈ ${formatUSD(balances.wprlUsd * Number(balances.wprl) / 1e8)}` : ""}
-                </div>
-                {balances?.wprlSource === "error" && (
+                <div className="text-xs text-ink-500">{usdOf(b.wprl?.value ?? null)}</div>
+                {b.wprl?.status === "error" && (
                   <div className="mt-1 text-xs text-red-600 dark:text-red-400">
                     Eth RPC unreachable.
                   </div>
@@ -90,14 +89,14 @@ export default function Dashboard() {
               <div>
                 <div className="text-xs text-ink-500">ETH (gas)</div>
                 <div className="text-xl font-medium">
-                  {balances ? formatWei(balances.eth) : "—"}
+                  {b.eth?.value != null ? formatWei(b.eth.value) : "—"}
                 </div>
-                {balances?.ethSource === "error" && (
+                {b.eth?.status === "error" && (
                   <div className="mt-1 text-xs text-red-600 dark:text-red-400">
                     Eth RPC unreachable.
                   </div>
                 )}
-                {balances && balances.wprl > 0n && balances.eth === 0n && balances.ethSource === "live" && (
+                {b.wprl?.value != null && b.wprl.value > 0n && b.eth?.value === 0n && b.eth.status === "ok" && !b.eth.stale && (
                   <div className="mt-1 text-xs text-amber-700 dark:text-amber-400">
                     Fund ETH to send WPRL.
                   </div>
@@ -161,7 +160,9 @@ export default function Dashboard() {
           <h2 className="text-sm font-semibold">Recent activity</h2>
           <Link to="/history" className="text-xs text-pearl-700 hover:underline">See all</Link>
         </div>
-        <ActivityList limit={5} truncate />
+        {/* Start the activity scan once the first PRL scan has settled so
+            it doesn't compete with the balance scan for the RPC budget. */}
+        <ActivityList limit={5} truncate enabled={b.prl.status !== "loading"} />
       </div>
 
       <div className="mt-4 text-center text-xs text-ink-400">

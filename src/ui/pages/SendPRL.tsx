@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
-import { useUI } from "../../state/ui-store";
 import { validPearl } from "../../lib/validate";
 import { formatGrains, parsePRL } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
@@ -16,7 +15,9 @@ import {
   PEARL_PREVIEW_FRESHNESS_MS,
   PEARL_PREVIEW_REFRESH_AT_MS,
 } from "../../services/pearl-tx";
-import type { Balances } from "../../services/balances";
+import type { PrlPoolScan } from "../../services/balances";
+import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
+import { prlScanQueryKey } from "../hooks/useWalletBalances";
 
 type FeeTier = "low" | "normal" | "high";
 
@@ -75,9 +76,7 @@ export default function SendPRL() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
-  const ethEnabled = useUI((s) => s.ethEnabled);
   const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
-  const addresses = useWallet((s) => s.addresses);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
@@ -94,24 +93,18 @@ export default function SendPRL() {
   // degraded walk).
   const [deepWalk, setDeepWalk] = useState(false);
 
-  // Read the dashboard's balance query out of the react-query cache so
-  // we can re-use its UTXO walk instead of repeating it. Cache key
-  // mirrors Dashboard.tsx exactly — if either side drifts, the cache
-  // misses and we just fall through to a live walk.
-  const balancesCacheKey = useMemo(
-    () => [
-      "balances",
-      addresses?.pearlPool?.join(",") ?? addresses?.pearl,
-      addresses?.eth,
-      ethEnabled,
-    ],
-    [addresses, ethEnabled],
-  );
-  const cachedBalances = queryClient.getQueryData<Balances>(balancesCacheKey);
+  // Read the dashboard's PRL pool scan out of the react-query cache so we
+  // can re-use its UTXO walk instead of repeating it. v0.7: the key is
+  // built by the same helper the dashboard hook uses (prlScanQueryKey),
+  // and we read ONLY `spendable`, which the scan sets solely when that
+  // single fresh scan was complete — partial scans and the dashboard's
+  // keep-last-good display values can never reach coin selection. On a
+  // miss (or a stale/partial scan) composePearlSend walks live.
+  const cachedScan = queryClient.getQueryData<PrlPoolScan>(prlScanQueryKey(pool));
   const cachedUtxos =
-    cachedBalances &&
-    Date.now() - cachedBalances.prlUtxosFetchedAt < UTXO_CACHE_FRESHNESS_MS
-      ? cachedBalances.prlUtxos
+    cachedScan?.spendable &&
+    Date.now() - cachedScan.spendable.fetchedAt < UTXO_CACHE_FRESHNESS_MS
+      ? cachedScan.spendable.utxos
       : undefined;
 
   // Pre-flight: compose the tx so the user sees the actual fee + change
@@ -229,7 +222,14 @@ export default function SendPRL() {
       setStage("sent");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg === "E_PREVIEW_STALE") {
+      if (e instanceof BroadcastStatusUnknownError) {
+        // The tx may already be in the mempool — never call this a failure.
+        setError(
+          `Broadcast status unknown — the network didn't confirm receipt. ` +
+            (e.txid ? `Check the explorer for txid ${e.txid} ` : "Check the explorer ") +
+            `before trying again.`,
+        );
+      } else if (msg === "E_PREVIEW_STALE") {
         setError("UTXO selection expired — refreshing…");
         previewQ.refetch();
       } else if (msg.includes("E_NO_UTXOS")) {

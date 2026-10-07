@@ -21,9 +21,11 @@ export const ETH_RPC_FALLBACK: Record<EthNetwork, string> = {
 // outage doesn't blind the wallet — all verified live 2026-06-10. ENS
 // resolution rides this same chain.
 export const ETH_RPC_DEFAULTS: Record<EthNetwork, readonly string[]> = {
+  // cloudflare-eth.com dropped from the automatic chain (2026-10-07): it
+  // now answers JSON-RPC errors (-32603 / -32046) instead of data, which
+  // only adds latency before viem reaches a working provider.
   mainnet: [
     "https://ethereum-rpc.publicnode.com",
-    "https://cloudflare-eth.com",
     "https://eth.drpc.org",
   ],
   sepolia: [
