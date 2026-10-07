@@ -1,40 +1,46 @@
+const token = (name) => `var(--pb-${name})`;
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
-  darkMode: "media",
+  // Paper is light-only, including when a saved preference adds .dark.
+  // Keep legacy dark: classes inert until the remaining pages are restyled.
+  darkMode: ["variant", "&:where(:not(*))"],
   theme: {
     extend: {
       colors: {
-        // Calm palette — neutral, no excitement.
+        ...Object.fromEntries([
+          "bg", "surface", "surface-2", "surface-3", "line", "line-strong",
+          "text", "heading", "text-2", "text-3", "accent", "accent-bg",
+          "on-accent", "accent-soft", "invert-bg", "invert-text", "invert-muted",
+          "invert-line", "warn", "warn-bg", "warn-line", "danger", "danger-bg",
+          "danger-line", "ok",
+        ].map((name) => [name, token(name)])),
+        // Compatibility for pages awaiting their own visual pass.
         ink: {
-          50: "#fafaf9",
-          100: "#f4f4f3",
-          200: "#e7e7e5",
-          300: "#d2d2cf",
-          400: "#a3a39e",
-          500: "#737370",
-          600: "#52524f",
-          700: "#3a3a38",
-          800: "#262624",
-          900: "#171716",
-          950: "#0c0c0b",
+          50: token("bg"), 100: token("surface-2"), 200: token("line"),
+          300: token("line"), 400: token("text-3"), 500: token("text-3"),
+          600: token("text-2"), 700: token("text-2"), 800: token("text"),
+          900: token("heading"), 950: token("heading"),
         },
         pearl: {
-          50: "#f5f7fa",
-          100: "#e8edf4",
-          200: "#cbd5e3",
-          300: "#9eb1ca",
-          400: "#6c87ad",
-          500: "#4a6791",
-          600: "#395078",
-          700: "#2e4062",
-          800: "#283651",
-          900: "#1f2940",
+          50: token("accent-soft"), 100: token("surface-2"), 200: token("surface-3"),
+          300: token("line"), 400: token("accent"), 500: token("accent"),
+          600: token("accent"), 700: token("accent"), 800: token("heading"),
+          900: token("heading"),
         },
       },
       fontFamily: {
-        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "ui-monospace", "SFMono-Regular", "monospace"],
+        sans: ['"IBM Plex Sans"', "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["ui-monospace", "SFMono-Regular", "Menlo", "monospace"],
+      },
+      borderRadius: {
+        DEFAULT: "2px", sm: "2px", md: "2px", lg: "2px", xl: "2px",
+        "2xl": "2px", "3xl": "2px", pb: "2px",
+      },
+      boxShadow: {
+        sm: "none", DEFAULT: "none", md: "none", lg: "none", xl: "none", "2xl": "none",
+        slab: "6px 6px 0 var(--pb-heading)", slabsm: "4px 4px 0 var(--pb-heading)",
       },
     },
   },

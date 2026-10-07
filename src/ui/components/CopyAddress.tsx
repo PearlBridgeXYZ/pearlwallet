@@ -60,14 +60,14 @@ export default function CopyAddress({ value, label, hint, addressClassName }: Pr
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-2">
       {label ? (
-        <div className="text-xs text-ink-500">{label}</div>
+        <div className="label mb-0">{label}</div>
       ) : null}
-      <div className="flex items-start gap-2">
+      <div className="flex items-center gap-3 rounded-pb border border-line bg-surface-2 p-3">
         <code
           className={
-            addressClassName ?? "min-w-0 flex-1 break-all font-mono text-sm"
+            addressClassName ?? "min-w-0 flex-1 select-all break-all font-mono text-xs leading-relaxed text-text sm:text-sm"
           }
         >
           {value}
@@ -75,14 +75,14 @@ export default function CopyAddress({ value, label, hint, addressClassName }: Pr
         <button
           type="button"
           onClick={copy}
-          className="shrink-0 rounded-lg border border-ink-300 px-2 py-1 text-xs hover:bg-ink-100 dark:border-ink-700 dark:hover:bg-ink-800"
+          className="btn-secondary shrink-0 px-3 text-xs"
           aria-label={`Copy ${label ?? "address"}`}
         >
-          {copied ? "Copied!" : "Copy"}
+          <span role="status" aria-live="polite">{copied ? "Copied" : "Copy"}</span>
         </button>
       </div>
       {hint ? (
-        <div className="text-xs text-ink-500">{hint}</div>
+        <div className="text-xs leading-relaxed text-text-3">{hint}</div>
       ) : null}
     </div>
   );

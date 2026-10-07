@@ -46,12 +46,12 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
   if (!addresses) return null;
 
   if (activityQ.isLoading) {
-    return <p className="mt-3 text-sm text-ink-500">Scanning Pearl + Eth for recent activity…</p>;
+    return <p role="status" className="border-b border-line py-5 text-sm text-text-3">Scanning Pearl + Eth for recent activity…</p>;
   }
 
   if (activityQ.isError) {
     return (
-      <p className="mt-3 text-sm text-red-600 dark:text-red-400">
+      <p role="status" className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-3 text-sm text-danger">
         Couldn't scan for activity. Try again in a moment.
       </p>
     );
@@ -81,16 +81,16 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
   return (
     <div>
       {warnings.map((w) => (
-        <p key={w} className="mt-2 text-xs text-amber-700 dark:text-amber-400">{w}</p>
+        <p key={w} className="mt-2 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs leading-relaxed text-warn">{w}</p>
       ))}
       {items.length === 0 ? (
-        <p className="mt-3 text-sm text-ink-500">
+        <p role="status" className="border-b border-line py-5 text-sm text-text-3">
           {data.pearlSource === "live" && data.wprlSource === "live"
             ? "No activity yet."
             : "No activity found in the scanned window."}
         </p>
       ) : (
-        <ul className="mt-3 space-y-2">
+        <ul className="mt-3 divide-y divide-line border-y border-line">
           {items.map((it) => (
             <ActivityRow key={`${it.chain}:${it.txid}`} item={it} ethNetwork={ethNetwork} />
           ))}
@@ -112,27 +112,27 @@ function ActivityRow({ item, ethNetwork }: { item: ActivityItem; ethNetwork: "ma
   const chainLabel = item.chain === "pearl" ? "Pearl" : "Eth";
 
   return (
-    <li className="flex items-center justify-between gap-3 rounded-xl border border-ink-200 p-3 text-sm dark:border-ink-800">
-      <div className="min-w-0 flex-1">
+    <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-4 text-sm">
+      <div className="min-w-0 flex-1 basis-40">
         <div className="flex items-center gap-2">
           <span
             className={
               isOut
-                ? "rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-800 dark:bg-amber-900/40 dark:text-amber-200"
-                : "rounded-full bg-emerald-100 px-2 py-0.5 text-xs text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200"
+                ? "text-xs font-semibold text-text-2"
+                : "text-xs font-semibold text-ok"
             }
           >
             {isOut ? "Sent" : "Received"}
           </span>
-          <span className="text-xs text-ink-500">{chainLabel}</span>
+          <span className="text-xs text-text-3">{chainLabel}</span>
         </div>
-        <div className="mt-1 font-medium">
-          <span className={isOut ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300"}>
+        <div className="mt-1 break-all text-base font-semibold tabular-nums">
+          <span className={isOut ? "text-text" : "text-ok"}>
             {sign} {amountStr}
           </span>
         </div>
         {item.counterparty && (
-          <div className="mt-0.5 text-xs text-ink-500">
+          <div className="mt-0.5 text-xs text-text-3">
             {isOut ? "to " : "from "}
             <span className="break-all font-mono">{item.counterparty}</span>
           </div>
@@ -142,7 +142,7 @@ function ActivityRow({ item, ethNetwork }: { item: ActivityItem; ethNetwork: "ma
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        className="shrink-0 text-xs text-pearl-700 underline dark:text-pearl-300"
+        className="tap inline-flex shrink-0 items-center text-xs text-accent underline decoration-line underline-offset-4 hover:decoration-accent"
       >
         Explorer ↗
       </a>

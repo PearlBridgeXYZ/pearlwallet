@@ -81,26 +81,21 @@ export default function InstallPWA({ variant = "card" }: Props) {
     setDismissed(true);
   }
 
-  // Shared visuals so banner + card don't drift apart.
-  // The banner variant uses the brand-primary gradient and bigger type so
-  // it can't be missed on the dashboard; the card variant uses the muted
-  // pearl-50/900 background that matches the rest of Settings.
+  // Banner and Settings card share the paper surfaces and controls.
   const wrapper =
     variant === "banner"
-      ? "rounded-2xl border border-pearl-300 bg-gradient-to-br from-pearl-100 to-pearl-200 p-5 shadow-sm dark:border-pearl-700 dark:from-pearl-800 dark:to-pearl-900"
+      ? "rounded-pb border border-line-strong bg-surface-2 p-5 sm:p-6"
       : "card";
   const heading =
     variant === "banner"
-      ? "text-base font-semibold sm:text-lg"
-      : "text-sm font-semibold";
+      ? "text-base font-semibold text-heading sm:text-lg"
+      : "text-sm font-semibold text-heading";
   const body =
     variant === "banner"
-      ? "mt-1 text-sm text-ink-700 dark:text-ink-200"
-      : "mt-1 text-xs text-ink-600 dark:text-ink-300";
-  const primaryBtn =
-    "tap mt-3 inline-flex w-full items-center justify-center rounded-xl bg-pearl-700 px-5 py-3 text-base font-semibold text-white shadow-sm hover:bg-pearl-800 active:bg-pearl-900 sm:w-auto";
-  const secondaryBtn =
-    "tap mt-3 inline-flex w-full items-center justify-center rounded-xl border border-pearl-700 px-5 py-3 text-base font-semibold text-pearl-700 hover:bg-pearl-50 active:bg-pearl-100 dark:border-pearl-400 dark:text-pearl-200 dark:hover:bg-pearl-900 sm:w-auto";
+      ? "mt-2 text-sm leading-relaxed text-text-2"
+      : "mt-2 text-xs leading-relaxed text-text-2";
+  const primaryBtn = "btn-primary mt-4 w-full sm:w-auto";
+  const secondaryBtn = "btn-secondary mt-4 w-full sm:w-auto";
 
   // ── iOS instructions ──────────────────────────────────────────────
   if (install.isIOS) {
@@ -108,12 +103,12 @@ export default function InstallPWA({ variant = "card" }: Props) {
       <div className={wrapper}>
         <div className="flex items-start gap-3">
           <div className="flex-1">
-            <h3 className={heading}>📱 Install as App</h3>
+            <h3 className={heading}>Install PearlWallet</h3>
             <p className={body}>
               Add PearlWallet to your home screen — opens full-screen like a
               native app, faster launch, no browser chrome.
             </p>
-            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+            <p className="mt-2 text-xs text-warn">
               <span className="font-semibold">Tip:</span> on iPhone/iPad,
               install <em>before</em> creating your wallet. Safari and the
               installed app use separate storage on iOS, so a wallet
@@ -128,7 +123,7 @@ export default function InstallPWA({ variant = "card" }: Props) {
               {iosOpen ? "Hide instructions" : "Install as App"}
             </button>
             {iosOpen && (
-              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-ink-700 dark:text-ink-200">
+              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-relaxed text-text-2">
                 <li>Tap the Share button at the bottom of Safari (the square with an up-arrow).</li>
                 <li>
                   Scroll and tap <span className="font-semibold">Add to Home Screen</span>.
@@ -143,7 +138,7 @@ export default function InstallPWA({ variant = "card" }: Props) {
               type="button"
               onClick={onDismiss}
               aria-label="Dismiss install banner"
-              className="-mr-1 -mt-1 rounded-md p-2 text-ink-500 hover:bg-ink-100 hover:text-ink-900 dark:hover:bg-ink-800 dark:hover:text-ink-100"
+              className="tap -mr-2 -mt-2 shrink-0 rounded-pb text-xl text-text-3 hover:bg-surface-3 hover:text-heading"
             >
               ×
             </button>
@@ -161,7 +156,7 @@ export default function InstallPWA({ variant = "card" }: Props) {
       <div className={wrapper}>
         <div className="flex items-start gap-3">
           <div className="flex-1">
-            <h3 className={heading}>📱 Install as App</h3>
+            <h3 className={heading}>Install PearlWallet</h3>
             <p className={body}>
               Add PearlWallet to your Dock — opens in its own window, no
               browser chrome, faster launch.
@@ -175,7 +170,7 @@ export default function InstallPWA({ variant = "card" }: Props) {
               {macOpen ? "Hide instructions" : "Install as App"}
             </button>
             {macOpen && (
-              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm text-ink-700 dark:text-ink-200">
+              <ol className="mt-3 list-decimal space-y-1 pl-5 text-sm leading-relaxed text-text-2">
                 <li>In Safari's menu bar, open the <span className="font-semibold">File</span> menu.</li>
                 <li>
                   Choose <span className="font-semibold">Add to Dock…</span>{" "}
@@ -191,7 +186,7 @@ export default function InstallPWA({ variant = "card" }: Props) {
               type="button"
               onClick={onDismiss}
               aria-label="Dismiss install banner"
-              className="-mr-1 -mt-1 rounded-md p-2 text-ink-500 hover:bg-ink-100 hover:text-ink-900 dark:hover:bg-ink-800 dark:hover:text-ink-100"
+              className="tap -mr-2 -mt-2 shrink-0 rounded-pb text-xl text-text-3 hover:bg-surface-3 hover:text-heading"
             >
               ×
             </button>
@@ -206,7 +201,7 @@ export default function InstallPWA({ variant = "card" }: Props) {
     <div className={wrapper}>
       <div className="flex items-start gap-3">
         <div className="flex-1">
-          <h3 className={heading}>📱 Install as App</h3>
+          <h3 className={heading}>Install PearlWallet</h3>
           <p className={body}>
             Add PearlWallet to your home screen — opens full-screen like a
             native app, faster launch, no browser chrome.
@@ -215,12 +210,12 @@ export default function InstallPWA({ variant = "card" }: Props) {
             Install as App
           </button>
           {result === "dismissed" && (
-            <p className="mt-2 text-xs text-ink-500">
+            <p className="mt-2 text-xs text-text-3">
               No problem — you can install any time from Settings.
             </p>
           )}
           {result === "accepted" && (
-            <p className="mt-2 text-xs text-green-700 dark:text-green-400">
+            <p className="mt-2 text-xs text-ok">
               Installed. Launch from your home screen.
             </p>
           )}
@@ -230,7 +225,7 @@ export default function InstallPWA({ variant = "card" }: Props) {
             type="button"
             onClick={onDismiss}
             aria-label="Dismiss install banner"
-            className="-mr-1 -mt-1 rounded-md p-2 text-ink-500 hover:bg-ink-100 hover:text-ink-900 dark:hover:bg-ink-800 dark:hover:text-ink-100"
+            className="tap -mr-2 -mt-2 shrink-0 rounded-pb text-xl text-text-3 hover:bg-surface-3 hover:text-heading"
           >
             ×
           </button>

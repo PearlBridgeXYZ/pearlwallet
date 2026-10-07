@@ -325,9 +325,9 @@ describe("manifest.webmanifest — PWA install requirements", () => {
     expect(maskable.length).toBeGreaterThanOrEqual(1);
   });
 
-  it("declares hex background_color and theme_color", () => {
-    expect(manifest.background_color as string).toMatch(/^#[0-9a-f]{3,8}$/i);
-    expect(manifest.theme_color as string).toMatch(/^#[0-9a-f]{3,8}$/i);
+  it("matches the paper background and theme colors", () => {
+    expect(manifest.background_color).toBe("#f4efe6");
+    expect(manifest.theme_color).toBe("#f4efe6");
   });
 });
 
@@ -364,12 +364,9 @@ describe("index.html — mobile / PWA meta tags", () => {
     expect(html).toMatch(/<link rel="manifest" href="\/manifest\.webmanifest"/);
   });
 
-  it("ships dual theme-color metas (light + dark)", () => {
-    const matches = html.match(
-      /<meta name="theme-color"[^>]*media="\(prefers-color-scheme: (?:light|dark)\)"/g,
-    );
-    expect(matches).not.toBeNull();
-    expect((matches ?? []).length).toBe(2);
+  it("ships one light paper theme-color meta", () => {
+    const matches = html.match(/<meta name="theme-color"[^>]*>/g);
+    expect(matches).toEqual(['<meta name="theme-color" content="#f4efe6" />']);
   });
 
   it("declares both 192 and 512 apple-touch-icons", () => {

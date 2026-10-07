@@ -1,69 +1,119 @@
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("./ui/assets/fonts/ibm-plex-sans-latin-var.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: swap;
+}
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
-    color-scheme: light dark;
+    color-scheme: light;
+    --pb-bg: #f4efe6;
+    --pb-surface: #fbf8f2;
+    --pb-surface-2: #efe9de;
+    --pb-surface-3: #e2dbcd;
+    --pb-line: #d4cbba;
+    --pb-line-strong: #1c1a17;
+    --pb-text: #1c1a17;
+    --pb-heading: #12110f;
+    --pb-text-2: #47423b;
+    --pb-text-3: #5f584d;
+    --pb-accent: #9a2f1b;
+    --pb-accent-bg: #1c1a17;
+    --pb-on-accent: #f6f2ea;
+    --pb-accent-soft: rgba(154, 47, 27, .08);
+    --pb-invert-bg: #1c1a17;
+    --pb-invert-text: #f4efe6;
+    --pb-invert-muted: #bcb3a5;
+    --pb-invert-line: #4a443c;
+    --pb-warn: #7a4f00;
+    --pb-warn-bg: #f6e9c8;
+    --pb-warn-line: #d6b766;
+    --pb-danger: #a3221a;
+    --pb-danger-bg: #f8e0da;
+    --pb-danger-line: #dfa197;
+    --pb-ok: #1d6638;
   }
-  html, body, #root {
-    height: 100%;
-  }
-  /* Allow the bg to bleed into the notch / home-indicator area. The
-     Page wrapper applies safe-area-inset padding so content stays
-     readable. */
+  html, body, #root { min-height: 100%; }
+  html { height: 100%; scroll-padding-top: 1rem; }
   body {
+    @apply bg-bg font-sans text-text antialiased;
+    height: 100%;
     overscroll-behavior-y: none;
+    font-variant-numeric: tabular-nums lining-nums;
   }
-  /* Disable iOS Safari's tap-highlight grey flash — a wallet that
-     flashes on every button feels twitchy. We still keep keyboard
-     :focus-visible outlines (via the ring utility on .input/.btn). */
-  * {
-    -webkit-tap-highlight-color: transparent;
+  #root { height: 100%; }
+  * { -webkit-tap-highlight-color: transparent; }
+  ::selection { background: var(--pb-accent); color: var(--pb-on-accent); }
+  h1, h2, h3 { color: var(--pb-heading); }
+  button, input, select, textarea { min-height: 44px; }
+  input[type="checkbox"], input[type="radio"] { min-height: auto; accent-color: var(--pb-accent); }
+  a, button, input, textarea, select, summary { scroll-margin: 1rem; }
+}
+
+@layer components {
+  .card { @apply rounded-pb border border-line-strong bg-surface p-5 sm:p-6; }
+  .btn {
+    @apply inline-flex min-h-11 min-w-11 items-center justify-center gap-2 rounded-pb px-4 py-2.5 text-sm font-semibold transition-colors disabled:cursor-not-allowed;
   }
+  .btn-primary { @apply btn bg-accent-bg text-on-accent enabled:hover:bg-accent; }
+  a.btn-primary:hover { @apply bg-accent; }
+  .btn-secondary { @apply btn border border-line bg-surface text-text-2 hover:border-line-strong hover:text-heading; }
+  .btn-danger { @apply btn bg-danger text-on-accent enabled:hover:bg-heading; }
+  .btn:disabled, .btn-primary:disabled, .btn-secondary:disabled, .btn-danger:disabled {
+    @apply border-transparent bg-surface-3 text-text-2;
+  }
+  /* Keep 16px input text so iOS does not zoom the viewport on focus. */
+  .input {
+    @apply w-full rounded-pb border border-line bg-surface-2 px-3 py-2.5 text-base text-text placeholder:text-text-3 focus:border-accent;
+  }
+  .label { @apply mb-2 block text-[11px] font-semibold uppercase tracking-[.14em] text-text-3; }
+  .mono { @apply font-mono; }
+  .shell-width {
+    width: 100%;
+    max-width: 1120px;
+    margin-inline: auto;
+    padding-left: max(1.25rem, env(safe-area-inset-left));
+    padding-right: max(1.25rem, env(safe-area-inset-right));
+  }
+  .page-main { @apply mx-auto w-full max-w-3xl py-8 sm:py-12; }
+  .page-title { @apply mb-7 border-b border-heading pb-5 text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]; }
+  .wallet-header { @apply border-b border-heading bg-bg; padding-top: env(safe-area-inset-top); }
+  .wallet-header-inner { @apply flex flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3 lg:py-4; }
+  .wallet-wordmark { @apply text-[17px] font-[650] sm:text-[20px] tracking-[-.7px] text-heading; }
+  .wallet-nav { @apply order-last grid w-full auto-cols-fr grid-flow-col gap-0 sm:gap-1 lg:order-none lg:flex lg:w-auto lg:gap-5; }
+  .wallet-nav a {
+    @apply flex min-h-11 min-w-11 items-center justify-center border-b border-transparent text-[11px] text-text-2 transition-colors hover:text-accent sm:text-[13px];
+  }
+  .wallet-nav a[aria-current="page"] { @apply border-accent font-semibold text-heading; }
+  .footer-link { @apply inline-flex min-h-11 items-center text-sm text-text-2 underline decoration-line underline-offset-4 hover:text-accent hover:decoration-accent; }
+  .skip-link { @apply sr-only; }
+  .skip-link:focus { @apply not-sr-only fixed left-4 top-4 z-50 bg-surface px-4 py-3 text-accent; }
 }
 
 @layer utilities {
-  /* Safe-area padding helpers — `env(safe-area-inset-*)` lets the
-     wallet sit comfortably on devices with a notch or home indicator
-     without ever clipping content. Use via Tailwind arbitrary props
-     in JSX too, but these aliases keep the common cases tidy. */
   .pt-safe { padding-top: max(env(safe-area-inset-top), 0.25rem); }
   .pb-safe { padding-bottom: max(env(safe-area-inset-bottom), 0.25rem); }
   .pl-safe { padding-left: max(env(safe-area-inset-left), 0.25rem); }
   .pr-safe { padding-right: max(env(safe-area-inset-right), 0.25rem); }
-  /* Minimum touch target — keeps tap-friendly buttons compliant with
-     Apple HIG (44pt) and Material (48dp). */
   .tap { min-height: 44px; min-width: 44px; }
 }
 
-@layer components {
-  .card {
-    @apply rounded-2xl border border-ink-200 bg-white p-5 shadow-sm dark:border-ink-800 dark:bg-ink-900;
-  }
-  .btn {
-    @apply inline-flex items-center justify-center rounded-xl px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
-  }
-  .btn-primary {
-    @apply btn bg-pearl-700 text-white hover:bg-pearl-800 active:bg-pearl-900;
-  }
-  .btn-secondary {
-    @apply btn border border-ink-300 bg-white text-ink-900 hover:bg-ink-100 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800;
-  }
-  .btn-danger {
-    @apply btn bg-red-700 text-white hover:bg-red-800;
-  }
-  /* Note: text-base (16px) — text-sm (14px) would trigger iOS Safari's
-     zoom-on-focus, which yanks the viewport every time the user taps
-     an address or amount field. 16px is the minimum that keeps the
-     viewport still. On desktop this still looks fine. */
-  .input {
-    @apply w-full rounded-xl border border-ink-300 bg-white px-3 py-2 text-base text-ink-900 outline-none ring-pearl-500/40 placeholder:text-ink-400 focus:ring-2 dark:border-ink-700 dark:bg-ink-900 dark:text-ink-100;
-  }
-  .label {
-    @apply mb-1 block text-xs font-medium uppercase tracking-wide text-ink-500 dark:text-ink-400;
-  }
-  .mono {
-    @apply font-mono;
+/* Legacy decorative gradients resolve to a solid paper-theme accent. */
+[class*="bg-gradient-"] { background-image: none; background-color: var(--pb-accent); }
+:focus-visible { outline: 2px solid var(--pb-accent); outline-offset: 3px; }
+@media (min-width: 640px) {
+  .shell-width { padding-left: max(2.25rem, env(safe-area-inset-left)); padding-right: max(2.25rem, env(safe-area-inset-right)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }
