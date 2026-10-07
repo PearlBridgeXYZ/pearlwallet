@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="200" viewBox="0 0 900 200" role="img" aria-label="PearlBridge — Span logo">
+  <title>PearlBridge — Span</title>
+  <desc>An oxblood pearl resting on a level ink bridge with two solid piers. Paired with an editorial serif wordmark.</desc>
+  <g transform="translate(20 20) scale(0.625)">
+  <path fill="#1C1A17" d="M24 116H232V208H192V152H64V208H24Z"/>
+  <circle fill="#8E2A1E" cx="128" cy="78" r="38"/>
+  </g>
+  <text x="212" y="130" fill="#1C1A17" font-family="Newsreader, Georgia, serif" font-size="96" font-weight="400" letter-spacing="-1.6">PearlBridge</text>
+</svg>
