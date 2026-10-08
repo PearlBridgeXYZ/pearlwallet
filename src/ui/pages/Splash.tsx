@@ -40,8 +40,8 @@ export default function Splash() {
     );
   }
 
-  // REDESIGN-NOTE: file:// entry also needs the separate offline router fix;
-  // BrowserRouter currently redirects the file path before this welcome opens.
+  // Offline single-file build (file://, HashRouter — see lib/router-kind.ts)
+  // and installed PWAs get the compact welcome instead of the landing page.
   const compact = detectFileProtocol() || detectStandalone();
 
   if (compact) {
