@@ -134,6 +134,7 @@ function ActivityRow({ item, ethNetwork }: { item: ActivityItem; ethNetwork: "ma
             {isOut ? "Sent" : "Received"}
           </span>
           <span className="text-xs text-text-3">{chainLabel}</span>
+          {item.pending && <span className="text-xs font-semibold text-warn">Pending</span>}
         </div>
         <div className="mt-1 break-all text-base font-semibold tabular-nums">
           <span className={isOut ? "text-text" : "text-ok"}>

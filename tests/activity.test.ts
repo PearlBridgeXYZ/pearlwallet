@@ -5,7 +5,7 @@
 //   - Merge: combined items sorted by timeSec descending and trimmed to `limit`
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { fetchActivity } from "../src/services/activity";
+import { fetchActivity, compareActivity, type ActivityItem } from "../src/services/activity";
 import * as ethRpc from "../src/chains/ethereum/rpc";
 
 const POOL = ["prl1pAAA", "prl1pBBB"];
@@ -398,6 +398,41 @@ describe("v0.1.13 / activity — merge + sort + trim", () => {
     // Most-recent first.
     const times = result.items.map((i) => i.timeSec);
     expect(times).toEqual([...times].sort((a, b) => b - a));
+  });
+});
+
+// ─── Pending first (v0.7) ─────────────────────────────────────────────────
+
+describe("v0.7 / activity — unconfirmed transactions sort first", () => {
+  it("a mempool tx (no time, no blocktime) is flagged pending and listed at the top", async () => {
+    mockFetchOnce({
+      [POOL[0]!]: [
+        rawTx("OLD", { vout: [{ value: 1, address: POOL[0]! }], time: 100 }),
+        rawTx("NEW", { vout: [{ value: 1, address: POOL[0]! }], time: 900 }),
+        rawTx("MEMPOOL", { vout: [{ value: 2, address: POOL[0]! }] }),
+      ],
+      [POOL[1]!]: [],
+    });
+    const result = await fetchActivity(POOL, undefined, "mainnet", 10);
+    expect(result.items.map((i) => i.txid)).toEqual(["MEMPOOL", "NEW", "OLD"]);
+    expect(result.items[0]!.pending).toBe(true);
+    expect(result.items[0]!.timeSec).toBe(0);
+    expect(result.items.slice(1).every((i) => !i.pending)).toBe(true);
+  });
+
+  it("pending items survive the merge + trim; unknown-time confirmed items stay last", () => {
+    const it_ = (txid: string, timeSec: number, pending?: boolean): ActivityItem => ({
+      chain: txid.startsWith("W") ? "wprl" : "pearl",
+      txid,
+      direction: "in",
+      amount: 1n,
+      timeSec,
+      ...(pending ? { pending } : {}),
+    });
+    const items = [it_("P1", 500), it_("W0", 0), it_("PEND", 0, true), it_("P2", 700), it_("PEND2", 0, true)];
+    const sorted = [...items].sort(compareActivity).map((i) => i.txid);
+    expect(sorted.slice(0, 2).sort()).toEqual(["PEND", "PEND2"]);
+    expect(sorted.slice(2)).toEqual(["P2", "P1", "W0"]);
   });
 });
 

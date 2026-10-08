@@ -48,6 +48,10 @@ export interface ActivityItem {
   // viem getBlock resolves Eth timestamps). Used purely for ordering;
   // the UI does not render absolute timestamps yet.
   timeSec: number;
+  // Pearl only: the transaction is not in a block yet (the node reports no
+  // time and no blocktime for mempool transactions). Pending items sort
+  // first — they are the newest thing the user did.
+  pending?: boolean;
   // For Pearl: best-effort counterparty (first non-pool vout address on
   // an "out" tx, first non-pool vin's referenced-output address on "in"
   // is harder to resolve so we leave it undefined). For WPRL: the other
@@ -88,6 +92,25 @@ interface RawTx {
   vout: RawTxVout[];
   time?: number;       // unix seconds (some sentries omit on unconfirmed)
   blocktime?: number;
+}
+
+/** Ordering time and pending flag of a Pearl tx. The sentry omits both
+ *  `time` and `blocktime` for a transaction still in the mempool. */
+function pearlTxTiming(tx: RawTx): { timeSec: number; pending?: true } {
+  const timeSec = tx.time ?? tx.blocktime ?? 0;
+  return timeSec > 0 ? { timeSec } : { timeSec: 0, pending: true };
+}
+
+/**
+ * Activity order: pending (unconfirmed) first, newest of those first;
+ * then confirmed items newest first; items whose time could not be
+ * resolved (e.g. a failed Ethereum block lookup) last.
+ */
+export function compareActivity(a: ActivityItem, b: ActivityItem): number {
+  const pa = a.pending ? 1 : 0;
+  const pb = b.pending ? 1 : 0;
+  if (pa !== pb) return pb - pa;
+  return b.timeSec - a.timeSec;
 }
 
 // v0.7: activity goes through the SAME Pearl RPC client as the balance
@@ -287,7 +310,7 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
         txid: tx.txid,
         direction: "out",
         amount: leaving,
-        timeSec: tx.time ?? tx.blocktime ?? 0,
+        ...pearlTxTiming(tx),
         counterparty,
       });
     } else {
@@ -305,13 +328,13 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
         txid: tx.txid,
         direction: "in",
         amount: received,
-        timeSec: tx.time ?? tx.blocktime ?? 0,
+        ...pearlTxTiming(tx),
       });
     }
   }
 
-  // Most-recent first.
-  items.sort((a, b) => b.timeSec - a.timeSec);
+  // Pending first, then most-recent first.
+  items.sort(compareActivity);
 
   return {
     items,
@@ -468,7 +491,7 @@ export async function fetchActivity(
   ]);
 
   const merged = [...pearlResult.items, ...wprlResult.items];
-  merged.sort((a, b) => b.timeSec - a.timeSec);
+  merged.sort(compareActivity);
 
   return {
     items: merged.slice(0, limit),
