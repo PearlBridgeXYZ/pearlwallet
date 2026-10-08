@@ -32,6 +32,15 @@
 // `spendable` field (the UTXO set Send may reuse) is non-null only when
 // that single scan was complete. Nothing in this module writes merged,
 // partial or remembered data anywhere Send reads from.
+//
+// RPC load: a full walk is ~40+ paced requests. Periodic refetches run in
+// refresh mode (services/discovery.ts `refresh`): addresses the last
+// complete full walk found unused, more than PRL_REFRESH_WINDOW indexes
+// past the last used one, are skipped unless the refresh sees new
+// activity. A full walk runs on the first scan, every PRL_FULL_RESCAN_MS,
+// and on every manual refetch (Retry / rescan). The in-memory state lives
+// in state/balance-memory.ts and is cleared on lock, wipe and wallet
+// switch.
 
 import { useRef, useSyncExternalStore } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
@@ -43,7 +52,26 @@ import {
   type PrlPoolScanProgress,
 } from "../../services/balances";
 import { fetchPrlPriceUsd } from "../../services/prices";
-import { scanPrlWallet, type DeriveMoreAddresses } from "../../services/discovery";
+import {
+  scanPrlWallet,
+  type DeriveMoreAddresses,
+  type PrlWalletScan,
+  type ScanRefresh,
+} from "../../services/discovery";
+import {
+  clearBalanceMemory,
+  getProgress,
+  getScanBaseline,
+  lastGoodByAddress,
+  memoryEpoch,
+  setProgress,
+  setScanBaseline,
+  subscribeProgress,
+  type ScanBaseline,
+  type ScanProgress,
+} from "../../state/balance-memory";
+
+export { clearBalanceMemory, type ScanProgress };
 
 export type AssetStatus = "loading" | "ok" | "partial" | "error";
 
@@ -53,12 +81,6 @@ export interface AssetState<T> {
   stale: boolean;
   updatedAt: number | null;
   error?: string;
-}
-
-export interface ScanProgress {
-  done: number;
-  total: number;
-  running: boolean;
 }
 
 export interface WalletBalancesView {
@@ -88,36 +110,56 @@ export function prlScanQueryKey(pool: readonly string[]): readonly [string, stri
   return ["prl-pool-scan", pool[0] ?? ""] as const;
 }
 
-/** A full scan is ~40+ paced requests; refetch every minute. */
-export const PRL_SCAN_REFETCH_MS = 60_000;
+/** Periodic PRL refetch (refresh mode — see the header comment). */
+export const PRL_SCAN_REFETCH_MS = 120_000;
+/** A refresh-mode scan becomes a full walk once the last full walk is
+ *  this old. */
+export const PRL_FULL_RESCAN_MS = 10 * 60_000;
+/** Unused addresses within this many indexes past the last used one are
+ *  walked on every refresh (where new payments are most likely to land). */
+export const PRL_REFRESH_WINDOW = 5;
 export const ETH_REFETCH_MS = 30_000;
 export const PRICE_REFETCH_MS = 60_000;
 
-// ─── Module stores: scan progress + per-address last-good ────────────────
+// ─── Scan planning (unit-tested) ─────────────────────────────────────────
 
-type Listener = () => void;
-const progressByPool = new Map<string, ScanProgress>();
-const progressListeners = new Set<Listener>();
-
-function setProgress(key: string, p: ScanProgress): void {
-  progressByPool.set(key, p);
-  for (const l of progressListeners) l();
+/**
+ * Refresh options for the next PRL scan, or undefined for a full walk.
+ * Full when forced (manual refetch), when there is no baseline yet, or
+ * when the baseline's full walk is PRL_FULL_RESCAN_MS old.
+ */
+export function planPrlScan(
+  baseline: ScanBaseline | undefined,
+  now: number,
+  forceFull: boolean,
+): ScanRefresh | undefined {
+  if (forceFull || !baseline) return undefined;
+  if (now - baseline.fullAt >= PRL_FULL_RESCAN_MS) return undefined;
+  return { lastUsed: baseline.lastUsed, knownUnused: baseline.knownUnused, window: PRL_REFRESH_WINDOW };
 }
 
-function subscribeProgress(l: Listener): () => void {
-  progressListeners.add(l);
-  return () => progressListeners.delete(l);
+/**
+ * Baseline after a scan: replaced only by a full (nothing skipped) walk
+ * with no read failures and complete discovery; otherwise the previous
+ * one stands.
+ */
+export function nextScanBaseline(
+  prev: ScanBaseline | undefined,
+  scan: PrlWalletScan,
+): ScanBaseline | undefined {
+  if (scan.skipped > 0 || scan.failures > 0 || scan.degraded || !scan.discovery.complete) return prev;
+  const knownUnused = new Set<string>();
+  scan.perAddress.forEach((r, i) => {
+    if (r.status === "ok" && !r.used) knownUnused.add(scan.pool[i]!);
+  });
+  return {
+    fullAt: scan.startedAt,
+    lastUsed: [scan.discovery.lastUsed[0], scan.discovery.lastUsed[1]],
+    knownUnused,
+  };
 }
 
-/** Last successfully read balance per pool address (display only). */
-const lastGoodByAddress = new Map<string, { grains: bigint; at: number }>();
-
-/** Forget remembered per-address balances (e.g. on wallet switch/lock). */
-export function clearBalanceMemory(): void {
-  lastGoodByAddress.clear();
-  progressByPool.clear();
-  for (const l of progressListeners) l();
-}
+// ─── Per-address last-good ───────────────────────────────────────────────
 
 /** Records a complete per-address read into the display memory
  *  (failed and page-capped reads are never remembered). */
@@ -262,6 +304,9 @@ export function useWalletBalances({
   // discovery is picked up by the next refetch without restarting this one.
   const latest = useRef({ pool, changePool, deriveMore, onDiscovered });
   latest.current = { pool, changePool, deriveMore, onDiscovered };
+  // Set by the returned `refetch` (user-initiated): the next scan walks
+  // every address instead of running in refresh mode.
+  const forceFull = useRef(false);
 
   const prlQ = useQuery({
     queryKey: key,
@@ -269,19 +314,28 @@ export function useWalletBalances({
       const cur = latest.current;
       const ext = [...cur.pool];
       const int = cur.changePool ? [...cur.changePool] : null;
+      // A lock / wipe / wallet switch during this scan bumps the epoch;
+      // from then on the scan writes nothing to the display memory.
+      const epoch = memoryEpoch();
+      const current = () => epoch === memoryEpoch();
       setProgress(poolKey, { done: 0, total: ext.length + (int?.length ?? 0), running: true });
       let lastTotal = ext.length + (int?.length ?? 0);
       const onProgress = (p: PrlPoolScanProgress) => {
+        if (!current()) return;
         rememberAddressResult(p.ref.address, p, Date.now());
         lastTotal = p.total;
         setProgress(poolKey, { done: p.done, total: p.total, running: true });
       };
       try {
         if (!int) return await scanPrlPool(ext, { signal, onProgress });
+        const refresh = planPrlScan(getScanBaseline(poolKey), Date.now(), forceFull.current);
+        forceFull.current = false;
         const scan = await scanPrlWallet(
           { external: ext, internal: int },
-          { signal, onProgress, deriveMore: cur.deriveMore },
+          { signal, onProgress, deriveMore: cur.deriveMore, ...(refresh ? { refresh } : {}) },
         );
+        const baseline = nextScanBaseline(getScanBaseline(poolKey), scan);
+        if (baseline && current()) setScanBaseline(poolKey, baseline);
         if (
           cur.onDiscovered &&
           (scan.discovered.external.length > ext.length || scan.discovered.internal.length > int.length)
@@ -294,8 +348,10 @@ export function useWalletBalances({
         }
         return scan;
       } finally {
-        const p = progressByPool.get(poolKey);
-        setProgress(poolKey, { done: p?.done ?? 0, total: lastTotal, running: false });
+        if (current()) {
+          const p = getProgress(poolKey);
+          setProgress(poolKey, { done: p?.done ?? 0, total: lastTotal, running: false });
+        }
       }
     },
     enabled: pool.length > 0,
@@ -331,7 +387,7 @@ export function useWalletBalances({
 
   const progress = useSyncExternalStore(
     subscribeProgress,
-    () => progressByPool.get(poolKey),
+    () => getProgress(poolKey),
     () => undefined,
   );
 
@@ -355,6 +411,7 @@ export function useWalletBalances({
     },
     ...total,
     refetch: () => {
+      forceFull.current = true;
       void prlQ.refetch();
       if (ethEnabled) {
         void wprlQ.refetch();

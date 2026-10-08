@@ -4,6 +4,7 @@ import type { EthNetwork } from "../chains/ethereum/network";
 import { cryptoWorker } from "../crypto/worker-client";
 import { MAX_ADDRESSES_PER_BRANCH, type HdBranch } from "../crypto/hd";
 import { monotonicNow } from "../lib/monotonic";
+import { clearBalanceMemory } from "./balance-memory";
 import {
   db,
   loadKeystore,
@@ -253,15 +254,18 @@ export const useWallet = create<WalletState>((set, get) => ({
                 // the new blob would fail anyway, and the cleanest UX is to
                 // require an unlock with the new password.
                 cryptoWorker.reset();
+                clearBalanceMemory();
                 set({ status: "locked", blob: fresh.blob });
               } else {
                 // Foreign update with no row — likely a wipe arrived first.
                 // Treat as wiped so we don't dangle in stale "unlocked".
                 cryptoWorker.reset();
+                clearBalanceMemory();
                 set({ status: "no-wallet", addresses: null, blob: null });
               }
             } else if (ev.data.type === "wiped") {
               cryptoWorker.reset();
+              clearBalanceMemory();
               set({ status: "no-wallet", addresses: null, blob: null });
             }
           });
@@ -304,6 +308,9 @@ export const useWallet = create<WalletState>((set, get) => ({
         },
       };
       await saveKeystore(rec);
+      // New wallet (possibly replacing another): drop the previous one's
+      // remembered per-address balances and scan state.
+      clearBalanceMemory();
       set({
         status: "unlocked",
         addresses: out.addresses,
@@ -342,6 +349,9 @@ export const useWallet = create<WalletState>((set, get) => ({
         },
       };
       await saveKeystore(rec);
+      // New wallet (possibly replacing another): drop the previous one's
+      // remembered per-address balances and scan state.
+      clearBalanceMemory();
       set({
         status: "unlocked",
         addresses: out.addresses,
@@ -375,6 +385,7 @@ export const useWallet = create<WalletState>((set, get) => ({
       const rec = await loadKeystore();
       if (!rec) {
         cryptoWorker.reset();
+        clearBalanceMemory();
         set({ status: "no-wallet", addresses: null, blob: null });
         throw new Error("E_WALLET_WIPED");
       }
@@ -408,6 +419,9 @@ export const useWallet = create<WalletState>((set, get) => ({
     // RPC during the lock-transition tick. Clearing them shuts that
     // window: addresses come back on the next successful unlock(),
     // which is the only path that legitimately needs them.
+    // Remembered per-address balances and scan state must not outlive
+    // the session either.
+    clearBalanceMemory();
     set({ status: "locked", addresses: null });
   },
 
@@ -429,6 +443,7 @@ export const useWallet = create<WalletState>((set, get) => ({
       );
       cryptoWorker.reset();
       await wipeKeystore();
+      clearBalanceMemory();
       broadcastKeystoreEvent({ type: "wiped" });
       set({ status: "no-wallet", addresses: null, blob: null });
     });
@@ -459,6 +474,7 @@ export const useWallet = create<WalletState>((set, get) => ({
       const rec = await loadKeystore();
       if (!rec) {
         cryptoWorker.reset();
+        clearBalanceMemory();
         set({ status: "no-wallet", addresses: null, blob: null });
         throw new Error("E_WALLET_WIPED");
       }
