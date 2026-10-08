@@ -61,6 +61,7 @@ import {
   type ScanPrlPoolOptions,
   type WalletAddressRef,
 } from "./balances";
+import { memoryEpoch } from "../state/balance-memory";
 
 /** The wallet's known single-sig addresses, by branch, ordered by index. */
 export interface PearlAddressSet {
@@ -131,6 +132,8 @@ const BRANCHES: readonly HdBranch[] = [0, 1];
  */
 export async function scanPrlWallet(set: PearlAddressSet, opts: ScanPrlWalletOptions = {}): Promise<PrlWalletScan> {
   const startedAt = Date.now();
+  // Every round of this scan belongs to the session it started in.
+  const walkOpts: ScanPrlPoolOptions = { ...opts, epoch: opts.epoch ?? memoryEpoch() };
   const gap = opts.gapLimit ?? DISCOVERY_GAP_LIMIT;
   const cap = opts.maxPerBranch ?? MAX_ADDRESSES_PER_BRANCH;
   if (!Number.isInteger(gap) || gap < 1) throw new Error("E_DISCOVERY_BAD_GAP");
@@ -215,7 +218,7 @@ export async function scanPrlWallet(set: PearlAddressSet, opts: ScanPrlWalletOpt
     }
     if (batch.length === 0) break;
 
-    const results = await walkPoolAddresses(batch, opts, {
+    const results = await walkPoolAddresses(batch, walkOpts, {
       doneBase: perAddress.length,
       indexBase: perAddress.length,
       total,

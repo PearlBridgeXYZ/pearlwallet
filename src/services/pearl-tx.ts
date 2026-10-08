@@ -13,13 +13,12 @@ import { scanPrlPool, type PoolUtxoRecord, type PrlPoolScan, type WalletAddressR
 import { scanPrlWallet, type DeriveMoreAddresses } from "./discovery";
 import {
   assertNotPending,
-  beginSubmission,
+  beginBroadcast,
   excludePendingSpends,
   finishSubmission,
   outpointKey,
-  recordPendingIntent,
-  releasePendingSpends,
-  reservePendingSpends,
+  renewSubmissionLease,
+  SUBMISSION_LEASE_RENEW_MS,
   withPendingSpendsLock,
 } from "./pending-spends";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
@@ -718,20 +717,23 @@ async function signAndBroadcast(
   return { txid, composed };
 }
 
-let anonymousSubmission = 0;
-
 /**
  * The one broadcast path for every Pearl spend (Send, consolidation,
- * offline broadcast, vault broadcast). Immediately before submitting, the
- * inputs are reserved as pending spends of this tx (services/pending-
- * spends.ts, inside the cross-tab lock) — refused with
- * PendingSpendConflictError if a different recent broadcast already spends
- * one of them — so no later send or consolidation batch picks them while
- * the walk may still show them. Success and a status-unknown broadcast
- * keep the reservation (the tx may well be in the mempool; a status-
- * unknown one also records `intent` so the UI can surface it later); a
- * definite rejection releases it — unless another submission of the same
- * tx is still in flight here, or one already succeeded or ended unknown.
+ * offline broadcast, vault broadcast). Immediately before submitting, in
+ * one step inside the cross-tab lock (services/pending-spends.ts,
+ * beginBroadcast), the inputs are reserved as pending spends of this tx —
+ * refused with PendingSpendConflictError if a different recent broadcast
+ * already spends one of them — and the payment intent and an in-flight
+ * submission attempt are recorded. So a reload or closed tab while the
+ * node is still being asked leaves a visible, checkable entry, and no
+ * later send or consolidation batch picks the coins while the walk may
+ * still show them. The attempt's lease is renewed while waiting.
+ *
+ * The outcome is recorded in one locked step that re-reads every attempt
+ * of the tx (finishSubmission): success resolves the intent and keeps the
+ * reservation; "status unknown" keeps both open; a definite rejection
+ * releases the coins only if no attempt of the same tx (any tab) is still
+ * in flight, succeeded or ended unknown.
  */
 export async function broadcastRecordingSpends(
   raw: string,
@@ -739,35 +741,27 @@ export async function broadcastRecordingSpends(
   intent?: { destination: string | null; amountGrains: bigint | null },
 ): Promise<string> {
   const localTxid = rawTxId(raw);
-  const added = await withPendingSpendsLock(() => reservePendingSpends(localTxid, inputs));
-  const key = localTxid ?? `anonymous-${++anonymousSubmission}`;
-  beginSubmission(key, added);
+  const { attemptId } = await withPendingSpendsLock(() => beginBroadcast(localTxid, inputs, intent ?? null));
+  const lease = setInterval(() => {
+    withPendingSpendsLock(() => renewSubmissionLease(attemptId)).catch(() => {
+      /* an unrenewed lease only makes the attempt count as "unknown" */
+    });
+  }, SUBMISSION_LEASE_RENEW_MS);
   let outcome: "accepted" | "unknown" | "rejected" = "rejected";
   try {
     const txid = await broadcastPearlTx(raw);
     outcome = "accepted";
     return txid;
   } catch (e) {
-    if (e instanceof BroadcastStatusUnknownError) {
-      outcome = "unknown";
-      const id = e.txid ?? localTxid;
-      if (id) {
-        recordPendingIntent({
-          txid: id,
-          destination: intent?.destination ?? null,
-          amountGrains: intent?.amountGrains ?? null,
-        });
-      }
-    }
+    if (e instanceof BroadcastStatusUnknownError) outcome = "unknown";
     throw e;
   } finally {
-    const release = finishSubmission(key, outcome);
-    if (release.length > 0) {
-      try {
-        await withPendingSpendsLock(() => releasePendingSpends(release, localTxid));
-      } catch {
-        /* the reservation simply stays until it expires (fail closed) */
-      }
+    clearInterval(lease);
+    try {
+      await withPendingSpendsLock(() => finishSubmission(attemptId, outcome));
+    } catch {
+      /* the attempt's lease runs out and it counts as "status unknown":
+         the reservation stays until it expires (fail closed) */
     }
   }
 }

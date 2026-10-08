@@ -12,6 +12,7 @@ import {
   forgetPendingTransaction,
   manualReleaseState,
   notePendingTxProbe,
+  pendingPersistenceIssue,
   withPendingSpendsLock,
   SubmissionInFlightError,
 } from "../../services/pending-spends";
@@ -70,13 +71,15 @@ export default function PendingTxCheck({
     setReleasing(true);
     try {
       const durable = await withPendingSpendsLock(() => forgetPendingTransaction(txid));
-      if (durable) {
+      if (durable || pendingPersistenceIssue()?.releases) {
+        // A release that only reached this tab is reported by
+        // PendingPersistenceWarning (Dashboard / Send banner and result
+        // screens), which outlives this row.
         onReleased?.();
       } else {
         setReleaseNote({
-          done: true,
-          text:
-            "Released in this tab, but the browser couldn't save that. After a reload, or in another open tab, these coins may show as reserved again until the reservation expires (6 hours).",
+          done: false,
+          text: "Couldn't release: this transaction's coins are still reserved. Check again, then retry.",
         });
       }
     } catch (e) {

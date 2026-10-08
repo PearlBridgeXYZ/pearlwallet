@@ -12,6 +12,7 @@
 
 import { readWprlBalance } from "./bridge";
 import { fetchPrlUtxos, pearlRpcTuning, type PrlUtxo } from "./pearl-rpc";
+import { memoryEpoch } from "../state/balance-memory";
 import { mapWithConcurrency } from "./rpc-limiter";
 import { fetchPrlPriceUsd } from "./prices";
 import { ethClient } from "../chains/ethereum/rpc";
@@ -137,6 +138,9 @@ export interface ScanPrlPoolOptions {
   maxPages?: number;
   /** Token-bucket lane (default "high"). */
   priority?: RpcPriority;
+  /** Session epoch the whole scan belongs to (memoryEpoch() at its
+   *  start). Default: captured when the walk starts. */
+  epoch?: number;
 }
 
 /**
@@ -154,12 +158,16 @@ export async function walkPoolAddresses(
   },
 ): Promise<PoolAddressResult[]> {
   let done = progress.doneBase;
+  // One epoch for the whole scan: after a lock / wipe / wallet switch no
+  // further address of it is read, and nothing it read is cached.
+  const epoch = opts.epoch ?? memoryEpoch();
   return mapWithConcurrency(
     refs,
     opts.concurrency ?? pearlRpcTuning().scanConcurrency,
     async (ref, i): Promise<PoolAddressResult> => {
       let result: PoolAddressResult;
       try {
+        if (memoryEpoch() !== epoch) throw new Error("E_SESSION_CLEARED: the wallet session ended during this scan");
         // v0.3.1: single unified walk. Same call Send uses — balance and
         // spendable can never diverge for any reason other than a UTXO
         // being spent between the two walks.
@@ -167,6 +175,7 @@ export async function walkPoolAddresses(
           signal: opts.signal,
           priority: opts.priority ?? "high",
           maxPages: opts.maxPages,
+          epoch,
         });
         let g = 0n;
         for (const u of r.utxos) g += u.valueGrains;

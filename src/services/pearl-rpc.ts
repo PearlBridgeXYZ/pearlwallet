@@ -631,6 +631,11 @@ export interface FetchUtxosOptions {
   priority?: RpcPriority;
   /** Cancels the walk between/within pages. */
   signal?: AbortSignal;
+  /** Session epoch (memoryEpoch()) of the scan this walk belongs to,
+   *  captured once when that scan started. The history cache is written
+   *  only while it is still current, so an address a pre-clear scan
+   *  launches after a lock / wipe can't refill it. Default: now. */
+  epoch?: number;
 }
 
 /**
@@ -659,8 +664,9 @@ export async function fetchPrlUtxos(
     MAX_UTXO_WALK_PAGES_HARD,
   );
   let skip = 0;
-  // Session epoch at walk start (see rememberCompleteHistory).
-  const epoch = memoryEpoch();
+  // Session epoch of the scan (or of this walk's start; see
+  // rememberCompleteHistory).
+  const epoch = opts.epoch ?? memoryEpoch();
   type Held = { valueGrains: bigint; scriptHex: string };
   const utxo = new Map<string, Held>();
   const seenOutputs = new Set<string>();
@@ -873,10 +879,13 @@ const DETERMINISTIC_REJECTION_RE =
  * reasons — and anything unrecognised — are "state-dependent": after an
  * attempt that may have reached the node they can be the echo of our own
  * accepted transaction and never prove it absent. A non-transient HTTP
- * status (the proxy refusing the request) is about the request itself.
+ * status (401/403/413… from a proxy or WAF) proves only that THIS request
+ * was refused; it says nothing about whether an earlier attempt of the
+ * same bytes was delivered, so it is never "deterministic" — after a
+ * possibly delivered attempt it resolves to found or status unknown.
  */
 export function classifyBroadcastRejection(err: unknown): BroadcastRejectionClass {
-  if (err instanceof PearlRpcHttpError) return "deterministic";
+  if (err instanceof PearlRpcHttpError) return "state-dependent";
   const msg = err instanceof Error ? err.message : String(err);
   if (STATE_DEPENDENT_REJECTION_RE.test(msg)) return "state-dependent";
   if (DETERMINISTIC_REJECTION_RE.test(msg)) return "deterministic";
@@ -912,8 +921,9 @@ const TXID_HEX_RE = /^[0-9a-f]{64}$/i;
  *     once after a short delay): found → success; absent on both probes
  *     AND a content-deterministic reason (fee floor, dust, script…) → the
  *     rejection stands (plain failure); anything else — including every
- *     state-dependent reason (inputs missing/spent, orphan, conflict) or
- *     an unrecognised one — → BroadcastStatusUnknownError
+ *     state-dependent reason (inputs missing/spent, orphan, conflict),
+ *     an unrecognised one, or a non-transient HTTP status (a refusal of
+ *     that request, not a verdict on the tx) — → BroadcastStatusUnknownError
  *   • 2xx with an unusable body (invalid/truncated JSON, null result,
  *     malformed error object) → probed: found → success, else
  *     BroadcastStatusUnknownError

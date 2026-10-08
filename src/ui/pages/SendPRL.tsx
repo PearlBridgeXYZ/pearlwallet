@@ -27,9 +27,9 @@ import {
 import type { PrlPoolScan } from "../../services/balances";
 import { BroadcastStatusUnknownError, MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
-import { PendingSpendConflictError, unresolvedIntentsTo } from "../../services/pending-spends";
+import { needsPayTwiceAck, payTwiceRisk, PendingSpendConflictError } from "../../services/pending-spends";
 import PendingTxCheck from "../components/PendingTxCheck";
-import PendingBroadcasts from "../components/PendingBroadcasts";
+import PendingBroadcasts, { PendingPersistenceWarning } from "../components/PendingBroadcasts";
 import { usePendingSpendsVersion } from "../hooks/usePendingSpends";
 
 type FeeTier = "low" | "normal" | "high";
@@ -98,11 +98,13 @@ export default function SendPRL() {
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
 
   const [destination, setDestination] = useState("");
-  // An earlier payment to this destination ended "status unknown" and is
-  // unresolved: paying again needs this explicit acknowledgement.
+  // An earlier payment to this destination (any letter case) is still
+  // unresolved — in flight or "status unknown" — or a reserved broadcast's
+  // destination was never recorded: paying again needs this explicit
+  // acknowledgement.
   const [payTwiceAck, setPayTwiceAck] = useState(false);
   usePendingSpendsVersion();
-  const sameDestUnresolved = unresolvedIntentsTo(destination);
+  const payTwice = payTwiceRisk(destination);
   const [amount, setAmount] = useState("");
   const [sendMax, setSendMax] = useState(false);
   const [tier, setTier] = useState<FeeTier>("normal");
@@ -155,7 +157,7 @@ export default function SendPRL() {
       deepWalk,
     ],
     enabled: stage === "preview" && !!validated && pool.length > 0,
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       // Bound to the address generation at walk START: a walk that raced
       // an address reset can't persist its (longer) list afterwards.
       const onDiscovered = useWallet.getState().pearlDiscoveryHandler();
@@ -174,6 +176,7 @@ export default function SendPRL() {
             deriveMore,
             onDiscovered,
             maxPages: deepWalk ? MAX_UTXO_WALK_PAGES_HARD : undefined,
+            signal,
           });
           if (live.utxos.length === 0) {
             throw new NoSpendableCoinsError(live.addressesScanned, live.pending.length, live.degraded);
@@ -201,6 +204,7 @@ export default function SendPRL() {
           includeTip: tipThisTx,
           cachedUtxos: utxos,
           cachedFrom: from,
+          signal,
         });
         return { ...composed, composedAt: Date.now(), max: max as MaxSendable | null };
       }
@@ -215,6 +219,7 @@ export default function SendPRL() {
             amountGrains: validated!.grains,
             feerateSatPerVbyte: FEERATE_BY_TIER[tier],
             includeTip: tipThisTx,
+            signal,
           })
         : await composePearlSend({
             network: pearlNetwork,
@@ -227,6 +232,7 @@ export default function SendPRL() {
             feerateSatPerVbyte: FEERATE_BY_TIER[tier],
             includeTip: tipThisTx,
             cachedUtxos,
+            signal,
           });
       return { ...composed, composedAt: Date.now(), max: null as MaxSendable | null };
     },
@@ -297,11 +303,11 @@ export default function SendPRL() {
     if (!validPearl(destination, pearlNetwork)) {
       return { ok: false, reason: "That doesn't look like a valid Pearl address." };
     }
-    if (unresolvedIntentsTo(destination).length > 0 && !payTwiceAck) {
+    if (needsPayTwiceAck(destination) && !payTwiceAck) {
       return {
         ok: false,
         reason:
-          "An earlier payment to this address has an unknown status. Check it above, or confirm that you accept paying twice.",
+          "An earlier payment that may go to this address has an unknown status. Check it above, or confirm that you accept paying twice.",
       };
     }
     if (sendMax) {
@@ -325,9 +331,9 @@ export default function SendPRL() {
     if (!q) return;
     // Re-checked at click time: a payment to this address may have ended
     // "status unknown" (another tab) since the review.
-    if (unresolvedIntentsTo(validated.dest).length > 0 && !payTwiceAck) {
+    if (needsPayTwiceAck(validated.dest) && !payTwiceAck) {
       setError(
-        "An earlier payment to this address has an unknown status. Go back and check it, or confirm that you accept paying twice.",
+        "An earlier payment that may go to this address has an unknown status. Go back and check it, or confirm that you accept paying twice.",
       );
       return;
     }
@@ -375,6 +381,7 @@ export default function SendPRL() {
           <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
             Confirming on chain — this can take a few minutes.
           </p>
+          <PendingPersistenceWarning className="mt-3" />
           {txid && (
             <a
               href={pearlTxExplorerUrl(pearlNetwork, txid)}
@@ -404,6 +411,7 @@ export default function SendPRL() {
             The network didn't confirm receipt. The transaction may already be on its way, so this
             send can't be repeated until you check it. Its coins stay reserved meanwhile.
           </p>
+          <PendingPersistenceWarning className="mt-3" />
           <div className="mt-3 rounded-pb border border-line bg-surface-2 p-3">
             <PendingTxCheck
               txid={unknownTxid}
@@ -716,9 +724,13 @@ export default function SendPRL() {
             }}
           />
         </label>
-        {sameDestUnresolved.length > 0 && (
+        {(payTwice.sameDestination.length > 0 || payTwice.unknownDestination > 0) && (
           <div role="alert" className="rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger">
-            <p className="font-medium">An earlier payment to this address may already be on its way.</p>
+            <p className="font-medium">
+              {payTwice.sameDestination.length > 0
+                ? "An earlier payment to this address may already be on its way."
+                : "An earlier payment whose address this wallet couldn't record may already be on its way."}
+            </p>
             <p className="mt-1">
               Its broadcast status is unknown. Check it in the panel above first — sending now could pay this
               address twice.

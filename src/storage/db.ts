@@ -233,9 +233,11 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   // Outpoints of recent broadcasts (services/pending-spends.ts) — public
   // chain data, but it reveals which coins this wallet holds.
   "pearl-wallet-pending-spends-v1",
-  // Released reservations and status-unknown payment intents (same file).
+  // Released reservations, payment intents and submission attempts (same
+  // file).
   "pearl-wallet-pending-releases-v1",
   "pearl-wallet-pending-intents-v1",
+  "pearl-wallet-pending-attempts-v1",
 ];
 const UI_STORAGE_KEY_RE = /^pearl-wallet-ui-v\d+$/;
 

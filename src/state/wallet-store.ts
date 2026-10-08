@@ -5,6 +5,7 @@ import { cryptoWorker } from "../crypto/worker-client";
 import { MAX_ADDRESSES_PER_BRANCH, RECEIVE_GAP_LIMIT, type HdBranch } from "../crypto/hd";
 import { monotonicNow } from "../lib/monotonic";
 import { clearBalanceMemory } from "./balance-memory";
+import { clearPendingSpends, clearPendingSpendsMemory } from "../services/pending-spends";
 import {
   db,
   loadKeystore,
@@ -282,6 +283,10 @@ export const useWallet = create<WalletState>((set, get) => ({
             } else if (ev.data.type === "wiped") {
               cryptoWorker.reset();
               clearBalanceMemory();
+              // The wiping tab removed the pending-spend keys; drop this
+              // tab's in-memory copies so its next write can't put the old
+              // wallet's records back.
+              clearPendingSpendsMemory();
               set({ status: "no-wallet", addresses: null, blob: null });
             }
           });
@@ -460,6 +465,11 @@ export const useWallet = create<WalletState>((set, get) => ({
       cryptoWorker.reset();
       await wipeKeystore();
       clearBalanceMemory();
+      // Reservations, releases, intents and submission attempts — memory
+      // and storage (wipeKeystore removed the keys; the module's copies
+      // would otherwise be written back by the next reservation). Lock
+      // keeps them on purpose: a lock must not forget a pending broadcast.
+      clearPendingSpends();
       broadcastKeystoreEvent({ type: "wiped" });
       set({ status: "no-wallet", addresses: null, blob: null });
     });
@@ -565,7 +575,13 @@ export const useWallet = create<WalletState>((set, get) => ({
       await saveKeystore(rec);
       // Scan baselines and cached scans describe the longer lists.
       clearBalanceMemory();
-      set({ addresses: { ...addresses, pearlPool: ext, pearlChange: int } });
+      // Bump again as the short lists become visible: a scan that started
+      // while this reset waited for the lock or the keystore bound the
+      // first bump but copied the long lists, and must not extend them.
+      set({
+        addresses: { ...addresses, pearlPool: ext, pearlChange: int },
+        pearlAddressGeneration: get().pearlAddressGeneration + 1,
+      });
       return true;
     });
   },

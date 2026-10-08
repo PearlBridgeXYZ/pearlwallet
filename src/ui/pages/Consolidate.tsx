@@ -154,7 +154,7 @@ export default function Consolidate() {
     enabled: pool.length > 0 && !running,
     retry: false,
     staleTime: Infinity,
-    queryFn: async (): Promise<CoinSnapshot> => {
+    queryFn: async ({ signal }): Promise<CoinSnapshot> => {
       const cache = cachedScan?.spendable;
       if (!forceLive && cache && cache.utxos.length > 0 && Date.now() - cache.fetchedAt < UTXO_CACHE_FRESHNESS_MS) {
         const { spendable, pending } = excludePendingSpends(cache.utxos);
@@ -167,7 +167,7 @@ export default function Consolidate() {
         };
       }
       const onDiscovered = useWallet.getState().pearlDiscoveryHandler();
-      const live = await loadSpendableUtxos({ pool, changePool, deriveMore, onDiscovered });
+      const live = await loadSpendableUtxos({ pool, changePool, deriveMore, onDiscovered, signal });
       return {
         utxos: live.utxos,
         pendingCount: live.pending.length,

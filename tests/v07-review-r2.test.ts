@@ -299,11 +299,11 @@ describe("R2-1 — manual release gate (PendingTxCheck)", () => {
   it("hidden while a submission of that tx is in flight; forget refuses too", () => {
     recordPendingSpends(T, [OP(1)]);
     notePendingTxProbe(T, "absent");
-    beginSubmission(T, []);
+    const attempt = beginSubmission(T, []);
     expect(manualReleaseState(T, true)).toEqual({ state: "in-flight" });
     expect(() => forgetPendingTransaction(T)).toThrow(SubmissionInFlightError);
     expect(pendingOutpoints().has(key(1))).toBe(true);
-    finishSubmission(T, "rejected");
+    finishSubmission(attempt, "rejected");
     expect(manualReleaseState(T, true)).toEqual({ state: "ready" });
     expect(forgetPendingTransaction(T)).toBe(true);
     expect(pendingOutpoints().size).toBe(0);

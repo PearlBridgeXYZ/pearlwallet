@@ -9,12 +9,23 @@ import {
   persistComposedAsPending,
   signPendingTx,
 } from "../../services/multisig";
+import { MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
 import { formatGrains, parsePRL } from "../../lib/format";
 import { validPearl } from "../../lib/validate";
 import { useProposal } from "../../state/proposal-store";
 import type { VaultRecord } from "../../storage/db";
 
 type Stage = "compose" | "preview" | "saved";
+
+/** Copy for a vault whose history was cut off by the page cap. Its coins
+ *  are never offered (they can't be proven unspent); after the default
+ *  walk one deeper walk is offered, after the deepest one nothing more. */
+export function vaultHistoryCapMessage(deep: boolean): string {
+  const deepest = (MAX_UTXO_WALK_PAGES_HARD * 100).toLocaleString("en-US");
+  return deep
+    ? `Even the deepest search (${deepest} transactions) couldn't read this vault's whole history, so its coins can't be proven unspent. Nothing was composed. Waiting won't change this: spending from this vault needs a wallet backed by a full node.`
+    : `This vault has more history than the standard search reads, so its coins can't be proven unspent yet. Nothing was composed. "Search deeper" reads up to ${deepest} transactions (slower).`;
+}
 
 export default function SendFromVault() {
   const { id } = useParams<{ id: string }>();
@@ -29,6 +40,8 @@ export default function SendFromVault() {
   const [stage, setStage] = useState<Stage>("compose");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // A capped history at the default depth: offer one deeper walk.
+  const [offerDeeper, setOfferDeeper] = useState(false);
   const [composed, setComposed] = useState<Awaited<ReturnType<typeof composeVaultSend>> | null>(
     null,
   );
@@ -80,9 +93,10 @@ export default function SendFromVault() {
     }
   }, [vault, consumeIntent]);
 
-  async function compose() {
+  async function compose(deep = false) {
     if (!vault) return;
     setError(null);
+    setOfferDeeper(false);
     if (!validPearl(destination, pearlNetwork)) {
       setError("Destination isn't a valid Pearl address.");
       return;
@@ -104,16 +118,16 @@ export default function SendFromVault() {
         vault,
         destination: destination.trim(),
         amountGrains: grains,
+        maxPages: deep ? MAX_UTXO_WALK_PAGES_HARD : undefined,
       });
       setComposed(c);
       setStage("preview");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("E_HISTORY_INCOMPLETE"))
-        setError(
-          "The vault has more history than could be read, so its coins can't be proven unspent. Nothing was composed — try again later.",
-        );
-      else if (msg.includes("E_NO_UTXOS: every vault coin"))
+      if (msg.includes("E_HISTORY_INCOMPLETE")) {
+        setError(vaultHistoryCapMessage(deep));
+        setOfferDeeper(!deep);
+      } else if (msg.includes("E_NO_UTXOS: every vault coin"))
         setError("Every vault coin is already being spent by a transaction broadcast recently. Wait for it to confirm.");
       else if (msg.includes("E_NO_UTXOS")) setError("Vault has no spendable UTXOs.");
       else if (msg.includes("E_INSUFFICIENT_FUNDS"))
@@ -322,7 +336,12 @@ export default function SendFromVault() {
           <Link to={`/vaults/${vault.id}`} className="btn-secondary">
             Cancel
           </Link>
-          <button className="btn-primary flex-1 min-w-11" disabled={busy} onClick={compose}>
+          {offerDeeper && (
+            <button className="btn-secondary min-w-11" disabled={busy} onClick={() => void compose(true)}>
+              Search deeper
+            </button>
+          )}
+          <button className="btn-primary flex-1 min-w-11" disabled={busy} onClick={() => void compose(false)}>
             {busy ? "Composing…" : "Review"}
           </button>
         </div>

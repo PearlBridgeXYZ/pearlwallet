@@ -39,16 +39,36 @@
 // already succeeded / ended "status unknown"; success and "status unknown"
 // keep it.
 //
-// Status-unknown broadcasts also keep a payment intent {txid, destination,
-// amountGrains, at} so the Send screen and the dashboard can surface the
-// unresolved transaction after the user navigated away, and Send can ask
-// for an explicit "may pay twice" acknowledgement before paying the same
-// destination again.
+// Payment intents: the same locked step that reserves the inputs also
+// records an intent {txid, destination, amountGrains, at} and a submission
+// attempt {id, txid, added, lease, state} — BEFORE anything is sent. So a
+// reload or a closed tab during an in-flight broadcast still leaves a
+// visible, checkable entry, and Send can ask for an explicit "may pay
+// twice" acknowledgement before paying the same destination again. The
+// intent is resolved when the node accepts the tx, when a status check
+// finds it, or when its coins are released; a status-unknown outcome
+// leaves it open. A reservation with no intent record at all (a failed
+// write, or one made by an older version) is shown as well, with its
+// destination unknown.
+//
+// Submission attempts live in storage too (own key), so the "is a
+// submission of this tx still in flight?" question has the same answer in
+// every tab: an attempt holds a lease that its tab renews while it waits
+// for the node; an attempt whose lease ran out (tab closed / reloaded) is
+// treated as "status unknown". A rejected attempt releases coins only in
+// the same locked step that re-reads every attempt of that tx: never while
+// another attempt is in flight, and never once one was accepted or ended
+// "status unknown".
 
 export const PENDING_SPEND_TTL_MS = 6 * 60 * 60 * 1000;
 export const PENDING_SPENDS_STORAGE_KEY = "pearl-wallet-pending-spends-v1";
 export const PENDING_RELEASES_STORAGE_KEY = "pearl-wallet-pending-releases-v1";
 export const PENDING_INTENTS_STORAGE_KEY = "pearl-wallet-pending-intents-v1";
+export const PENDING_ATTEMPTS_STORAGE_KEY = "pearl-wallet-pending-attempts-v1";
+/** An in-flight submission's lease; its tab renews it every
+ *  SUBMISSION_LEASE_RENEW_MS while waiting for the node. */
+export const SUBMISSION_LEASE_MS = 45_000;
+export const SUBMISSION_LEASE_RENEW_MS = 15_000;
 /** Two "node doesn't have it" checks this far apart unlock a manual
  *  release without an explorer acknowledgement. */
 export const PENDING_RELEASE_RECHECK_MS = 30_000;
@@ -56,6 +76,7 @@ export const PENDING_RELEASE_RECHECK_MS = 30_000;
  *  without limit. Several full consolidation batches fit comfortably. */
 const MAX_ENTRIES = 20_000;
 const MAX_INTENTS = 500;
+const MAX_ATTEMPTS = 500;
 const LOCK_NAME = "pearl-pending-spends";
 const CHANNEL_NAME = "pearl-pending-spends";
 
@@ -75,15 +96,33 @@ export interface PendingRelease {
   releasedAt: number;
 }
 
-/** What a status-unknown broadcast was meant to do. */
+/** What a broadcast was meant to do (recorded before submission). */
 export interface PendingIntent {
   txid: string;
-  /** Address paid (outputs[0]); null when not known (offline / vault). */
+  /** Address paid (outputs[0]), canonical lower-case; null when not known
+   *  (offline / vault / consolidation). */
   destination: string | null;
   amountGrains: string | null;
   at: number;
   /** Set once the status was resolved (node holds it, or released). */
   resolvedAt: number | null;
+}
+
+export type SubmissionState = "in-flight" | "accepted" | "unknown" | "rejected";
+
+/** One submission attempt of a transaction (any tab). */
+export interface PendingAttempt {
+  /** Unique per attempt. */
+  id: string;
+  /** Txid being submitted (lower-case); null when it can't be computed. */
+  txid: string | null;
+  /** Outpoints this attempt's reservation added. */
+  added: string[];
+  startedAt: number;
+  /** While "in-flight": the lease end. Past it the attempt is treated as
+   *  abandoned with an unknown outcome. */
+  until: number;
+  state: SubmissionState;
 }
 
 // Canonical in-process copies. Every read merges them with whatever storage
@@ -92,6 +131,7 @@ export interface PendingIntent {
 let memory: PendingSpend[] = [];
 let memoryReleases: PendingRelease[] = [];
 let memoryIntents: PendingIntent[] = [];
+let memoryAttempts: PendingAttempt[] = [];
 
 // ─── Change notification (UI re-render, other tabs) ──────────────────────
 
@@ -133,12 +173,16 @@ function ensureCrossTabWiring(): void {
       // Never keep a non-browser runtime (tests, tooling) alive.
       (channel as unknown as { unref?: () => void }).unref?.();
       channel.onmessage = (ev: MessageEvent) => {
-        const data = ev.data as { releases?: unknown; intents?: unknown } | null;
+        const data = ev.data as { releases?: unknown; intents?: unknown; attempts?: unknown } | null;
+        const now = Date.now();
         if (data && Array.isArray(data.releases)) {
-          memoryReleases = mergeReleases(memoryReleases, data.releases.filter(isRelease));
+          memoryReleases = pruneReleases(mergeReleases(memoryReleases, data.releases.filter(isRelease)), now);
         }
         if (data && Array.isArray(data.intents)) {
-          memoryIntents = mergeIntents(memoryIntents, data.intents.filter(isIntent));
+          memoryIntents = pruneIntents(mergeIntents(memoryIntents, data.intents.filter(isIntent).map(normalizeIntent)), now);
+        }
+        if (data && Array.isArray(data.attempts)) {
+          memoryAttempts = pruneAttempts(mergeAttempts(memoryAttempts, data.attempts.filter(isAttempt)), now);
         }
         notify();
       };
@@ -153,7 +197,8 @@ function ensureCrossTabWiring(): void {
           ev.key === null ||
           ev.key === PENDING_SPENDS_STORAGE_KEY ||
           ev.key === PENDING_RELEASES_STORAGE_KEY ||
-          ev.key === PENDING_INTENTS_STORAGE_KEY
+          ev.key === PENDING_INTENTS_STORAGE_KEY ||
+          ev.key === PENDING_ATTEMPTS_STORAGE_KEY
         ) {
           notify();
         }
@@ -164,7 +209,11 @@ function ensureCrossTabWiring(): void {
   }
 }
 
-function postToOtherTabs(msg: { releases?: PendingRelease[]; intents?: PendingIntent[] }): void {
+function postToOtherTabs(msg: {
+  releases?: PendingRelease[];
+  intents?: PendingIntent[];
+  attempts?: PendingAttempt[];
+}): void {
   ensureCrossTabWiring();
   try {
     channel?.postMessage(msg);
@@ -189,6 +238,13 @@ export function outpointKey(u: { txid: string; vout: number }): string {
 
 const OUTPOINT_RE = /^[0-9a-f]{64}:\d+$/;
 const TXID_RE = /^[0-9a-f]{64}$/;
+
+/** Canonical form of a destination for "same address?" comparisons.
+ *  Bech32m addresses are valid all-lower-case or all-upper-case (never
+ *  mixed); both spell the same address, so compare lower-cased. */
+export function canonicalDestination(d: string): string {
+  return d.trim().toLowerCase();
+}
 
 function isEntry(e: unknown): e is PendingSpend {
   if (!e || typeof e !== "object") return false;
@@ -228,6 +284,31 @@ function isIntent(e: unknown): e is PendingIntent {
   );
 }
 
+const SUBMISSION_STATES: readonly string[] = ["in-flight", "accepted", "unknown", "rejected"];
+
+function isAttempt(e: unknown): e is PendingAttempt {
+  if (!e || typeof e !== "object") return false;
+  const x = e as Record<string, unknown>;
+  return (
+    typeof x.id === "string" &&
+    x.id.length > 0 &&
+    x.id.length <= 100 &&
+    (x.txid === null || (typeof x.txid === "string" && TXID_RE.test(x.txid))) &&
+    Array.isArray(x.added) &&
+    x.added.every((o) => typeof o === "string" && OUTPOINT_RE.test(o)) &&
+    typeof x.startedAt === "number" &&
+    Number.isFinite(x.startedAt) &&
+    typeof x.until === "number" &&
+    Number.isFinite(x.until) &&
+    typeof x.state === "string" &&
+    SUBMISSION_STATES.includes(x.state)
+  );
+}
+
+function normalizeIntent(i: PendingIntent): PendingIntent {
+  return i.destination === null ? i : { ...i, destination: canonicalDestination(i.destination) };
+}
+
 function readList<T>(key: string, guard: (e: unknown) => e is T, max: number): T[] {
   const s = storage();
   if (!s) return [];
@@ -241,6 +322,11 @@ function readList<T>(key: string, guard: (e: unknown) => e is T, max: number): T
   }
 }
 
+// Keys whose latest write failed. Every write stores the whole merged list
+// (storage + this tab's memory), so the next successful write of a key
+// makes everything this tab holds for it durable again.
+const failedKeys = new Set<string>();
+
 /** Writes `value` under `key`. True when it reached storage (or there is
  *  no storage at all, so nothing stale can come back from it). */
 function writeList(key: string, value: unknown[]): boolean {
@@ -248,10 +334,31 @@ function writeList(key: string, value: unknown[]): boolean {
   if (!s) return true;
   try {
     s.setItem(key, JSON.stringify(value));
+    failedKeys.delete(key);
     return true;
   } catch {
+    failedKeys.add(key);
     return false;
   }
+}
+
+export interface PendingPersistenceIssue {
+  /** A reservation, payment intent or submission record exists only in
+   *  this tab: after a reload it may not be shown or protected. */
+  records: boolean;
+  /** A release exists only in this tab: after a reload (or in another
+   *  tab) those coins may show as reserved again. */
+  releases: boolean;
+}
+
+/** Whether this tab holds pending-spend state the browser couldn't save. */
+export function pendingPersistenceIssue(): PendingPersistenceIssue | null {
+  const records =
+    failedKeys.has(PENDING_SPENDS_STORAGE_KEY) ||
+    failedKeys.has(PENDING_INTENTS_STORAGE_KEY) ||
+    failedKeys.has(PENDING_ATTEMPTS_STORAGE_KEY);
+  const releases = failedKeys.has(PENDING_RELEASES_STORAGE_KEY);
+  return records || releases ? { records, releases } : null;
 }
 
 /** Union by outpoint. On a conflict the later record wins (longer
@@ -282,6 +389,13 @@ function mergeReleases(a: readonly PendingRelease[], b: readonly PendingRelease[
     if (!prev || r.releasedAt > prev.releasedAt) byKey.set(k, r);
   }
   return [...byKey.values()];
+}
+
+/** Tombstones outlive every record they can cover (records expire
+ *  PENDING_SPEND_TTL_MS after recordedAt <= releasedAt); older ones are
+ *  dropped, and the list is bounded. */
+function pruneReleases(releases: readonly PendingRelease[], now: number): PendingRelease[] {
+  return releases.filter((r) => now - r.releasedAt < PENDING_SPEND_TTL_MS).slice(-MAX_ENTRIES);
 }
 
 /** Drops every record a tombstone covers (same outpoint and spending tx,
@@ -315,18 +429,60 @@ function mergeIntents(a: readonly PendingIntent[], b: readonly PendingIntent[]):
   return [...byKey.values()];
 }
 
-function loadReleases(): PendingRelease[] {
-  return mergeReleases(readList(PENDING_RELEASES_STORAGE_KEY, isRelease, MAX_ENTRIES), memoryReleases);
+function pruneIntents(intents: readonly PendingIntent[], now: number): PendingIntent[] {
+  return intents.filter((i) => now - intentClock(i) < PENDING_SPEND_TTL_MS).slice(-MAX_INTENTS);
 }
 
-function load(): PendingSpend[] {
-  return applyReleases(merge(readList(PENDING_SPENDS_STORAGE_KEY, isEntry, MAX_ENTRIES), memory), loadReleases()).slice(
-    -MAX_ENTRIES,
-  );
+const attemptRank = (a: PendingAttempt) => (a.state === "in-flight" ? 0 : 1);
+
+/** Union by attempt id. An attempt only moves forward (in flight → final);
+ *  a final state beats "in-flight", a later lease beats an earlier one. */
+function mergeAttempts(a: readonly PendingAttempt[], b: readonly PendingAttempt[]): PendingAttempt[] {
+  const byKey = new Map<string, PendingAttempt>();
+  for (const x of [...a, ...b]) {
+    const prev = byKey.get(x.id);
+    if (!prev) {
+      byKey.set(x.id, x);
+      continue;
+    }
+    const rx = attemptRank(x);
+    const rp = attemptRank(prev);
+    if (rx > rp || (rx === rp && rx === 0 && x.until > prev.until)) byKey.set(x.id, x);
+  }
+  return [...byKey.values()];
+}
+
+function pruneAttempts(attempts: readonly PendingAttempt[], now: number): PendingAttempt[] {
+  return attempts.filter((a) => now - Math.max(a.startedAt, a.until) < PENDING_SPEND_TTL_MS).slice(-MAX_ATTEMPTS);
+}
+
+function loadReleases(now: number = Date.now()): PendingRelease[] {
+  // Also prunes this tab's copy (a passive tab that only receives
+  // tombstones never saves any).
+  memoryReleases = pruneReleases(memoryReleases, now);
+  return pruneReleases(mergeReleases(readList(PENDING_RELEASES_STORAGE_KEY, isRelease, MAX_ENTRIES), memoryReleases), now);
+}
+
+/** Storage and memory, each filtered by the tombstones FIRST: a released
+ *  record must never shadow a live record of the same outpoint (another
+ *  tx's reservation) whatever their timestamps. */
+function load(now: number = Date.now()): PendingSpend[] {
+  const releases = loadReleases(now);
+  return merge(
+    applyReleases(readList(PENDING_SPENDS_STORAGE_KEY, isEntry, MAX_ENTRIES), releases),
+    applyReleases(memory, releases),
+  ).slice(-MAX_ENTRIES);
 }
 
 function loadIntents(): PendingIntent[] {
-  return mergeIntents(readList(PENDING_INTENTS_STORAGE_KEY, isIntent, MAX_INTENTS), memoryIntents);
+  return mergeIntents(
+    readList(PENDING_INTENTS_STORAGE_KEY, isIntent, MAX_INTENTS).map(normalizeIntent),
+    memoryIntents.map(normalizeIntent),
+  );
+}
+
+function loadAttempts(): PendingAttempt[] {
+  return mergeAttempts(readList(PENDING_ATTEMPTS_STORAGE_KEY, isAttempt, MAX_ATTEMPTS), memoryAttempts);
 }
 
 /** Persists the list (and, when given, the tombstones). Memory first: it
@@ -337,9 +493,7 @@ function save(entries: PendingSpend[], releases?: PendingRelease[], now: number 
   memory = bounded;
   let durable = writeList(PENDING_SPENDS_STORAGE_KEY, bounded);
   if (releases) {
-    // Tombstones outlive every record they can cover (records expire
-    // PENDING_SPEND_TTL_MS after recordedAt <= releasedAt).
-    const kept = releases.filter((r) => now - r.releasedAt < PENDING_SPEND_TTL_MS).slice(-MAX_ENTRIES);
+    const kept = pruneReleases(releases, now);
     memoryReleases = kept;
     durable = writeList(PENDING_RELEASES_STORAGE_KEY, kept) && durable;
   }
@@ -348,9 +502,17 @@ function save(entries: PendingSpend[], releases?: PendingRelease[], now: number 
 }
 
 function saveIntents(intents: PendingIntent[], now: number): boolean {
-  const kept = intents.filter((i) => now - intentClock(i) < PENDING_SPEND_TTL_MS).slice(-MAX_INTENTS);
+  const kept = pruneIntents(intents, now);
   memoryIntents = kept;
   const durable = writeList(PENDING_INTENTS_STORAGE_KEY, kept);
+  notify();
+  return durable;
+}
+
+function saveAttempts(attempts: PendingAttempt[], now: number): boolean {
+  const kept = pruneAttempts(attempts, now);
+  memoryAttempts = kept;
+  const durable = writeList(PENDING_ATTEMPTS_STORAGE_KEY, kept);
   notify();
   return durable;
 }
@@ -401,17 +563,17 @@ export function recordPendingSpends(
   inputs: readonly { txid: string; vout: number }[],
   now: number = Date.now(),
 ): void {
-  const entries = live(load(), now);
+  const entries = live(load(now), now);
   const have = new Set(entries.map((e) => e.outpoint));
   const self = spentBy ? spentBy.toLowerCase() : null;
-  const released = releaseTimes(loadReleases());
+  const released = releaseTimes(loadReleases(now));
   for (const u of inputs) {
     const k = outpointKey(u);
     if (have.has(k)) continue;
     have.add(k);
     entries.push({ outpoint: k, spentBy: self, recordedAt: freshRecordTime(released, k, self, now) });
   }
-  save(entries);
+  save(entries, undefined, now);
 }
 
 function releaseTimes(releases: readonly PendingRelease[]): Map<string, number> {
@@ -429,11 +591,11 @@ function freshRecordTime(released: Map<string, number>, outpoint: string, spentB
 
 /** Outpoints spent by a recent broadcast that may not be visible yet. */
 export function pendingOutpoints(now: number = Date.now()): Set<string> {
-  return new Set(live(load(), now).map((e) => e.outpoint));
+  return new Set(live(load(now), now).map((e) => e.outpoint));
 }
 
 export function pendingSpendList(now: number = Date.now()): PendingSpend[] {
-  return live(load(), now);
+  return live(load(now), now);
 }
 
 /** Splits `utxos` into spendable and already-being-spent coins. */
@@ -448,15 +610,23 @@ export function excludePendingSpends<T extends { txid: string; vout: number }>(
   return { spendable, pending };
 }
 
+/** Forgets everything — memory AND storage (wallet wipe; tests). Not for
+ *  lock: reservations must survive a lock. */
 export function clearPendingSpends(): void {
   memory = [];
   memoryReleases = [];
   memoryIntents = [];
-  submissions.clear();
+  memoryAttempts = [];
+  failedKeys.clear();
   probeLog.clear();
   const s = storage();
   if (s) {
-    for (const k of [PENDING_SPENDS_STORAGE_KEY, PENDING_RELEASES_STORAGE_KEY, PENDING_INTENTS_STORAGE_KEY]) {
+    for (const k of [
+      PENDING_SPENDS_STORAGE_KEY,
+      PENDING_RELEASES_STORAGE_KEY,
+      PENDING_INTENTS_STORAGE_KEY,
+      PENDING_ATTEMPTS_STORAGE_KEY,
+    ]) {
       try {
         s.removeItem(k);
       } catch {
@@ -488,7 +658,7 @@ export function assertNotPending(
   now: number = Date.now(),
 ): void {
   const self = spentBy ? spentBy.toLowerCase() : null;
-  const byKey = new Map(live(load(), now).map((e) => [e.outpoint, e] as const));
+  const byKey = new Map(live(load(now), now).map((e) => [e.outpoint, e] as const));
   for (const u of inputs) {
     const e = byKey.get(outpointKey(u));
     if (e && (self === null || e.spentBy !== self)) throw new PendingSpendConflictError(e.outpoint, e.spentBy);
@@ -508,14 +678,22 @@ export function reservePendingSpends(
   inputs: readonly { txid: string; vout: number }[],
   now: number = Date.now(),
 ): string[] {
+  return reserveInternal(spentBy, inputs, now).added;
+}
+
+function reserveInternal(
+  spentBy: string | null,
+  inputs: readonly { txid: string; vout: number }[],
+  now: number,
+): { added: string[]; durable: boolean } {
   const self = spentBy ? spentBy.toLowerCase() : null;
-  const entries = live(load(), now);
+  const entries = live(load(now), now);
   const byKey = new Map(entries.map((e) => [e.outpoint, e] as const));
   for (const u of inputs) {
     const e = byKey.get(outpointKey(u));
     if (e && (self === null || e.spentBy !== self)) throw new PendingSpendConflictError(e.outpoint, e.spentBy);
   }
-  const released = releaseTimes(loadReleases());
+  const released = releaseTimes(loadReleases(now));
   const added: string[] = [];
   for (const u of inputs) {
     const k = outpointKey(u);
@@ -525,18 +703,36 @@ export function reservePendingSpends(
     entries.push(entry);
     added.push(k);
   }
-  save(entries);
-  return added;
+  const durable = save(entries, undefined, now);
+  return { added, durable };
 }
 
+/**
+ * Tombstones `drop` (records of `self`). Each tombstone is stamped no
+ * earlier than the record it removes — a re-reservation may carry a
+ * recordedAt past the wall clock (freshRecordTime, or a clock that moved
+ * back) and must still be covered. True only when the write reached
+ * storage AND the targeted records are gone.
+ */
 function releaseInternal(drop: ReadonlySet<string>, self: string | null, now: number): boolean {
-  const releases = loadReleases();
-  const fresh: PendingRelease[] = [...drop].map((outpoint) => ({ outpoint, spentBy: self, releasedAt: now }));
-  const allReleases = mergeReleases(releases, fresh);
-  const kept = applyReleases(load(), fresh);
+  const current = load(now);
+  const stamp = new Map<string, number>();
+  for (const e of current) {
+    if (drop.has(e.outpoint) && e.spentBy === self) {
+      stamp.set(e.outpoint, Math.max(now, e.recordedAt, stamp.get(e.outpoint) ?? -Infinity));
+    }
+  }
+  const fresh: PendingRelease[] = [...drop].map((outpoint) => ({
+    outpoint,
+    spentBy: self,
+    releasedAt: stamp.get(outpoint) ?? now,
+  }));
+  const allReleases = mergeReleases(loadReleases(now), fresh);
+  const kept = applyReleases(current, fresh);
   const durable = save(kept, allReleases, now);
   postToOtherTabs({ releases: fresh });
-  return durable;
+  const gone = !load(now).some((e) => drop.has(e.outpoint) && e.spentBy === self);
+  return durable && gone;
 }
 
 /** Undoes a reservation after the node definitely rejected the tx. Only
@@ -556,7 +752,7 @@ export function releasePendingSpends(
 /** Pending broadcasts grouped by spending txid (null = unknown txid). */
 export function pendingTransactions(now: number = Date.now()): { spentBy: string | null; coins: number; recordedAt: number }[] {
   const groups = new Map<string | null, { spentBy: string | null; coins: number; recordedAt: number }>();
-  for (const e of live(load(), now)) {
+  for (const e of live(load(now), now)) {
     const g = groups.get(e.spentBy);
     if (g) {
       g.coins++;
@@ -579,42 +775,51 @@ export class SubmissionInFlightError extends Error {
 
 /** Forgets the coins of ONE pending transaction (after status checks
  *  showed the node does not have it). Refused while a submission of that
- *  transaction is in flight in this tab. Returns whether the release
- *  reached storage. */
+ *  transaction is in flight in ANY tab (stored lease). Returns true only
+ *  when its coins are gone and the release reached storage; its intent is
+ *  resolved only once the coins are actually gone. */
 export function forgetPendingTransaction(spentBy: string | null, now: number = Date.now()): boolean {
   const self = spentBy ? spentBy.toLowerCase() : null;
-  if (self && isSubmissionInFlight(self)) throw new SubmissionInFlightError(self);
-  const drop = new Set(load().filter((e) => e.spentBy === self).map((e) => e.outpoint));
+  if (isSubmissionInFlight(self, now)) throw new SubmissionInFlightError(self ?? "unknown");
+  const drop = new Set(load(now).filter((e) => e.spentBy === self).map((e) => e.outpoint));
   let durable = drop.size > 0 ? releaseInternal(drop, self, now) : true;
-  if (self) durable = resolvePendingIntent(self, now) && durable;
+  const gone = !load(now).some((e) => e.spentBy === self);
+  if (self && gone) durable = resolvePendingIntent(self, now) && durable;
   probeLog.delete(self ?? "");
-  return durable;
+  return durable && gone;
 }
 
-// ─── Payment intents of status-unknown broadcasts ────────────────────────
+// ─── Payment intents ─────────────────────────────────────────────────────
 
-/** Records what a status-unknown broadcast was paying. */
+/** Records what a broadcast is paying (before submission). An intent that
+ *  is already open for this tx is kept as it is; a resolved one is
+ *  reopened. Returns whether it reached storage. */
 export function recordPendingIntent(
   intent: { txid: string; destination: string | null; amountGrains: bigint | string | null },
   now: number = Date.now(),
 ): boolean {
   const txid = intent.txid.toLowerCase();
   if (!TXID_RE.test(txid)) return false;
+  const cur = loadIntents();
+  const prev = cur.find((i) => i.txid === txid);
+  if (prev && prev.resolvedAt === null) return !failedKeys.has(PENDING_INTENTS_STORAGE_KEY);
+  const destination = intent.destination ? canonicalDestination(intent.destination) : null;
   const rec: PendingIntent = {
     txid,
-    destination: intent.destination ? intent.destination.trim() : null,
+    destination: destination || null,
     amountGrains: intent.amountGrains === null ? null : intent.amountGrains.toString(),
-    at: now,
+    // A reopened intent must post-date its resolution or the merge would
+    // keep the resolved copy.
+    at: prev ? Math.max(now, intentClock(prev) + 1) : now,
     resolvedAt: null,
   };
-  const all = mergeIntents(loadIntents(), [rec]);
-  const durable = saveIntents(all, now);
+  const durable = saveIntents(mergeIntents(cur, [rec]), now);
   postToOtherTabs({ intents: [rec] });
   return durable;
 }
 
-/** Marks a status-unknown broadcast as resolved (the node holds it, or
- *  its coins were released). */
+/** Marks a broadcast's intent as resolved (the node holds it, or its
+ *  coins were released). */
 export function resolvePendingIntent(txid: string, now: number = Date.now()): boolean {
   const id = txid.toLowerCase();
   const cur = loadIntents();
@@ -631,80 +836,196 @@ export interface UnresolvedPendingTx {
   coins: number;
   recordedAt: number;
   intent: PendingIntent | null;
+  /** A submission of it is waiting for the node right now (any tab). */
+  inFlight: boolean;
+  /** Its coins are reserved but no intent was recorded (failed write, an
+   *  older version, or no txid): the destination is unknown. */
+  metadataMissing: boolean;
 }
 
 /**
- * Pending broadcasts whose outcome is still open: every status-unknown
- * broadcast not yet resolved, plus coins recorded without a txid. Their
- * coins are still reserved.
+ * Reserved broadcasts whose outcome is still open: every one with an
+ * unresolved intent (in flight, or ended "status unknown"), plus every
+ * reservation without an intent record. Their coins are still reserved.
  */
 export function unresolvedPendingTransactions(now: number = Date.now()): UnresolvedPendingTx[] {
-  const open = new Map<string, PendingIntent>();
-  for (const i of loadIntents()) {
-    if (i.resolvedAt === null && now - i.at < PENDING_SPEND_TTL_MS) open.set(i.txid, i);
-  }
+  const intents = new Map(loadIntents().map((i) => [i.txid, i] as const));
+  const attempts = loadAttempts();
+  const inFlight = (txid: string | null) =>
+    attempts.some((a) => a.txid === txid && a.state === "in-flight" && a.until > now);
   const out: UnresolvedPendingTx[] = [];
   for (const g of pendingTransactions(now)) {
-    if (g.spentBy === null) out.push({ ...g, intent: null });
-    else if (open.has(g.spentBy)) out.push({ ...g, intent: open.get(g.spentBy)! });
+    const intent = g.spentBy === null ? undefined : intents.get(g.spentBy);
+    if (!intent) out.push({ ...g, intent: null, inFlight: inFlight(g.spentBy), metadataMissing: true });
+    else if (intent.resolvedAt === null) out.push({ ...g, intent, inFlight: inFlight(g.spentBy), metadataMissing: false });
   }
   return out;
 }
 
-/** Unresolved status-unknown payments to `destination`. */
+/** Unresolved payments to `destination` (any letter case). */
 export function unresolvedIntentsTo(destination: string, now: number = Date.now()): PendingIntent[] {
-  const d = destination.trim();
-  if (!d) return [];
-  return unresolvedPendingTransactions(now)
-    .map((t) => t.intent)
-    .filter((i): i is PendingIntent => !!i && i.destination === d);
-}
-
-// ─── In-flight submissions (this tab) ────────────────────────────────────
-
-interface Submission {
-  count: number;
-  /** Outpoints reserved by any attempt of this tx in this tab. */
-  added: Set<string>;
-  /** An attempt succeeded or ended "status unknown". */
-  settled: boolean;
-}
-const submissions = new Map<string, Submission>();
-
-/** Marks the start of one submission attempt of `key` (the txid). */
-export function beginSubmission(key: string, added: readonly string[]): void {
-  const k = key.toLowerCase();
-  const s = submissions.get(k) ?? { count: 0, added: new Set<string>(), settled: false };
-  s.count++;
-  for (const o of added) s.added.add(o);
-  submissions.set(k, s);
-  notify();
+  return payTwiceRisk(destination, now).sameDestination;
 }
 
 /**
- * Ends one submission attempt. Returns the outpoints to release: non-empty
- * only for a rejected attempt that was the last one in flight while no
- * attempt of the same tx succeeded or ended "status unknown".
+ * What paying `destination` now could duplicate: unresolved payments to
+ * the same address, and unresolved reservations whose destination was
+ * never recorded (they could be paying it too).
  */
-export function finishSubmission(key: string, outcome: "accepted" | "unknown" | "rejected"): string[] {
-  const k = key.toLowerCase();
-  const s = submissions.get(k);
-  if (!s) return [];
-  s.count--;
-  if (outcome !== "rejected") s.settled = true;
-  let release: string[] = [];
-  if (s.count <= 0) {
-    if (!s.settled) release = [...s.added];
-    submissions.delete(k);
-  }
-  notify();
-  return release;
+export function payTwiceRisk(
+  destination: string,
+  now: number = Date.now(),
+): { sameDestination: PendingIntent[]; unknownDestination: number } {
+  const d = canonicalDestination(destination);
+  if (!d) return { sameDestination: [], unknownDestination: 0 };
+  const open = unresolvedPendingTransactions(now);
+  return {
+    sameDestination: open.map((t) => t.intent).filter((i): i is PendingIntent => !!i && i.destination === d),
+    unknownDestination: open.filter((t) => t.metadataMissing).length,
+  };
 }
 
-/** A submission of `txid` is waiting for the node in this tab. */
-export function isSubmissionInFlight(txid: string | null): boolean {
-  if (!txid) return false;
-  return (submissions.get(txid.toLowerCase())?.count ?? 0) > 0;
+/** Send must have the user's explicit "may pay twice" acknowledgement. */
+export function needsPayTwiceAck(destination: string, now: number = Date.now()): boolean {
+  const r = payTwiceRisk(destination, now);
+  return r.sameDestination.length > 0 || r.unknownDestination > 0;
+}
+
+// ─── Submission attempts (shared by every tab) ───────────────────────────
+
+let attemptSeq = 0;
+function newAttemptId(now: number): string {
+  let rnd = "";
+  try {
+    const b = new Uint8Array(8);
+    globalThis.crypto.getRandomValues(b);
+    rnd = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+  } catch {
+    rnd = Math.random().toString(36).slice(2);
+  }
+  return `${now.toString(36)}-${(++attemptSeq).toString(36)}-${rnd}`;
+}
+
+function startAttempt(
+  txid: string | null,
+  added: readonly string[],
+  now: number,
+  leaseMs: number,
+): { attemptId: string; durable: boolean } {
+  const rec: PendingAttempt = {
+    id: newAttemptId(now),
+    txid: txid ? txid.toLowerCase() : null,
+    added: [...added],
+    startedAt: now,
+    until: now + leaseMs,
+    state: "in-flight",
+  };
+  const durable = saveAttempts(mergeAttempts(loadAttempts(), [rec]), now);
+  postToOtherTabs({ attempts: [rec] });
+  return { attemptId: rec.id, durable };
+}
+
+/** Records the start of one submission attempt of `txid`, which reserved
+ *  `added`. Returns the attempt id. Callers in a browser hold the lock. */
+export function beginSubmission(
+  txid: string | null,
+  added: readonly string[],
+  now: number = Date.now(),
+  leaseMs: number = SUBMISSION_LEASE_MS,
+): string {
+  return startAttempt(txid, added, now, leaseMs).attemptId;
+}
+
+/**
+ * The one pre-submission step (run inside withPendingSpendsLock): refuses
+ * when another tx already spends an input (PendingSpendConflictError,
+ * nothing written), else reserves the inputs, records the intent and the
+ * in-flight attempt. `durable` is false when any of it only reached
+ * memory (pendingPersistenceIssue() reports it to the UI).
+ */
+export function beginBroadcast(
+  spentBy: string | null,
+  inputs: readonly { txid: string; vout: number }[],
+  intent: { destination: string | null; amountGrains: bigint | null } | null,
+  now: number = Date.now(),
+  leaseMs: number = SUBMISSION_LEASE_MS,
+): { attemptId: string; added: string[]; durable: boolean } {
+  const self = spentBy ? spentBy.toLowerCase() : null;
+  const r = reserveInternal(self, inputs, now);
+  let durable = r.durable;
+  if (self) {
+    durable =
+      recordPendingIntent(
+        { txid: self, destination: intent?.destination ?? null, amountGrains: intent?.amountGrains ?? null },
+        now,
+      ) && durable;
+  }
+  const a = startAttempt(self, r.added, now, leaseMs);
+  return { attemptId: a.attemptId, added: r.added, durable: a.durable && durable };
+}
+
+/** Extends an in-flight attempt's lease (its tab is still waiting). */
+export function renewSubmissionLease(
+  attemptId: string,
+  now: number = Date.now(),
+  leaseMs: number = SUBMISSION_LEASE_MS,
+): boolean {
+  const all = loadAttempts();
+  const me = all.find((a) => a.id === attemptId);
+  if (!me || me.state !== "in-flight") return false;
+  const rec: PendingAttempt = { ...me, until: Math.max(me.until, now + leaseMs) };
+  saveAttempts(mergeAttempts(all, [rec]), now);
+  postToOtherTabs({ attempts: [rec] });
+  return true;
+}
+
+/**
+ * Ends one submission attempt and — in the same step, re-reading every
+ * attempt of that tx from storage — decides what happens to the
+ * reservation (callers in a browser hold the lock):
+ *   accepted  → the intent is resolved; coins stay reserved;
+ *   unknown   → everything stays (intent open);
+ *   rejected  → released only when EVERY attempt of this tx (any tab) was
+ *               rejected — none in flight, none accepted or unknown, no
+ *               abandoned lease — and then all their reserved outpoints
+ *               are released and the intent resolved.
+ * An attempt that no longer exists (wiped meanwhile) changes nothing.
+ */
+export function finishSubmission(
+  attemptId: string,
+  outcome: "accepted" | "unknown" | "rejected",
+  now: number = Date.now(),
+): { released: string[]; durable: boolean } {
+  const all = loadAttempts();
+  const me = all.find((a) => a.id === attemptId);
+  if (!me || me.state !== "in-flight") return { released: [], durable: true };
+  const rec: PendingAttempt = { ...me, state: outcome };
+  const attempts = mergeAttempts(all, [rec]);
+  let durable = saveAttempts(attempts, now);
+  postToOtherTabs({ attempts: [rec] });
+  let released: string[] = [];
+  if (outcome === "accepted" && me.txid) {
+    durable = resolvePendingIntent(me.txid, now) && durable;
+  } else if (outcome === "rejected") {
+    const group = me.txid === null ? [rec] : attempts.filter((a) => a.txid === me.txid);
+    if (group.every((a) => a.state === "rejected")) {
+      const drop = new Set(group.flatMap((a) => a.added));
+      if (drop.size > 0) {
+        durable = releaseInternal(drop, me.txid, now) && durable;
+        released = [...drop];
+      }
+      if (me.txid && !load(now).some((e) => e.spentBy === me.txid)) {
+        durable = resolvePendingIntent(me.txid, now) && durable;
+      }
+    }
+  }
+  return { released, durable };
+}
+
+/** A submission of `txid` is waiting for the node (any tab, live lease). */
+export function isSubmissionInFlight(txid: string | null, now: number = Date.now()): boolean {
+  const id = txid ? txid.toLowerCase() : null;
+  return loadAttempts().some((a) => a.txid === id && a.state === "in-flight" && a.until > now);
 }
 
 // ─── Manual release readiness ────────────────────────────────────────────
@@ -735,13 +1056,13 @@ export type ManualReleaseState =
 
 /**
  * Whether the user may release `txid`'s coins by hand: never while a
- * submission of it is in flight; otherwise after two negative checks at
- * least PENDING_RELEASE_RECHECK_MS apart, or after one negative check plus
- * the user's explicit "the explorer doesn't show it either".
+ * submission of it is in flight in any tab; otherwise after two negative
+ * checks at least PENDING_RELEASE_RECHECK_MS apart, or after one negative
+ * check plus the user's explicit "the explorer doesn't show it either".
  */
 export function manualReleaseState(txid: string, explorerAck: boolean, now: number = Date.now()): ManualReleaseState {
   const id = txid.toLowerCase();
-  if (isSubmissionInFlight(id)) return { state: "in-flight" };
+  if (isSubmissionInFlight(id, now)) return { state: "in-flight" };
   const log = probeLog.get(id) ?? [];
   if (log.length === 0) return { state: "check" };
   if (explorerAck) return { state: "ready" };
@@ -750,30 +1071,38 @@ export function manualReleaseState(txid: string, explorerAck: boolean, now: numb
   return { state: "recheck", waitMs: Math.max(0, log[0]! + PENDING_RELEASE_RECHECK_MS - now) };
 }
 
-/** Test hook: forget in-process state without touching storage (a second
- *  tab / a reload). */
-export function _resetPendingMemoryForTests(): void {
+/** Forgets this tab's in-memory copies only (another tab wiped the
+ *  wallet and already removed the storage keys). */
+export function clearPendingSpendsMemory(): void {
   memory = [];
   memoryReleases = [];
   memoryIntents = [];
-  submissions.clear();
+  memoryAttempts = [];
+  failedKeys.clear();
   probeLog.clear();
+  notify();
+}
+
+/** Test hook: forget in-process state without touching storage (a second
+ *  tab / a reload). */
+export function _resetPendingMemoryForTests(): void {
+  clearPendingSpendsMemory();
+}
+
+interface PendingMemorySnapshot {
+  memory: PendingSpend[];
+  releases: PendingRelease[];
+  intents: PendingIntent[];
+  attempts?: PendingAttempt[];
 }
 
 /** Test hook: snapshot / restore in-process state (simulate two tabs). */
-export function _pendingMemorySnapshotForTests(): {
-  memory: PendingSpend[];
-  releases: PendingRelease[];
-  intents: PendingIntent[];
-} {
-  return { memory: [...memory], releases: [...memoryReleases], intents: [...memoryIntents] };
+export function _pendingMemorySnapshotForTests(): Required<PendingMemorySnapshot> {
+  return { memory: [...memory], releases: [...memoryReleases], intents: [...memoryIntents], attempts: [...memoryAttempts] };
 }
-export function _restorePendingMemoryForTests(s: {
-  memory: PendingSpend[];
-  releases: PendingRelease[];
-  intents: PendingIntent[];
-}): void {
+export function _restorePendingMemoryForTests(s: PendingMemorySnapshot): void {
   memory = [...s.memory];
   memoryReleases = [...s.releases];
   memoryIntents = [...s.intents];
+  memoryAttempts = [...(s.attempts ?? [])];
 }

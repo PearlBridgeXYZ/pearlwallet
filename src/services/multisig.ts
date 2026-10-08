@@ -292,6 +292,10 @@ export interface ComposeVaultSendOpts {
   destination: string;
   amountGrains: bigint;
   feerateSatPerVbyte?: bigint;
+  /** History walk depth in pages (default MAX_UTXO_WALK_PAGES; clamped to
+   *  MAX_UTXO_WALK_PAGES_HARD). A capped history is refused at any depth;
+   *  the UI offers one deeper walk after a refusal at the default. */
+  maxPages?: number;
 }
 
 export interface ComposedVaultSend {
@@ -321,7 +325,7 @@ export interface ComposedVaultSend {
  */
 export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<ComposedVaultSend> {
   const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
-  const walk = await fetchPrlUtxos(opts.vault.pearlAddress);
+  const walk = await fetchPrlUtxos(opts.vault.pearlAddress, { maxPages: opts.maxPages });
   // A page-capped history may list coins spent on a page never read: it
   // never funds a transaction (same rule as single-sig Send).
   if (walk.degraded) throw new HistoryIncompleteError(1, 1);
