@@ -85,8 +85,9 @@ interface UIState {
   // drpc fallback). v0.2.0 surfaces this so a user running their own
   // archive node can point the wallet at it.
   ethRpcOverride: string;
-  // PearlBridge developer tip — opt-in by default. Disabling sends no
-  // extra output and costs nothing beyond on-chain fees.
+  // PearlBridge developer tip — ON by default (tipEnabled: true below),
+  // can be turned off in Settings. Disabling sends no extra output and
+  // costs nothing beyond on-chain fees.
   tipEnabled: boolean;
   // Multisig vault surface. Default ON as of v0.5.0 (graduated from the
   // earlier opt-in/experimental toggle once create/sign/send + cosign

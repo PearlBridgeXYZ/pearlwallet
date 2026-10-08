@@ -358,7 +358,10 @@ export default function Settings() {
       <section className="card mb-6">
         <h2 className="border-b border-line pb-3 text-lg font-semibold">Export recovery phrase</h2>
         <p className="mt-3 text-sm leading-7 text-text-2">
-          Re-enter your password to view your recovery phrase. Write it down privately and never share it. Only enter it when importing into a wallet you trust.
+          Re-enter your password to view your recovery phrase. Write it down privately and never share it.
+        </p>
+        <p className="mt-2 text-sm font-semibold leading-7 text-warn">
+          Never enter your recovery phrase on any website. Never type it into a page you reached from a link or a message, and never give it to anyone who asks for it, support included. The only exception is restoring this wallet: at its own address, typed or bookmarked, or in its downloaded offline file.
         </p>
         <div className="mt-4 flex flex-wrap items-end gap-3">
           <label className="block min-w-0 flex-1">

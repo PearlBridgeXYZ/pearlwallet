@@ -435,7 +435,8 @@ function selectCoins(
  * UTXOs WILL combine enough of them — up to MAX_SEND_INPUTS coins per
  * transaction. Needing more raises TooManyInputsError (combine coins
  * first). If `cachedUtxos` covers the amount we use the cache (fast
- * path, no network); otherwise we walk the pool live with
+ * path, no network); if a complete cache needs too many inputs that
+ * TooManyInputsError is thrown at once; otherwise we walk the pool live with
  * `opts.maxPages` controlling depth. On a degraded walk that still
  * comes up short we throw an InsufficientFundsError that includes the
  * actual numbers — UI can offer a deeper-walk retry. Coins spent by a
@@ -466,7 +467,13 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
         avail = cached;
         degraded = cachedDegraded;
         historyIncomplete = opts.cachedFrom?.historyIncomplete ?? 0;
-      } catch {
+      } catch (err) {
+        // Too many inputs over a complete cached scan is the answer: a
+        // live walk sees the same coins (minutes of paced requests for a
+        // large wallet) and can only differ if a larger coin arrived since,
+        // which a rescan picks up. Surface it now. Short funds still fall
+        // through to a live walk (a new receive may cover the amount).
+        if (err instanceof TooManyInputsError && !cachedDegraded) throw err;
         selection = null;
       }
     }

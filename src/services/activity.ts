@@ -35,6 +35,7 @@ import {
   pearlRpcTuning,
 } from "./pearl-rpc";
 import { mapWithConcurrency } from "./rpc-limiter";
+import { memoryEpoch } from "../state/balance-memory";
 
 export type ActivityChain = "pearl" | "wprl";
 export type ActivityDirection = "in" | "out";
@@ -57,6 +58,25 @@ export interface ActivityItem {
   // is harder to resolve so we leave it undefined). For WPRL: the other
   // party to the Transfer (from on "in", to on "out").
   counterparty?: string;
+}
+
+/** Cancellation for an activity scan. */
+export interface ActivityOptions {
+  /** Aborts queued, backing-off and in-flight requests (react-query's
+   *  query signal: cancelled on lock / wipe / wallet switch). */
+  signal?: AbortSignal;
+  /** Session epoch the scan belongs to (memoryEpoch() at its start by
+   *  default). After a lock, wipe or wallet switch no further request of
+   *  the scan starts and it rejects instead of returning a result. */
+  epoch?: number;
+}
+
+const SESSION_CLEARED = "E_SESSION_CLEARED: the wallet session ended during this scan";
+
+/** Throws when the scan was cancelled or its session ended. */
+function checkCurrent(opts: { signal?: AbortSignal; epoch: number }): void {
+  if (opts.signal?.aborted) throw opts.signal.reason ?? new DOMException("Aborted", "AbortError");
+  if (memoryEpoch() !== opts.epoch) throw new Error(SESSION_CLEARED);
 }
 
 export interface ActivityResult {
@@ -134,12 +154,13 @@ async function searchrawtransactions(
   address: string,
   skip: number,
   count: number,
+  signal?: AbortSignal,
 ): Promise<RawTx[]> {
   try {
     const r = await callPearlRpc<RawTx[]>(
       "searchrawtransactions",
       [address, 1, skip, count, 1, true],
-      { priority: "low" },
+      { priority: "low", signal },
     );
     return r ?? [];
   } catch (err) {
@@ -190,7 +211,11 @@ interface PearlWalkResult {
   source: "live" | "partial" | "error";
 }
 
-async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWalkResult> {
+async function scanPearlActivity(
+  pool: string[],
+  limit: number,
+  cur: { signal?: AbortSignal; epoch: number },
+): Promise<PearlWalkResult> {
   if (pool.length === 0) return { items: [], source: "live" };
 
   const poolSet = new Set(pool);
@@ -221,6 +246,8 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
   // each address ARE its most recent history. Pacing is the shared token
   // bucket (no fixed sleeps); a few addresses run in parallel.
   const perAddr = await mapWithConcurrency(pool, pearlRpcTuning().scanConcurrency, async (addr) => {
+    // A cancelled scan or an ended session starts no further address.
+    checkCurrent(cur);
     // Shared scan: if a recent balance walk already saw this address's
     // complete history (one short page, or no history), reuse it instead
     // of spending another request against the ~1 req/s origin budget.
@@ -234,7 +261,8 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
         const want = Math.min(PAGE, PER_ADDR_MAX - txs.length);
         // Empty-address (-5) is mapped to [] inside; anything else
         // propagates (after the client's own backoff/retry).
-        let page = await searchrawtransactions(addr, skip, want);
+        checkCurrent(cur);
+        let page = await searchrawtransactions(addr, skip, want, cur.signal);
         if (!page || page.length === 0) break;
         if (page.length > MAX_RPC_PAGE_LENGTH) {
           degraded = true;
@@ -247,7 +275,10 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
       }
       if (pageCount >= MAX_UTXO_WALK_PAGES) degraded = true;
       return txs;
-    } catch {
+    } catch (err) {
+      // Cancellation and an ended session end the whole scan; only a
+      // genuine read failure counts against this address.
+      if (cur.signal?.aborted || memoryEpoch() !== cur.epoch) throw err;
       failures++;
       return null;
     }
@@ -369,6 +400,7 @@ async function scanWprlActivity(
   ethAddr: `0x${string}`,
   network: EthNetwork,
   limit: number,
+  cur: { signal?: AbortSignal; epoch: number },
 ): Promise<WprlWalkResult> {
   const cfg = WPRL_ADDRESS[network];
   // The zero-address placeholder is what we ship for sepolia until WPRL
@@ -377,8 +409,10 @@ async function scanWprlActivity(
 
   const client = ethClient(network);
 
+  checkCurrent(cur);
   try {
     const head = await client.getBlockNumber();
+    checkCurrent(cur);
     const fromBlockWide = head > WPRL_LOG_WINDOW_BLOCKS
       ? head - WPRL_LOG_WINDOW_BLOCKS
       : 0n;
@@ -408,8 +442,10 @@ async function scanWprlActivity(
     try {
       [outLogs, inLogs] = await scanOnce(fromBlockWide);
     } catch {
+      checkCurrent(cur);
       [outLogs, inLogs] = await scanOnce(fromBlockNarrow);
     }
+    checkCurrent(cur);
 
     // Merge + dedupe by transaction hash. A user transferring to
     // themselves shows up in both queries with the same tx hash; we
@@ -482,7 +518,8 @@ async function scanWprlActivity(
     }));
 
     return { items: trimmed, source: "live" };
-  } catch {
+  } catch (err) {
+    if (cur.signal?.aborted || memoryEpoch() !== cur.epoch) throw err;
     return { items: [], source: "error" };
   }
 }
@@ -492,11 +529,15 @@ export async function fetchActivity(
   ethAddr: `0x${string}` | undefined,
   network: EthNetwork = "mainnet",
   limit = 25,
+  opts: ActivityOptions = {},
 ): Promise<ActivityResult> {
+  const cur = { signal: opts.signal, epoch: opts.epoch ?? memoryEpoch() };
   const [pearlResult, wprlResult] = await Promise.all([
-    scanPearlActivity(pearlPool, limit),
-    ethAddr ? scanWprlActivity(ethAddr, network, limit) : Promise.resolve({ items: [] as ActivityItem[], source: "live" as const }),
+    scanPearlActivity(pearlPool, limit, cur),
+    ethAddr ? scanWprlActivity(ethAddr, network, limit, cur) : Promise.resolve({ items: [] as ActivityItem[], source: "live" as const }),
   ]);
+  // A result from an ended session is never handed back.
+  checkCurrent(cur);
 
   const merged = [...pearlResult.items, ...wprlResult.items];
   merged.sort(compareActivity);

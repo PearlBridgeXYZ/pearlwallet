@@ -43,9 +43,9 @@ export const ETH_RPC_DEFAULTS: Record<EthNetwork, readonly string[]> = {
 // by G) is the default and works perfectly. Each host below is in the
 // override allowlist (ui-store) and the CSP connect-src.
 // v0.7: Cloudflare (cloudflare-eth.com) removed — it answers JSON-RPC
-// errors (-32603 / -32046) instead of data. Its host stays on the
-// override allowlist and in the CSP so an override saved by an older
-// build keeps loading until the user picks another provider.
+// errors (-32603 / -32046) instead of data. It is also gone from the
+// override allowlist (ui-store) and the CSP connect-src, so an override
+// saved by an older build no longer validates and the default is used.
 export interface EthRpcPreset {
   label: string;
   url: string;

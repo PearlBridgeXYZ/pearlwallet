@@ -41,12 +41,13 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
       ethNetwork,
       limit,
     ],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       fetchActivity(
         pearlAll,
         addresses!.eth as `0x${string}`,
         ethNetwork,
         limit,
+        { signal },
       ),
     enabled: !!addresses && enabled,
     // Activity is more expensive than balances (pool walk + getLogs).

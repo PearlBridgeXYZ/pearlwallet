@@ -1,8 +1,10 @@
 // Shared request pacing for the public Pearl RPC.
 //
 // The origin in front of rpc.pearlbridge.xyz rate-limits per client at
-// roughly 4 requests/second sustained with a burst of ~13 (measured
-// 2026-10-07; beyond that nginx answers 503). Every Pearl RPC request the
+// about 1 request/second sustained with a burst of about 10 (measured
+// 2026-10-07; beyond that nginx answers 503). The wallet paces itself at
+// 0.9 req/s with a burst of 8 (DEFAULT_PEARL_RPC_TUNING in pearl-rpc.ts,
+// which records the measurement). Every Pearl RPC request the
 // wallet makes — balance walk pages, activity pages, Send's UTXO walk,
 // broadcasts — draws from ONE module-level token bucket so independent
 // scans can never add up to more than the budget.
