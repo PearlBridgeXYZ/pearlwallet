@@ -245,11 +245,46 @@ export async function updateKeystoreAddresses(
   });
 }
 
-/** Replaces only the encrypted blob (a password change), atomically; the
- *  public address lists another tab may have just extended are kept.
- *  False when no record exists (wiped). */
-export async function replaceKeystoreBlob(blob: KeystoreBlobJSON): Promise<boolean> {
-  return (await db.keystore.update("primary", { blob })) === 1;
+/** True when two keystore blobs are the same ciphertext under the same
+ *  key-derivation parameters (every field compared). */
+export function sameKeystoreBlob(a: KeystoreBlobJSON, b: KeystoreBlobJSON): boolean {
+  return (
+    a.version === b.version &&
+    a.kdf === b.kdf &&
+    a.kdfIterations === b.kdfIterations &&
+    a.kdfSalt === b.kdfSalt &&
+    a.cipher === b.cipher &&
+    a.iv === b.iv &&
+    a.aad === b.aad &&
+    a.ciphertext === b.ciphertext
+  );
+}
+
+export type ReplaceBlobResult = "replaced" | "wiped" | "changed";
+
+/**
+ * Replaces only the encrypted blob (a password change) as a compare-and-
+ * update: the read, the check and the write share one read-write
+ * transaction. The write happens only while the stored record still belongs
+ * to `expected.primary` AND still holds `expected.blob`, the ciphertext the
+ * password change started from. Otherwise another tab wiped the wallet
+ * ("wiped"), restored or created a different one, or changed the password
+ * first ("changed"), and the row is left untouched — re-encrypting the old
+ * secret over it would pair one wallet's addresses with another's key.
+ * The public address lists another tab may have just extended are kept.
+ */
+export async function replaceKeystoreBlob(
+  blob: KeystoreBlobJSON,
+  expected: { primary: string; blob: KeystoreBlobJSON },
+): Promise<ReplaceBlobResult> {
+  return db.transaction("rw", db.keystore, async () => {
+    const rec = await db.keystore.get("primary");
+    if (!rec) return "wiped";
+    if (rec.publicData.pearlAddress !== expected.primary) return "changed";
+    if (!sameKeystoreBlob(rec.blob, expected.blob)) return "changed";
+    await db.keystore.put({ ...rec, blob });
+    return "replaced";
+  });
 }
 
 // localStorage keys this wallet persists. Kept here (next to wipeKeystore)

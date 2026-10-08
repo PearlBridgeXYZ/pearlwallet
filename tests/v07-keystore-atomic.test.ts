@@ -34,12 +34,19 @@ vi.mock("../src/storage/db", () => ({
     mem.rec = structuredClone({ ...mem.rec, publicData: { ...mem.rec.publicData, ...lists } });
     return true;
   },
-  replaceKeystoreBlob: async (blob: KeystoreRecord["blob"]) => {
+  // Mirrors the real compare-and-update: identity and starting ciphertext
+  // are checked against the record as it is when the write commits.
+  replaceKeystoreBlob: async (
+    blob: KeystoreRecord["blob"],
+    expected: { primary: string; blob: KeystoreRecord["blob"] },
+  ) => {
     mem.started?.();
     if (mem.gate) await mem.gate;
-    if (!mem.rec) return false;
+    if (!mem.rec) return "wiped";
+    if (mem.rec.publicData.pearlAddress !== expected.primary) return "changed";
+    if (JSON.stringify(mem.rec.blob) !== JSON.stringify(expected.blob)) return "changed";
     mem.rec = structuredClone({ ...mem.rec, blob });
-    return true;
+    return "replaced";
   },
   wipeKeystore: async () => {
     mem.rec = undefined;
@@ -173,10 +180,67 @@ describe("S1 — address-list writes keep another tab's password change", () => 
     expect(mem.rec).toBeUndefined();
   });
 
+  it("changePassword never writes the old wallet's secret over a different wallet restored in another tab", async () => {
+    // Tab A holds wallet X and starts a password change; its worker reply is
+    // delayed (frozen background tab). Tab B wipes X and restores wallet Y
+    // under the same row. Before the fix, A then wrote X's re-encrypted
+    // secret over Y's record and reported success.
+    seed();
+    const Y_BLOB = blob("wallet-Y-encrypted-with-its-own-password");
+    const yPool = Array.from({ length: 20 }, (_, i) => `wallet-y-external-${i}`);
+    const walletY: KeystoreRecord = {
+      id: "primary",
+      version: 1,
+      blob: { ...Y_BLOB },
+      publicData: {
+        pearlAddress: yPool[0]!,
+        pearlAddressPool: [...yPool],
+        pearlChangePool: [],
+        ethAddress: "0x2222222222222222222222222222222222222222",
+        pearlNetwork: "mainnet",
+        ethNetwork: "mainnet",
+        createdAt: 2,
+      },
+    };
+    const reset = vi.spyOn(workerClient.cryptoWorker, "reset");
+    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ blob: { ...NEW_BLOB } } as never);
+    await expect(
+      racing(
+        () => useWallet.getState().changePassword("old", "new"),
+        () => (mem.rec = structuredClone(walletY)), // tab B: wipe X, restore Y
+      ),
+    ).rejects.toThrow("E_WALLET_CHANGED");
+    expect(mem.rec).toEqual(walletY); // Y's row untouched
+    expect(reset).toHaveBeenCalled();
+    const s = useWallet.getState();
+    expect(s.status).toBe("locked"); // locked onto Y, not "no-wallet"
+    expect(s.addresses).toBeNull();
+    expect(s.blob).toEqual(Y_BLOB);
+  });
+
+  it("changePassword refuses when the same wallet's password was changed in another tab first", async () => {
+    seed();
+    const OTHER_TAB_BLOB = blob("encrypted-with-the-other-tabs-new-password");
+    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ blob: { ...NEW_BLOB } } as never);
+    await expect(
+      racing(
+        () => useWallet.getState().changePassword("old", "new"),
+        () => (mem.rec = { ...mem.rec!, blob: { ...OTHER_TAB_BLOB } }),
+      ),
+    ).rejects.toThrow("E_WALLET_CHANGED");
+    expect(mem.rec!.blob).toEqual(OTHER_TAB_BLOB);
+    expect(useWallet.getState().status).toBe("locked");
+    expect(useWallet.getState().blob).toEqual(OTHER_TAB_BLOB);
+  });
+
   it("the real writers are one transaction each, and the store has no whole-record read-modify-write left", () => {
     const db = readFileSync("src/storage/db.ts", "utf8");
     expect(db).toMatch(/return db\.transaction\("rw", db\.keystore, async \(\) => \{\n\s+const rec = await db\.keystore\.get\("primary"\);/);
-    expect(db).toMatch(/db\.keystore\.update\("primary", \{ blob \}\)/);
+    // The password write is a compare-and-update in one transaction too.
+    expect(db).toMatch(
+      /export async function replaceKeystoreBlob\([\s\S]*?return db\.transaction\("rw", db\.keystore, async \(\) => \{\n\s+const rec = await db\.keystore\.get\("primary"\);\n\s+if \(!rec\) return "wiped";\n\s+if \(rec\.publicData\.pearlAddress !== expected\.primary\) return "changed";\n\s+if \(!sameKeystoreBlob\(rec\.blob, expected\.blob\)\) return "changed";\n\s+await db\.keystore\.put\(\{ \.\.\.rec, blob \}\);/,
+    );
+    expect(db).not.toMatch(/db\.keystore\.update\(/);
     const store = readFileSync("src/state/wallet-store.ts", "utf8");
     // saveKeystore remains only for create / restore (a whole new record).
     expect(store.match(/await saveKeystore\(/g)).toHaveLength(2);

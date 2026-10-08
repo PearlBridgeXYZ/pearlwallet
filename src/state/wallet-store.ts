@@ -284,7 +284,21 @@ export const useWallet = create<WalletState>((set, get) => ({
             } else if (ev.data.type === "wiped") {
               cryptoWorker.reset();
               clearBalanceMemory();
-              set({ status: "no-wallet", addresses: null, blob: null });
+              // This handler can run late (it queues behind an in-flight
+              // operation), by which time the other tab may already have
+              // restored or created a wallet. Lock onto that one rather
+              // than showing "no wallet" while a record is stored.
+              const fresh = await loadKeystore();
+              if (fresh) {
+                set({
+                  status: "locked",
+                  addresses: null,
+                  blob: fresh.blob,
+                  pearlAddressGeneration: get().pearlAddressGeneration + 1,
+                });
+              } else {
+                set({ status: "no-wallet", addresses: null, blob: null });
+              }
             }
           });
         };
@@ -487,21 +501,41 @@ export const useWallet = create<WalletState>((set, get) => ({
 
   async changePassword(oldPw, newPw) {
     return walletLock(async () => {
-      const { blob } = get();
+      const { blob, addresses } = get();
       if (!blob) throw new Error("E_NO_WALLET");
+      // The identity this password change is bound to: the wallet whose
+      // ciphertext is in memory. Captured before the worker call, which can
+      // be suspended for a long time (frozen background tab, app switch).
+      const primary = addresses?.pearl ?? (await loadKeystore())?.publicData.pearlAddress;
+      if (!primary) throw new Error("E_NO_WALLET");
       const out = await cryptoWorker.call<"changePassword", { blob: KeystoreBlobJSON }>(
         "changePassword",
         { oldPassword: oldPw, newPassword: newPw, blob },
       );
-      // Race window: another tab may have wiped between our worker call
-      // and this resume. Without this guard we'd write `set({blob:newBlob})`
-      // into memory, broadcast `blob-updated`, but the on-disk row is
-      // gone — on refresh the mnemonic is lost.
-      // Only the blob is replaced: the address lists on disk may have been
-      // extended by another tab since we last read them.
-      if (!(await replaceKeystoreBlob(out.blob))) {
+      // Race window: while the worker ran, another tab may have wiped this
+      // wallet, restored or created a different one under the same row, or
+      // changed the password itself. The write is a compare-and-update on
+      // the wallet identity and the exact ciphertext we started from; on
+      // any mismatch nothing is written (writing would re-encrypt this
+      // wallet's secret over another wallet's record, or revert the other
+      // tab's password). Only the blob is replaced: the address lists on
+      // disk may have been extended by another tab since we last read them.
+      const result = await replaceKeystoreBlob(out.blob, { primary, blob });
+      if (result !== "replaced") {
         cryptoWorker.reset();
         clearBalanceMemory();
+        const fresh = result === "wiped" ? undefined : await loadKeystore();
+        if (fresh) {
+          // A wallet is still stored, just not the one this session held:
+          // lock onto the stored record so the next unlock uses it.
+          set({
+            status: "locked",
+            addresses: null,
+            blob: fresh.blob,
+            pearlAddressGeneration: get().pearlAddressGeneration + 1,
+          });
+          throw new Error("E_WALLET_CHANGED");
+        }
         set({ status: "no-wallet", addresses: null, blob: null });
         throw new Error("E_WALLET_WIPED");
       }

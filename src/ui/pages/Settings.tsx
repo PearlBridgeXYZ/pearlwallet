@@ -154,10 +154,15 @@ export default function Settings() {
       setNewPw("");
       setNewPw2("");
     } catch (e) {
+      const code = e instanceof Error ? e.message : "";
       setError(
-        e instanceof Error && e.message === "E_PASSWORD_WRONG"
+        code === "E_PASSWORD_WRONG"
           ? "Incorrect current password."
-          : e instanceof Error ? e.message : "Change failed.",
+          : code === "E_WALLET_CHANGED"
+            ? "The wallet stored in this browser changed in another tab. Nothing was changed. Unlock again and retry."
+            : code === "E_WALLET_WIPED"
+              ? "The wallet was removed from this browser in another tab. Nothing was changed."
+              : code || "Change failed.",
       );
     }
   }

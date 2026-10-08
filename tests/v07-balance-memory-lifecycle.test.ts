@@ -22,10 +22,15 @@ vi.mock("../src/storage/db", () => ({
     mem.rec = structuredClone({ ...mem.rec, publicData: { ...mem.rec.publicData, ...lists } });
     return true;
   },
-  replaceKeystoreBlob: async (blob: KeystoreRecord["blob"]) => {
-    if (!mem.rec) return false;
+  replaceKeystoreBlob: async (
+    blob: KeystoreRecord["blob"],
+    expected: { primary: string; blob: KeystoreRecord["blob"] },
+  ) => {
+    if (!mem.rec) return "wiped";
+    if (mem.rec.publicData.pearlAddress !== expected.primary) return "changed";
+    if (JSON.stringify(mem.rec.blob) !== JSON.stringify(expected.blob)) return "changed";
     mem.rec = structuredClone({ ...mem.rec, blob });
-    return true;
+    return "replaced";
   },
   wipeKeystore: async () => {
     mem.rec = undefined;
@@ -149,9 +154,27 @@ describe("balance memory is cleared with the session", () => {
     await useWallet.getState().init();
     useWallet.setState({ status: "unlocked", addresses: ADDRS, blob: BLOB });
     seedMemory();
+    mem.rec = undefined; // the other tab's wipe removed the record
     const peer = new BroadcastChannel(__broadcastChannelNameForTests());
     peer.postMessage({ type: "wiped", sender: "another-tab" });
     await vi.waitFor(() => expect(useWallet.getState().status).toBe("no-wallet"));
+    expect(sizes()).toEqual(EMPTY);
+    peer.close();
+    __resetWalletStoreForTests();
+  });
+
+  it("a late wipe event after the other tab already restored a wallet locks onto the stored one", async () => {
+    __resetWalletStoreForTests();
+    await useWallet.getState().init();
+    useWallet.setState({ status: "unlocked", addresses: ADDRS, blob: BLOB });
+    seedMemory();
+    const restored = { ...BLOB, ciphertext: "a-different-wallet-restored-in-the-other-tab" };
+    mem.rec = { ...record(), blob: restored };
+    const peer = new BroadcastChannel(__broadcastChannelNameForTests());
+    peer.postMessage({ type: "wiped", sender: "another-tab" });
+    await vi.waitFor(() => expect(useWallet.getState().status).toBe("locked"));
+    expect(useWallet.getState().addresses).toBeNull();
+    expect(useWallet.getState().blob).toEqual(restored);
     expect(sizes()).toEqual(EMPTY);
     peer.close();
     __resetWalletStoreForTests();
