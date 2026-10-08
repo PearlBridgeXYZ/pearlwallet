@@ -105,10 +105,12 @@ export default function OnboardingRestore() {
       <aside className="mt-6 border-l-2 border-accent bg-surface-2 p-4 text-sm leading-6 text-text-2">
         <h2 className="font-semibold">Which addresses will appear?</h2>
         <p className="mt-1">
-          PearlWallet scans standard Pearl (BIP-86) receive addresses from your
-          recovery phrase. Funds on other address types, change addresses or
-          beyond the scanned range may not appear. Keep your original wallet
-          and recovery phrase until you have checked your balances.
+          PearlWallet scans the receive and change addresses of a standard
+          Pearl (BIP-86) wallet, and keeps looking until it finds 20 unused
+          addresses in a row. Funds on other address types will not appear.
+          A few wallets made by older desktop versions derive addresses
+          differently, so keep your original wallet and recovery phrase until
+          you have checked your balances.
         </p>
       </aside>
 
