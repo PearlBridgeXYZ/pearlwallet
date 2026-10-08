@@ -4,6 +4,7 @@ import ActivityList from "../components/ActivityList";
 import CopyAddress from "../components/CopyAddress";
 import InstallPWA from "../components/InstallPWA";
 import BtxCard from "../components/BtxCard";
+import UpdatedAgo from "../components/UpdatedAgo";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { btxSurfaceOn } from "../../lib/features";
@@ -51,17 +52,24 @@ export default function Dashboard() {
       <div className="card shadow-slabsm sm:shadow-slab">
         <div className="text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Total balance</div>
         {b.totalUsd !== null ? (
-          <div className="mt-3 break-all text-[38px] font-semibold leading-none tracking-[-.5px] tabular-nums sm:text-5xl">{formatUSD(b.totalUsd)}</div>
+          <div className="mt-3 break-words font-mono text-[38px] font-semibold leading-none tracking-[-.5px] tabular-nums sm:text-5xl">{formatUSD(b.totalUsd)}</div>
         ) : b.prl.value !== null && b.price.status === "error" ? (
-          <div className="mt-3 text-lg text-text-3">Price unavailable</div>
+          <div className="mt-3 text-lg text-text-3">— <span className="text-sm">price unavailable</span></div>
         ) : b.prl.status === "error" && !b.scan.running ? (
-          <div className="mt-3 text-lg text-text-3">Balance unavailable. Retrying shortly.</div>
+          <div className="mt-3 text-lg text-text-3">— <span className="text-sm">balance unavailable. Retrying shortly.</span></div>
         ) : b.scan.running && b.scan.total > 0 ? (
-          <div role="status" className="mt-3 text-lg tabular-nums text-text-3">Scanning addresses {b.scan.done}/{b.scan.total}…</div>
+          <div role="status" className="mt-3">
+            <div className="text-lg tabular-nums text-text-3">Scanning addresses {b.scan.done} / {b.scan.total}</div>
+            <div aria-hidden="true" className="mt-2 h-1 w-full max-w-xs overflow-hidden bg-surface-3">
+              <div className="h-full bg-accent-bg transition-[width] duration-300 motion-reduce:transition-none" style={{ width: `${Math.min(100, Math.round((b.scan.done / b.scan.total) * 100))}%` }} />
+            </div>
+          </div>
+        ) : b.totalStatus !== "loading" ? (
+          <div className="mt-3 text-lg text-text-3">— <span className="text-sm">{b.prl.value === null ? "balance unavailable" : "price unavailable"}</span></div>
         ) : (
           <div role="status" className="mt-3">
             <span className="sr-only">Loading total balance</span>
-            <span aria-hidden="true" className="block h-12 w-48 max-w-full animate-pulse rounded-pb bg-surface-3" />
+            <span aria-hidden="true" className="block h-12 w-48 max-w-full animate-pulse motion-reduce:animate-none rounded-pb bg-surface-3" />
           </div>
         )}
         {(b.totalStatus === "partial" || b.totalStale) && b.totalUsd !== null && (
@@ -69,6 +77,7 @@ export default function Dashboard() {
             {b.totalStatus === "partial" ? "Some balances couldn't be read. The total may be low." : "Showing last known balance."}
           </div>
         )}
+        <UpdatedAgo at={b.prl.updatedAt} />
         <p className="mt-3 text-xs leading-6 text-text-3">
           {ethEnabled ? "Estimated PRL + WPRL value in USD. ETH for network fees is shown separately." : "Estimated PRL value in USD."}
         </p>
@@ -81,19 +90,25 @@ export default function Dashboard() {
             </div>
             <div className="min-w-0 text-right">
               <div className="break-words text-xl font-medium tabular-nums">
-                {b.prl.value !== null ? formatGrains(b.prl.value) : b.prl.status === "error" ? "Unavailable" : b.prl.status === "loading" ? (
+                {b.prl.value !== null ? <span className="font-mono tabular-nums">{formatGrains(b.prl.value)}</span> : b.prl.status === "error" ? "Unavailable" : b.prl.status === "loading" ? (
                   <span role="status" className="block">
                     <span className="sr-only">Loading PRL balance</span>
-                    <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse rounded-pb bg-surface-3" />
+                    <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse motion-reduce:animate-none rounded-pb bg-surface-3" />
                   </span>
                 ) : "—"}
               </div>
-              <div className="mt-1 text-xs text-text-3">{usdOf(b.prl.value)}</div>
-              {b.prl.status === "partial" && (
-                <div className="mt-1 text-xs text-warn">Partial. Some addresses couldn't be read.</div>
+              <div className="mt-1 font-mono text-xs tabular-nums text-text-3">{usdOf(b.prl.value)}</div>
+              {(b.prl.status === "partial" || b.prl.stale) && (
+                <div className="mt-1 text-xs text-warn">Some addresses couldn't be read — retrying.</div>
+              )}
+              {b.prl.value !== null && b.scan.running && b.scan.total > 0 && (
+                <div role="status" className="mt-2 text-xs text-text-3">Scanning addresses {b.scan.done} / {b.scan.total}</div>
               )}
               {b.prl.status === "error" && (
-                <div className="mt-1 text-xs text-danger">Pearl balance could not be fetched.</div>
+                <div className="mt-1 text-xs text-danger">
+                  <p>Pearl balance could not be fetched.</p>
+                  <button type="button" onClick={() => b.refetch()} className="inline-flex min-h-11 min-w-11 items-center justify-end text-accent underline decoration-line underline-offset-4 hover:decoration-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2">Retry</button>
+                </div>
               )}
             </div>
           </div>
@@ -106,16 +121,22 @@ export default function Dashboard() {
                 </div>
                 <div className="min-w-0 text-right">
                   <div className="break-words text-xl font-medium tabular-nums">
-                    {b.wprl?.value != null ? formatWprl(b.wprl.value) : b.wprl?.status === "error" ? "Unavailable" : b.wprl?.status === "loading" ? (
+                    {b.wprl?.value != null ? <span className="font-mono tabular-nums">{formatWprl(b.wprl.value)}</span> : b.wprl?.status === "error" ? "Unavailable" : b.wprl?.status === "loading" ? (
                       <span role="status" className="block">
                         <span className="sr-only">Loading WPRL balance</span>
-                        <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse rounded-pb bg-surface-3" />
+                        <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse motion-reduce:animate-none rounded-pb bg-surface-3" />
                       </span>
                     ) : "—"}
                   </div>
-                  <div className="mt-1 text-xs text-text-3">{usdOf(b.wprl?.value ?? null)}</div>
+                  <div className="mt-1 font-mono text-xs tabular-nums text-text-3">{usdOf(b.wprl?.value ?? null)}</div>
+                  {(b.wprl?.status === "partial" || b.wprl?.stale) && (
+                    <div className="mt-1 text-xs text-warn">Showing last known balance — retrying.</div>
+                  )}
                   {b.wprl?.status === "error" && (
-                    <div className="mt-1 text-xs text-danger">Ethereum balance could not be fetched.</div>
+                    <div className="mt-1 text-xs text-danger">
+                      <p>Ethereum balance could not be fetched.</p>
+                      <button type="button" onClick={() => b.refetch()} className="inline-flex min-h-11 min-w-11 items-center justify-end text-accent underline decoration-line underline-offset-4 hover:decoration-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2">Retry</button>
+                    </div>
                   )}
                 </div>
               </div>
@@ -126,15 +147,21 @@ export default function Dashboard() {
                 </div>
                 <div className="min-w-0 text-right">
                   <div className="break-words text-xl font-medium tabular-nums">
-                    {b.eth?.value != null ? formatWei(b.eth.value) : b.eth?.status === "error" ? "Unavailable" : b.eth?.status === "loading" ? (
+                    {b.eth?.value != null ? <span className="font-mono tabular-nums">{formatWei(b.eth.value)}</span> : b.eth?.status === "error" ? "Unavailable" : b.eth?.status === "loading" ? (
                       <span role="status" className="block">
                         <span className="sr-only">Loading ETH balance</span>
-                        <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse rounded-pb bg-surface-3" />
+                        <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse motion-reduce:animate-none rounded-pb bg-surface-3" />
                       </span>
                     ) : "—"}
                   </div>
+                  {(b.eth?.status === "partial" || b.eth?.stale) && (
+                    <div className="mt-1 text-xs text-warn">Showing last known balance — retrying.</div>
+                  )}
                   {b.eth?.status === "error" && (
-                    <div className="mt-1 text-xs text-danger">Ethereum balance could not be fetched.</div>
+                    <div className="mt-1 text-xs text-danger">
+                      <p>Ethereum balance could not be fetched.</p>
+                      <button type="button" onClick={() => b.refetch()} className="inline-flex min-h-11 min-w-11 items-center justify-end text-accent underline decoration-line underline-offset-4 hover:decoration-accent focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2">Retry</button>
+                    </div>
                   )}
                   {b.wprl?.value != null && b.wprl.value > 0n && b.eth?.value === 0n && b.eth.status === "ok" && !b.eth.stale && (
                     <div className="mt-1 text-xs text-warn">Add ETH to cover WPRL network fees.</div>
@@ -163,10 +190,13 @@ export default function Dashboard() {
             <Link to="/receive" className="btn-secondary tap">Receive</Link>
           </div>
         )}
+        {/* REDESIGN-NOTE: show this prominently when the hook exposes the PRL coin
+            count (e.g. > 200 coins). */}
         <div className="mt-2 text-center">
           <Link to="/consolidate" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">
             Combine small coins
           </Link>
+          <p className="text-xs leading-6 text-text-3">Many small payments? Combine them to make sends faster and cheaper.</p>
         </div>
         {multisigEnabled && (
           <div className="mt-2">

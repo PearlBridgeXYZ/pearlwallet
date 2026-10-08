@@ -23,8 +23,6 @@ export default function Settings() {
   const wipe = useWallet((s) => s.wipe);
   const exportMnemonic = useWallet((s) => s.exportMnemonic);
   const changePassword = useWallet((s) => s.changePassword);
-  const theme = useUI((s) => s.theme);
-  const setTheme = useUI((s) => s.setTheme);
   const pearlRpcOverride = useUI((s) => s.pearlRpcOverride);
   const setPearlRpcOverride = useUI((s) => s.setPearlRpcOverride);
   const ethRpcOverride = useUI((s) => s.ethRpcOverride);
@@ -557,6 +555,8 @@ export default function Settings() {
           </p>
           <label className="mt-3 block text-xs text-text-3">
             Provider preset
+            {/* REDESIGN-NOTE: the Cloudflare preset now returns JSON-RPC errors (it was
+                dropped from the default chain); remove it from ETH_RPC_PRESETS in the chains module. */}
             <select
               className="input mt-1 w-full"
               value={ETH_RPC_PRESETS.some((p) => p.url === ethRpcDraft) ? ethRpcDraft : ""}
@@ -694,24 +694,6 @@ export default function Settings() {
             ? "Offline signing on — available from your dashboard"
             : "Offline signing off"}
         </p>
-      </section>
-
-      <section className="card mb-6">
-        <h2 className="border-b border-line pb-3 text-lg font-semibold">Display</h2>
-        <p className="mt-3 text-sm leading-7 text-text-2">PearlWallet currently uses the light paper theme. Your saved preference is retained.</p>
-        <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
-          <span>Theme:</span>
-          {(["system", "light", "dark"] as const).map((t) => (
-            <label key={t} className="flex min-h-11 items-center gap-2 capitalize">
-              <input
-                type="radio"
-                checked={theme === t}
-                onChange={() => setTheme(t)}
-              />
-              {t}
-            </label>
-          ))}
-        </div>
       </section>
 
       <section className="card mb-6 border-danger-line">

@@ -77,8 +77,8 @@ function ComposingHint({ usingCache }: { usingCache: boolean }) {
     return () => clearInterval(t);
   }, [messages.length]);
   return (
-    <div className="mt-3 flex items-center gap-2 text-xs text-text-3 leading-relaxed">
-      <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-accent-bg" />
+    <div role="status" className="mt-3 flex items-center gap-2 text-xs text-text-3 leading-relaxed">
+      <span className="inline-flex h-2 w-2 animate-pulse motion-reduce:animate-none rounded-full bg-accent-bg" />
       <span>{messages[idx]}</span>
     </div>
   );
@@ -341,7 +341,7 @@ export default function SendPRL() {
               href={pearlTxExplorerUrl(pearlNetwork, txid)}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-3 inline-block text-sm text-accent underline underline-offset-4 leading-relaxed"
+              className="mt-3 inline-flex min-h-11 items-center text-sm text-accent underline underline-offset-4 leading-relaxed"
             >
               View on explorer →
             </a>
@@ -364,36 +364,36 @@ export default function SendPRL() {
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Transaction preview</p>
           <h2 className="text-xl font-semibold tracking-tight">Review before you sign</h2>
           <p className="mt-2 text-sm leading-relaxed text-text-2">Check the destination, amount and fees. A transfer cannot be undone.</p>
-          <dl className="mt-3 space-y-2 text-sm leading-relaxed divide-y divide-line [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dt]:text-[11px] [&_dt]:uppercase [&_dt]:tracking-[.12em] [&_dd]:min-w-0 [&_dd]:break-all [&_dd]:font-mono [&_dd]:tabular-nums [&_dd]:text-left sm:[&_dd]:text-right">
-            <div className="flex justify-between">
+          <dl className="mt-3 space-y-2 text-sm leading-relaxed divide-y divide-line [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dt]:text-[11px] [&_dt]:uppercase [&_dt]:tracking-[.12em] [&_dd]:min-w-0 [&_dd]:text-left sm:[&_dd]:text-right">
+            <div>
               <dt className="text-text-3">To</dt>
               <dd className="break-all font-mono min-w-0 tabular-nums">{v?.dest}</dd>
             </div>
-            <div className="flex justify-between">
+            <div>
               <dt className="text-text-3">Amount{v?.max ? " (max)" : ""}</dt>
-              <dd>
+              <dd className="break-words font-mono tabular-nums">
                 {composed ? formatGrains(composed.amountGrains) : v && !v.max ? formatGrains(v.grains) : "—"} PRL
               </dd>
             </div>
             {composed && (
               <>
-                <div className="flex justify-between">
+                <div>
                   <dt className="text-text-3">Fee ({tier})</dt>
-                  <dd>{formatGrains(composed.feeGrains)} PRL</dd>
+                  <dd className="break-words font-mono tabular-nums">{formatGrains(composed.feeGrains)} PRL</dd>
                 </div>
                 {composed.tipGrains > 0n && (
-                  <div className="flex justify-between">
+                  <div>
                     <dt className="text-text-3">
                       Tip to PearlWallet Devs (10 bps, min 1 PRL)
                     </dt>
-                    <dd>{formatGrains(composed.tipGrains)} PRL</dd>
+                    <dd className="break-words font-mono tabular-nums">{formatGrains(composed.tipGrains)} PRL</dd>
                   </div>
                 )}
-                <div className="flex justify-between">
+                <div>
                   <dt className="text-text-3">Change back to you</dt>
-                  <dd>{formatGrains(composed.changeGrains)} PRL</dd>
+                  <dd className="break-words font-mono tabular-nums">{formatGrains(composed.changeGrains)} PRL</dd>
                 </div>
-                <div className="flex justify-between">
+                <div>
                   <dt className="text-text-3">Inputs</dt>
                   <dd>
                     {composed.utxos.length} UTXO
@@ -405,9 +405,9 @@ export default function SendPRL() {
                     )}
                   </dd>
                 </div>
-                <div className="flex justify-between border-t border-line pt-2">
+                <div className="border-t border-line pt-2">
                   <dt className="font-medium">Total leaving wallet</dt>
-                  <dd className="font-medium">
+                  <dd className="break-words font-mono font-medium tabular-nums">
                     {formatGrains(composed.amountGrains + composed.feeGrains + composed.tipGrains)} PRL
                   </dd>
                 </div>
@@ -417,22 +417,22 @@ export default function SendPRL() {
 
           {previewQ.isLoading && <ComposingHint usingCache={!!cachedUtxos && !deepWalk} />}
           {previewQ.isFetching && !!composed && (
-            <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">Refreshing UTXO selection…</p>
+            <p role="status" className="mt-2 text-xs text-text-3 leading-relaxed break-words">Refreshing UTXO selection…</p>
           )}
 
           {/* Structured insufficient-funds diagnostic + deep-retry CTA. */}
           {insufficient && (
-            <div className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-3 text-xs text-danger leading-relaxed">
+            <div className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger">
               <div className="font-medium">Not enough spendable PRL for this send.</div>
-              <ul className="mt-2 list-disc space-y-1 break-all pl-4 font-mono tabular-nums">
-                <li>Need: {formatGrains(insufficient.need)} PRL (amount + fee + tip)</li>
+              <ul className="mt-2 list-disc space-y-1 pl-4">
+                <li>Need: <span className="font-mono tabular-nums">{formatGrains(insufficient.need)} PRL</span> (amount + fee + tip)</li>
                 <li>
-                  Found: {formatGrains(insufficient.have)} PRL across{" "}
-                  {insufficient.utxoCount} UTXO
+                  Found: <span className="font-mono tabular-nums">{formatGrains(insufficient.have)} PRL</span> across{" "}
+                  <span className="font-mono tabular-nums">{insufficient.utxoCount}</span> UTXO
                   {insufficient.utxoCount === 1 ? "" : "s"}
                 </li>
                 <li>
-                  Short by: {formatGrains(insufficient.need - insufficient.have)} PRL
+                  Short by: <span className="font-mono tabular-nums">{formatGrains(insufficient.need - insufficient.have)} PRL</span>
                 </li>
               </ul>
               {insufficient.degraded && (
@@ -440,7 +440,7 @@ export default function SendPRL() {
                   The UTXO walk hit its page cap before scanning everything —
                   the chain may hold more coins than shown.
                   <button
-                    className="ml-2 underline underline-offset-4 min-w-11"
+                    className="ml-2 inline-flex min-h-11 min-w-11 items-center underline underline-offset-4"
                     onClick={() => {
                       setDeepWalk(true);
                       setInsufficient(null);
@@ -455,15 +455,15 @@ export default function SendPRL() {
           )}
 
           {composed?.max?.capped && (
-            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
               One transaction can spend at most {MAX_SEND_INPUTS} coins, so this sends your largest{" "}
               {MAX_SEND_INPUTS}. {composed.max.cappedOutCount} more coin
               {composed.max.cappedOutCount === 1 ? "" : "s"} stay in your wallet.{" "}
-              <Link to="/consolidate" className="underline underline-offset-4">Combine your coins</Link> to send everything at once.
+              <Link to="/consolidate" className="font-medium underline underline-offset-4">Combine your coins</Link> to send everything at once.
             </div>
           )}
           {composed?.max && !composed.max.exact && (
-            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
               With the tip on, sends of 1 PRL or more carry a 1 PRL minimum tip your coins can't
               cover, so the most you can send is just under 1 PRL. Turn the tip off below to send
               everything.
@@ -471,8 +471,8 @@ export default function SendPRL() {
           )}
 
           {tooMany && (
-            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
-              <div className="font-medium">Combine your coins first.</div>
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
+              <h3 className="text-base font-semibold text-heading">Combine your coins first</h3>
               <p className="mt-1">
                 This amount needs {tooMany.inputsNeeded} coins, but one transaction can spend at
                 most {tooMany.maxInputs}. Your {tooMany.utxoCount} coins hold{" "}
@@ -484,15 +484,15 @@ export default function SendPRL() {
                   Right now one transaction can send up to {formatGrains(tooMany.maxSendableGrains)} PRL.
                 </p>
               )}
-              <Link to="/consolidate" className="btn-secondary tap mt-2 inline-flex">
+              <Link to="/consolidate" className="btn-primary tap mt-3 inline-flex">
                 Combine small coins
               </Link>
             </div>
           )}
 
           {noCoins && (
-            <div className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-3 text-xs text-danger leading-relaxed">
-              <div className="font-medium">No spendable PRL found.</div>
+            <div className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger">
+              <h3 className="text-base font-semibold">No spendable PRL found</h3>
               <p className="mt-1">
                 {noCoins.pendingCount > 0
                   ? `Every coin found (${noCoins.pendingCount}) is already being spent by a transaction this wallet just broadcast. Wait for it to confirm, then rescan.`
@@ -505,8 +505,8 @@ export default function SendPRL() {
           )}
 
           {scanIncomplete && (
-            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
-              <div className="font-medium">Couldn't finish reading your wallet.</div>
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
+              <h3 className="text-base font-semibold">Couldn't finish reading your wallet</h3>
               <p className="mt-1">
                 {scanIncomplete.failures} of {scanIncomplete.addressesScanned} addresses didn't
                 answer (the Pearl network is busy). Your coins aren't missing. Try again.
@@ -518,12 +518,12 @@ export default function SendPRL() {
           )}
 
           {previewQ.isError && !insufficient && !tooMany && !noCoins && !scanIncomplete && (
-            <p className="mt-3 text-sm text-danger leading-relaxed break-words">
+            <p className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger break-words [overflow-wrap:anywhere]">
               Couldn't compose: {(previewQ.error as Error).message}
             </p>
           )}
           {composed?.degraded && !insufficient && (
-            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
               Some receive addresses returned partial UTXO sets. The send
               composed successfully but the visible balance may under-report
               your actual chain balance.
@@ -531,13 +531,13 @@ export default function SendPRL() {
           )}
 
           {composed && composeFresh && (
-            <p className="mt-3 break-all font-mono text-xs leading-relaxed text-text-3 tabular-nums">
-              Preview fresh for {secondsToStale}s
+            <p className="mt-3 text-xs leading-6 text-text-3">
+              Preview fresh for <span className="font-mono tabular-nums">{secondsToStale}</span>s
               {composed.spendableGrains > 0n && (
                 <>
                   {" · "}
-                  {formatGrains(composed.spendableGrains)} PRL across{" "}
-                  {composed.spendableUtxoCount} UTXO
+                  <span className="font-mono tabular-nums">{formatGrains(composed.spendableGrains)} PRL</span> across{" "}
+                  <span className="font-mono tabular-nums">{composed.spendableUtxoCount}</span> UTXO
                   {composed.spendableUtxoCount === 1 ? "" : "s"} spendable
                 </>
               )}
@@ -562,14 +562,14 @@ export default function SendPRL() {
               </span>
             </span>
           </label>
-          <p className="mt-2 break-all text-xs text-text-3 leading-relaxed break-words">
+          <p className="mt-2 text-xs leading-6 text-text-3 break-words">
             Tip goes to <span className="font-mono break-all min-w-0 tabular-nums">{tipAddressFor(pearlNetwork)}</span>.
           </p>
           <p className="mt-4 text-sm text-warn leading-relaxed break-words">
             This cannot be undone.
           </p>
 
-          {error && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{error}</p>}
+          {error && <p className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger break-words [overflow-wrap:anywhere]">{error}</p>}
 
           <div className="mt-4 flex gap-2">
             <button onClick={() => setStage("compose")} className="btn-secondary min-w-11" disabled={sending}>
@@ -607,7 +607,7 @@ export default function SendPRL() {
           <span className="label">Amount (PRL)</span>
           <div className="flex gap-2">
             <input
-              className="input mono break-all min-w-0 flex-1 tabular-nums"
+              className="input mono break-all min-w-0 flex-1 tabular-nums placeholder:font-sans"
               inputMode="decimal"
               value={sendMax ? "" : amount}
               placeholder={sendMax ? "Everything spendable (max)" : undefined}
@@ -616,7 +616,7 @@ export default function SendPRL() {
             />
             <button
               type="button"
-              className={sendMax ? "btn-primary min-w-11" : "btn-secondary min-w-11"}
+              className={sendMax ? "btn-primary min-h-11 min-w-14 self-stretch ring-2 ring-accent ring-offset-2 ring-offset-surface" : "btn-secondary min-h-11 min-w-14 self-stretch"}
               aria-pressed={sendMax}
               onClick={() => setSendMax((m) => !m)}
             >
@@ -649,7 +649,7 @@ export default function SendPRL() {
                   onChange={() => setTier(t)}
                 />
                 <div className="font-medium capitalize">{t}</div>
-                <div className="text-xs text-text-3 leading-relaxed">
+                <div className="font-mono text-xs tabular-nums text-text-3 leading-relaxed">
                   {FEERATE_BY_TIER[t].toString()} sat/vB
                 </div>
               </label>
@@ -657,7 +657,7 @@ export default function SendPRL() {
           </div>
         </fieldset>
 
-        {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
+        {error && <p className="rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger break-words [overflow-wrap:anywhere]">{error}</p>}
 
         <button
           onClick={() => {

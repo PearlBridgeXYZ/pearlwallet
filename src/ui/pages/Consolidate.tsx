@@ -68,48 +68,49 @@ function BatchRow({
   explorer: (txid: string) => string;
 }) {
   return (
-    <li className="rounded-pb border border-line p-3">
-      <div className="flex justify-between">
-        <span className="font-medium">Batch {n}</span>
-        <span>{batch.utxos.length} coins</span>
-      </div>
-      <dl className="mt-1 space-y-1 text-xs text-text-3 [&_dd]:font-mono [&_dd]:tabular-nums">
-        <div className="flex justify-between">
-          <dt>Combined</dt>
-          <dd>{formatGrains(batch.inputGrains)} PRL</dd>
+    <tr role="row" className="grid grid-cols-1 gap-3 border-b border-line py-4 sm:grid-cols-[.6fr_.8fr_1.4fr_1.2fr] sm:gap-4 [&>td]:min-w-0">
+      <th role="rowheader" scope="row" className="text-left font-semibold">Batch {n}</th>
+      <td role="cell" className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2 sm:block">
+        <span aria-hidden="true" className="text-text-3 sm:hidden">Inputs (coins)</span>
+        <div>
+          <span className="tabular-nums">{batch.utxos.length}</span>
+          <p className="mt-1 text-xs leading-6 text-text-3">Combined: <span className="break-words font-mono tabular-nums">{formatGrains(batch.inputGrains)} PRL</span></p>
         </div>
-        <div className="flex justify-between">
-          <dt>
-            Network fee ({batch.vbytes.toString()} vB × {batch.feerate.toString()} sat/vB)
-          </dt>
-          <dd>{formatGrains(batch.feeGrains)} PRL</dd>
+      </td>
+      <td role="cell" className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2 sm:block">
+        <span aria-hidden="true" className="text-text-3 sm:hidden">Network fee</span>
+        <div>
+          <span className="break-words font-mono tabular-nums">{formatGrains(batch.feeGrains)} PRL</span>
+          <p className="mt-1 text-xs leading-6 text-text-3">
+            <span className="font-mono tabular-nums">{batch.vbytes.toString()} vB</span> × <span className="font-mono tabular-nums">{batch.feerate.toString()} sat/vB</span>
+          </p>
         </div>
-        <div className="flex justify-between font-medium text-text-2">
-          <dt>You receive</dt>
-          <dd>{formatGrains(batch.output.amountGrains)} PRL</dd>
-        </div>
-      </dl>
-      {status && status.state !== "waiting" && (
-        <div className="mt-2 text-xs">
-          {status.state === "checking" && <span role="status" className="text-text-3">Re-checking coins…</span>}
-          {status.state === "signing" && <span role="status" className="text-text-3">Signing and broadcasting…</span>}
-          {status.state === "sent" && (
-            <span>
-              Sent: <span className="break-all font-mono">{status.txid}</span>{" "}
-              <a
-                href={explorer(status.txid)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-accent underline decoration-line underline-offset-4 hover:decoration-accent"
-              >
-                View on explorer →
-              </a>
-            </span>
-          )}
-          {status.state === "failed" && <span className="text-danger">{status.error}</span>}
-        </div>
-      )}
-    </li>
+      </td>
+      <td role="cell" className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] gap-2 sm:block">
+        <span aria-hidden="true" className="text-text-3 sm:hidden">You receive</span>
+        <span className="break-words font-mono font-medium tabular-nums">{formatGrains(batch.output.amountGrains)} PRL</span>
+        {status && status.state !== "waiting" && (
+          <div className="col-span-2 mt-2 text-xs leading-6">
+            {status.state === "checking" && <span role="status" className="text-text-3">Re-checking coins…</span>}
+            {status.state === "signing" && <span role="status" className="text-text-3">Signing and broadcasting…</span>}
+            {status.state === "sent" && (
+              <span>
+                Sent: <span className="break-all font-mono">{status.txid}</span>{" "}
+                <a
+                  href={explorer(status.txid)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex min-h-11 items-center text-accent underline decoration-line underline-offset-4 hover:decoration-accent"
+                >
+                  View on explorer →
+                </a>
+              </span>
+            )}
+            {status.state === "failed" && <span className="break-words text-danger [overflow-wrap:anywhere]">{status.error}</span>}
+          </div>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -233,14 +234,14 @@ export default function Consolidate() {
     <Page title="Combine small coins">
       <div className="card shadow-slabsm sm:shadow-slab">
         <p className="text-sm leading-relaxed text-text-2">
-          Many small coins (for example mining payouts) make sends larger and slower, and one
-          transaction can spend at most 500 of them. Combining moves them into a few large
+          Many small payments (for example mining payouts) make sends slow and expensive, and one
+          transaction can spend at most 500 coins. Combining moves them into a few large
           coins at your own address. Nothing leaves your wallet except the network fee.
         </p>
 
         {coinsQ.isLoading && <p role="status" className="mt-3 text-sm text-text-3">Reading your coins…</p>}
         {coinsQ.isError && (
-          <div className="mt-3 text-sm leading-relaxed text-danger">
+          <div className="mt-4 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger break-words [overflow-wrap:anywhere]">
             Couldn't read your coins: {(coinsQ.error as Error).message}{" "}
             <button className="inline-flex min-h-11 items-center underline underline-offset-4" onClick={rescan}>
               Rescan
@@ -250,18 +251,18 @@ export default function Consolidate() {
 
         {coins && plan && (
           <>
-            <dl className="mt-4 space-y-2 divide-y divide-line text-sm [&>div]:pt-2">
-              <div className="flex justify-between">
+            <dl className="mt-6 divide-y divide-line border-y border-line text-sm [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dd]:min-w-0 sm:[&_dd]:text-right">
+              <div>
                 <dt className="text-text-3">Coins</dt>
-                <dd>{plan.utxoCount}</dd>
+                <dd className="tabular-nums">{plan.utxoCount}</dd>
               </div>
-              <div className="flex justify-between">
+              <div>
                 <dt className="text-text-3">Total</dt>
-                <dd>{formatGrains(plan.totalGrains)} PRL</dd>
+                <dd className="break-words font-mono tabular-nums">{formatGrains(plan.totalGrains)} PRL</dd>
               </div>
-              <div className="flex justify-between">
+              <div>
                 <dt className="text-text-3">Destination (your address)</dt>
-                <dd className="min-w-0 max-w-[60%] break-all text-right font-mono text-xs">{plan.destination.address}</dd>
+                <dd className="break-all font-mono text-xs leading-6">{plan.destination.address}</dd>
               </div>
             </dl>
 
@@ -280,7 +281,7 @@ export default function Consolidate() {
                     >
                       <input type="radio" className="sr-only" checked={tier === t} onChange={() => setTier(t)} />
                       <div className="font-medium capitalize">{t}</div>
-                      <div className="text-xs text-text-3">{FEERATE_BY_TIER[t].toString()} sat/vB</div>
+                      <div className="font-mono text-xs tabular-nums text-text-3">{FEERATE_BY_TIER[t].toString()} sat/vB</div>
                     </label>
                   ))}
                 </div>
@@ -301,35 +302,45 @@ export default function Consolidate() {
                 <h2 className="mt-6 border-b border-line pb-2 text-lg font-semibold">
                   {plan.batches.length} transaction{plan.batches.length === 1 ? "" : "s"}
                 </h2>
-                <ol className="mt-2 space-y-2 text-sm">
-                  {plan.batches.map((b, i) => (
-                    <BatchRow key={i} batch={b} n={i + 1} status={statuses[i]} explorer={explorer} />
-                  ))}
-                </ol>
-                <dl className="mt-3 space-y-1 text-sm">
-                  <div className="flex justify-between">
-                    <dt className="text-text-3">Total network fees</dt>
-                    <dd>{formatGrains(plan.totalFeeGrains)} PRL</dd>
-                  </div>
-                  <div className="flex justify-between font-medium">
-                    <dt>You receive in total</dt>
-                    <dd>{formatGrains(plan.totalReceiveGrains)} PRL</dd>
-                  </div>
-                </dl>
+                <table role="table" aria-label="Consolidation plan" className="mt-3 block w-full text-left text-sm">
+                  <thead role="rowgroup" className="sr-only sm:not-sr-only sm:block">
+                    <tr role="row" className="grid grid-cols-[.6fr_.8fr_1.4fr_1.2fr] gap-4 border-b border-heading py-3 text-[11px] uppercase tracking-[.12em] text-text-3">
+                      <th role="columnheader" scope="col">Batch</th>
+                      <th role="columnheader" scope="col">Inputs (coins)</th>
+                      <th role="columnheader" scope="col">Network fee</th>
+                      <th role="columnheader" scope="col">You receive</th>
+                    </tr>
+                  </thead>
+                  <tbody role="rowgroup" className="block">
+                    {plan.batches.map((b, i) => (
+                      <BatchRow key={i} batch={b} n={i + 1} status={statuses[i]} explorer={explorer} />
+                    ))}
+                  </tbody>
+                  <tfoot role="rowgroup" className="block border-b border-heading bg-surface-2 px-3">
+                    <tr role="row" className="grid grid-cols-1 gap-2 py-3 sm:grid-cols-2">
+                      <th role="rowheader" scope="row" colSpan={2} className="font-normal text-text-3">Total network fees</th>
+                      <td role="cell" colSpan={2} className="min-w-0 break-words font-mono tabular-nums sm:text-right">{formatGrains(plan.totalFeeGrains)} PRL</td>
+                    </tr>
+                    <tr role="row" className="grid grid-cols-1 gap-2 border-t border-line py-3 font-medium sm:grid-cols-2">
+                      <th role="rowheader" scope="row" colSpan={2}>You receive in total</th>
+                      <td role="cell" colSpan={2} className="min-w-0 break-words font-mono tabular-nums sm:text-right">{formatGrains(plan.totalReceiveGrains)} PRL</td>
+                    </tr>
+                  </tfoot>
+                </table>
               </>
             )}
 
             {(plan.dust.count > 0 || plan.uneconomic.count > 0 || plan.leftover.count > 0 || plan.pendingExcluded > 0) && (
-              <ul className="mt-3 list-disc space-y-1 pl-4 text-xs leading-relaxed text-text-3">
+              <ul className="mt-4 space-y-3 text-xs leading-6 text-warn [&>li]:rounded-pb [&>li]:border [&>li]:border-warn-line [&>li]:bg-warn-bg [&>li]:p-4">
                 {plan.dust.count > 0 && (
                   <li>
-                    {plan.dust.count} tiny coin{plan.dust.count === 1 ? "" : "s"} ({formatGrains(plan.dust.grains)} PRL)
+                    {plan.dust.count} tiny coin{plan.dust.count === 1 ? "" : "s"} (<span className="font-mono tabular-nums">{formatGrains(plan.dust.grains)} PRL</span>)
                     skipped — each is worth less than the fee to spend it.
                   </li>
                 )}
                 {plan.uneconomic.count > 0 && (
                   <li>
-                    {plan.uneconomic.count} coins ({formatGrains(plan.uneconomic.grains)} PRL) skipped — combining
+                    {plan.uneconomic.count} coins (<span className="font-mono tabular-nums">{formatGrains(plan.uneconomic.grains)} PRL</span>) skipped — combining
                     them would cost more than 2% in fees at this tier. Try the Low tier.
                   </li>
                 )}
@@ -340,7 +351,7 @@ export default function Consolidate() {
                     by a transaction this wallet broadcast recently.{" "}
                     {!running && (
                       <button
-                        className="underline underline-offset-4"
+                        className="inline-flex min-h-11 items-center underline underline-offset-4"
                         onClick={() => {
                           clearPendingSpends();
                           rescan();
@@ -356,19 +367,24 @@ export default function Consolidate() {
             )}
 
             {!running && !finished && plan.batches.length > 0 && (
-              <>
-                <p className="mt-4 text-xs leading-relaxed text-text-3">
+              <section className="mt-6 rounded-pb border border-line-strong bg-surface-2 p-4">
+                <h2 className="text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Review before you sign</h2>
+                <p className="mt-3 text-sm leading-7 text-text-2">
                   {fresh
                     ? `Plan fresh for ${secondsLeft}s. Each batch is signed exactly as shown; later batches are re-checked against a fresh scan first and the run stops at the first problem.`
                     : "This plan has expired. Rescan to review it again."}
-                  {plan.batches.some((b) => b.utxos.length > 100) && " Signing a large batch can take several seconds."}
                 </p>
-                <p className="mt-2 text-sm font-medium text-warn">This cannot be undone.</p>
-              </>
+                {plan.batches.some((b) => b.utxos.length > 100) && (
+                  <p className="mt-3 border-l-2 border-warn-line pl-3 text-sm leading-7 text-warn">
+                    Signing a large batch can take several seconds. Keep this page open while the batches are signed and sent.
+                  </p>
+                )}
+                <p className="mt-3 text-sm font-semibold text-warn">This cannot be undone.</p>
+              </section>
             )}
 
             {finished && (
-              <p className="mt-4 text-sm">
+              <p role="status" className="mt-4 rounded-pb border border-line bg-surface-2 p-4 text-sm leading-7">
                 {sentCount === plan.batches.length
                   ? "All batches broadcast. Your combined coins appear once the transactions confirm."
                   : `${sentCount} of ${plan.batches.length} batches broadcast. Rescan to plan the rest — coins already sent are skipped.`}
@@ -397,7 +413,7 @@ export default function Consolidate() {
             </div>
           </>
         )}
-        {planned?.error && <p className="mt-3 text-sm text-danger">Couldn't plan: {planned.error}</p>}
+        {planned?.error && <p className="mt-4 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger break-words [overflow-wrap:anywhere]">Couldn't plan: {planned.error}</p>}
       </div>
     </Page>
   );
