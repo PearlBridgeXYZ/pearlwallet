@@ -91,6 +91,11 @@ function Row({ rec, onResolved }: { rec: BroadcastRecord; onResolved: (text: str
         );
       }
       if (r === "found") setNote("The network still has it; it is waiting to be confirmed.");
+      if (r === "unsaved") {
+        setNote(
+          "The network's answer couldn't be saved in this browser (another wallet tab was broadcasting, or storage is full), so this entry stays and its coins stay reserved. Try Check status again.",
+        );
+      }
     } catch (e) {
       setNote(
         e instanceof BroadcastRefusedError && e.reason === "busy"

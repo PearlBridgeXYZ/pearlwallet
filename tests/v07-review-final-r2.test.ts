@@ -76,7 +76,7 @@ describe("S2 — a wrap review can't mix two amounts", () => {
       quote: mintQuote(PRL),
       deposit: DEPOSIT,
       stale: () => seq !== 1,
-      recheck: async () => undefined,
+      recheck: async () => mintQuote(PRL),
       compose: () => compose.promise,
     });
     await flush();
@@ -91,7 +91,7 @@ describe("S2 — a wrap review can't mix two amounts", () => {
       quote: mintQuote(PRL),
       deposit: DEPOSIT,
       stale: () => false,
-      recheck: async () => undefined,
+      recheck: async () => mintQuote(PRL),
       compose: async (d, a) => composed(a, d),
     });
     expect(wrapReviewSignable(r)).toBe(true);
@@ -105,7 +105,7 @@ describe("S2 — a wrap review can't mix two amounts", () => {
         quote: mintQuote(PRL),
         deposit: DEPOSIT,
         stale: () => false,
-        recheck: async () => undefined,
+        recheck: async () => mintQuote(PRL),
         compose: async (_d, a) => composed(a, "prl1pother"),
       }),
     ).rejects.toThrow("E_COMPOSE_MISMATCH");
@@ -150,6 +150,7 @@ function view() {
     setNotice: (m: string | null) => void (v.notice = m),
     setGas: (g: ethTx.UnwrapGasPreview) => void (v.gas = g),
     setNeedsApprove: () => {},
+    setQuote: () => {},
     onStarted: async () => void v.started++,
   };
   return v satisfies UnwrapView & Record<string, unknown>;
@@ -178,7 +179,7 @@ describe("S3 — a double click on Unwrap starts one burn", () => {
     const { burn } = chain({ allowance: AMOUNT, quoteDelay: gate.promise });
     const unwrap = createUnwrapFlow();
     const v = view();
-    const input = { network: "mainnet" as const, ethAddress: ME, pearlAddress: "prl1pme", amount: AMOUNT, gas: { maxFeePerGas: 7n, approveWei: null, burnWei: 700_000n } };
+    const input = { network: "mainnet" as const, ethAddress: ME, pearlAddress: "prl1pme", amount: AMOUNT, quote: burnQuote, gas: { maxFeePerGas: 7n, approveWei: null, burnWei: 700_000n } };
     const first = unwrap(input, v);
     expect(v.busy).toEqual(["checking"]); // set before the first await: the button is already off
     const second = unwrap(input, v);
@@ -205,7 +206,7 @@ describe("S4 — approve-first unwrap: the burn is signed only against a total g
     const unwrap = createUnwrapFlow();
     const v = view();
     const reviewed = { maxFeePerGas: 9n, approveWei: 450_000n, burnWei: null };
-    await unwrap({ network: "mainnet", ethAddress: ME, pearlAddress: "prl1pme", amount: AMOUNT, gas: reviewed }, v);
+    await unwrap({ network: "mainnet", ethAddress: ME, pearlAddress: "prl1pme", amount: AMOUNT, quote: burnQuote, gas: reviewed }, v);
     expect(approve).toHaveBeenCalledWith(expect.objectContaining({ ceiling: { maxFeePerGas: 9n, maxCostWei: 450_000n } }));
     expect(preview).toHaveBeenCalledWith(expect.objectContaining({ needsApprove: false }));
     expect(burn).not.toHaveBeenCalled();
@@ -214,7 +215,7 @@ describe("S4 — approve-first unwrap: the burn is signed only against a total g
     expect(v.err).toBeNull();
 
     // Second click, with the gas now on screen.
-    await unwrap({ network: "mainnet", ethAddress: ME, pearlAddress: "prl1pme", amount: AMOUNT, gas: v.gas! }, v);
+    await unwrap({ network: "mainnet", ethAddress: ME, pearlAddress: "prl1pme", amount: AMOUNT, quote: burnQuote, gas: v.gas! }, v);
     expect(approve).toHaveBeenCalledTimes(1); // allowance now set: no second approve
     expect(burn).toHaveBeenCalledTimes(1);
     expect(burn).toHaveBeenCalledWith(expect.objectContaining({ ceiling: { maxFeePerGas: 7n, maxCostWei: 700_000n } }));

@@ -216,6 +216,42 @@ export async function saveKeystore(record: KeystoreRecord): Promise<void> {
   await db.keystore.put(record);
 }
 
+/**
+ * Rewrites only the public Pearl address lists of the stored record. The
+ * read and the write share one read-write transaction, so a password change
+ * committed by another tab is never replaced by an older blob (a separate
+ * get + put would write back whatever blob the get saw). With
+ * `expectedPrimary`, refuses (false) when the stored record belongs to a
+ * different wallet. False when no record exists.
+ */
+export async function updateKeystoreAddresses(
+  lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
+  expectedPrimary?: string,
+): Promise<boolean> {
+  return db.transaction("rw", db.keystore, async () => {
+    const rec = await db.keystore.get("primary");
+    if (!rec) return false;
+    if (expectedPrimary !== undefined && rec.publicData.pearlAddress !== expectedPrimary) return false;
+    await db.keystore.put({
+      ...rec,
+      publicData: {
+        ...rec.publicData,
+        pearlAddress: lists.pearlAddress,
+        pearlAddressPool: [...lists.pearlAddressPool],
+        pearlChangePool: [...lists.pearlChangePool],
+      },
+    });
+    return true;
+  });
+}
+
+/** Replaces only the encrypted blob (a password change), atomically; the
+ *  public address lists another tab may have just extended are kept.
+ *  False when no record exists (wiped). */
+export async function replaceKeystoreBlob(blob: KeystoreBlobJSON): Promise<boolean> {
+  return (await db.keystore.update("primary", { blob })) === 1;
+}
+
 // localStorage keys this wallet persists. Kept here (next to wipeKeystore)
 // rather than in ui-store so a "wipe everything from this browser"
 // command stays the single source of truth — if a future feature stashes

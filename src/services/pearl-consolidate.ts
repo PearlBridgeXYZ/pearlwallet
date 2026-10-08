@@ -370,7 +370,8 @@ export interface ConsolidationBroadcast {
 /**
  * Signs (worker: signPearlConsolidation) and broadcasts one batch exactly
  * as reviewed. Refuses a batch verified more than
- * PEARL_PREVIEW_FRESHNESS_MS ago (E_PREVIEW_STALE), a batch breaking any
+ * PEARL_PREVIEW_FRESHNESS_MS ago (E_PREVIEW_STALE; checked on the call and
+ * again under the lock just before signing), a batch breaking any
  * invariant, a batch spending a coin of a recorded broadcast
  * (E_CONSOLIDATION_INPUT_PENDING), and any batch while another broadcast's
  * status is unknown (BroadcastRefusedError "unresolved").
@@ -380,7 +381,13 @@ export async function broadcastConsolidationBatch(
   network: PearlNetwork,
   now: number = Date.now(),
 ): Promise<ConsolidationBroadcast> {
-  if (now - frozen.verifiedAt > PEARL_PREVIEW_FRESHNESS_MS) throw new Error("E_PREVIEW_STALE");
+  const stale = (t: number) => {
+    if (t - frozen.verifiedAt > PEARL_PREVIEW_FRESHNESS_MS) throw new Error("E_PREVIEW_STALE");
+  };
+  stale(now);
+  // Checked again at signing time (as broadcastPearlPrecomposed does):
+  // waiting for another tab's broadcast must not stretch the freshness.
+  const skew = now - Date.now();
   const b = frozen.batch;
   assertConsolidationBatch(b);
   const req: PearlConsolidationRequest = {
@@ -409,6 +416,7 @@ export async function broadcastConsolidationBatch(
         amountGrains: b.output.amountGrains,
       },
       async () => {
+        stale(Date.now() + skew);
         const { raw } = await cryptoWorker.call<"signPearlConsolidation", { raw: string }>("signPearlConsolidation", {
           req,
         });

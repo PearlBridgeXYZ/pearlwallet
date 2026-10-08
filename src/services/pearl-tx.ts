@@ -735,6 +735,24 @@ async function signAndBroadcast(
   return { txid, composed };
 }
 
+/** Longest a signer may run while holding the broadcast lock. A crypto
+ *  worker that hangs must not keep every tab from broadcasting until a
+ *  reload; a signature that arrives later is discarded (never recorded or
+ *  sent). */
+export const SIGN_TIMEOUT_MS = 120_000;
+
+async function signWithin(sign: () => Promise<string>): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("E_SIGN_TIMEOUT: signing didn't finish; nothing was sent. Reload the page and try again.")), SIGN_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([sign(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * The one broadcast path for every Pearl spend (Send, consolidation,
  * offline, vault), all inside the wallet's broadcast lock
@@ -742,7 +760,8 @@ async function signAndBroadcast(
  *   1. the gate — refused (nothing signed or sent) while another broadcast
  *      is "unknown" and not acknowledged, or if a coin is already spent by
  *      a recorded broadcast;
- *   2. sign (`tx` is a signer, or the already-signed raw hex);
+ *   2. sign (`tx` is a signer, given SIGN_TIMEOUT_MS, or the already-signed
+ *      raw hex);
  *   3. record the tx as "unknown" — refused if that can't be saved;
  *   4. submit; then accepted → "accepted", status unknown → stays
  *      "unknown", definite rejection → the record this attempt made goes.
@@ -752,7 +771,7 @@ async function signAndBroadcast(
 export async function broadcastRecorded(plan: BroadcastPlan, tx: string | (() => Promise<string>)): Promise<string> {
   return withBroadcastLock(async () => {
     assertBroadcastAllowed(plan, typeof tx === "string" ? rawTxId(tx) : null);
-    const raw = typeof tx === "string" ? tx : await tx();
+    const raw = typeof tx === "string" ? tx : await signWithin(tx);
     const txid = rawTxId(raw);
     if (!txid) throw new Error("E_RAW_TX_PARSE: the signed transaction could not be decoded");
     const created = recordBroadcast(txid, plan);

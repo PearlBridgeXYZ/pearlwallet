@@ -24,6 +24,24 @@ vi.mock("../src/storage/db", () => ({
     mem.saves++;
     mem.rec = structuredClone(r);
   },
+  // Field-scoped writers. Like the real ones (one IndexedDB transaction),
+  // they read the record as it is when the write commits.
+  updateKeystoreAddresses: async (
+    lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
+    expectedPrimary?: string,
+  ) => {
+    if (mem.gate) await mem.gate;
+    if (!mem.rec) return false;
+    if (expectedPrimary !== undefined && mem.rec.publicData.pearlAddress !== expectedPrimary) return false;
+    mem.saves++;
+    mem.rec = structuredClone({ ...mem.rec, publicData: { ...mem.rec.publicData, ...lists } });
+    return true;
+  },
+  replaceKeystoreBlob: async (blob: KeystoreRecord["blob"]) => {
+    if (!mem.rec) return false;
+    mem.rec = structuredClone({ ...mem.rec, blob });
+    return true;
+  },
   wipeKeystore: async () => {
     mem.rec = undefined;
   },

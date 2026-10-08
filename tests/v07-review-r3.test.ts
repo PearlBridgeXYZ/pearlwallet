@@ -311,6 +311,8 @@ describe("R3-11 — a scan begun while a reset waits can't undo it", () => {
       .mockImplementationOnce(() => held.promise as never)
       .mockImplementation(async () => rec() as never);
     const put = vi.spyOn(db.keystore, "put").mockResolvedValue("primary" as never);
+    // No IndexedDB here: the address writer's transaction runs its scope.
+    vi.spyOn(db, "transaction").mockImplementation(((...args: unknown[]) => (args.at(-1) as () => unknown)()) as never);
 
     const reset = useWallet.getState().resetPearlAddresses();
     await flush();

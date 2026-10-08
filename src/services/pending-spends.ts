@@ -174,6 +174,13 @@ function writeRecords(records: readonly BroadcastRecord[]): void {
  *  "unknown": more caution, never less). */
 let updateFailed = false;
 
+/** An outcome or a status check's certain result couldn't be saved: the
+ *  record stays as it was, and the banner says so. */
+export function noteBroadcastUpdateFailed(): void {
+  updateFailed = true;
+  notify();
+}
+
 /** What the banner must say about the store itself. */
 export function broadcastRecordIssue(): "unreadable" | "update-failed" | null {
   return tryRead() === null ? "unreadable" : updateFailed ? "update-failed" : null;
@@ -293,8 +300,7 @@ export function settleBroadcast(txid: string, outcome: "accepted" | "unknown" | 
   try {
     resolveBroadcasts([txid], outcome === "accepted" ? "accepted" : "forget");
   } catch {
-    updateFailed = true;
-    notify();
+    noteBroadcastUpdateFailed();
   }
 }
 

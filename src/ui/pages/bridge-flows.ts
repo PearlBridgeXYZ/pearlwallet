@@ -3,7 +3,12 @@
 //   wrap    the reviewed quote, deposit address and composed transaction
 //           are one object, and a review whose amount input changed while
 //           it was being composed is discarded;
-//   unwrap  one run at a time (claimed before the first await), and the
+//           The quote shown in the review is the one re-read just before
+//           composing; at signing a re-read quote that prices the crossing
+//           differently (fee, amount received, lane, daily cap) drops it;
+//   unwrap  one run at a time per page load (claimed before the first
+//           await, and surviving the card's unmount), a re-read quote that
+//           differs from the reviewed one refuses before signing, and the
 //           burn is signed only against a numeric total-gas ceiling the
 //           user saw: after an approval the burn is estimated and shown,
 //           and a second click signs it.
@@ -48,18 +53,37 @@ export function wrapReviewSignable(r: WrapReview | null): r is WrapReview {
   );
 }
 
+/** The fields of a bridge quote the review shows the user. */
+type ReviewedQuote = Pick<BurnQuote, "fee" | "feeBps" | "net" | "withinDailyCap"> & { lane?: MintQuote["lane"] };
+
+/** A re-read quote prices the crossing differently from the reviewed one:
+ *  fee, amount received, lane or daily-cap standing changed. */
+export function quoteChanged(reviewed: ReviewedQuote, fresh: ReviewedQuote): boolean {
+  return (
+    reviewed.fee !== fresh.fee ||
+    reviewed.feeBps !== fresh.feeBps ||
+    reviewed.net !== fresh.net ||
+    reviewed.withinDailyCap !== fresh.withinDailyCap ||
+    reviewed.lane !== fresh.lane
+  );
+}
+
+export const QUOTE_CHANGED_MESSAGE =
+  "The bridge's quote changed since your review (fee, amount received, lane or daily capacity). Nothing was signed — check the new numbers and review again.";
+
 /** Re-checks the quote and deposit, composes the payment and returns the
- *  review; null when `stale()` turns true meanwhile (the amount changed). */
+ *  review, which shows (and is later checked against) the re-read quote;
+ *  null when `stale()` turns true meanwhile (the amount changed). */
 export async function prepareWrapReview(p: {
   quote: MintQuote;
   deposit: string;
   stale: () => boolean;
-  recheck: (amount: bigint, deposit: string) => Promise<unknown>;
+  recheck: (amount: bigint, deposit: string) => Promise<MintQuote>;
   compose: (deposit: string, amount: bigint) => Promise<ComposedPearlTx>;
 }): Promise<WrapReview | null> {
-  const { quote, deposit } = p;
-  const amount = quote.amount;
-  await p.recheck(amount, deposit);
+  const { deposit } = p;
+  const amount = p.quote.amount;
+  const quote = await p.recheck(amount, deposit);
   if (p.stale()) return null;
   const composed = await p.compose(deposit, amount);
   if (p.stale()) return null;
@@ -79,6 +103,8 @@ export interface UnwrapView {
   /** A fresh gas review (after an approval, for the burn alone). */
   setGas(g: UnwrapGasPreview): void;
   setNeedsApprove(b: boolean): void;
+  /** A re-read quote that differs from the reviewed one, shown instead. */
+  setQuote(q: BurnQuote): void;
   onStarted(rec: BridgeCrossingRecord): Promise<void>;
 }
 
@@ -88,6 +114,8 @@ export interface UnwrapInput {
   pearlAddress: string;
   /** The user's locally parsed amount, never the API echo (audit H1). */
   amount: bigint;
+  /** The quote the user reviewed (fee, amount received). */
+  quote: BurnQuote;
   /** The gas the user reviewed. */
   gas: UnwrapGasPreview;
 }
@@ -95,20 +123,29 @@ export interface UnwrapInput {
 export const BURN_REVIEW_NOTICE =
   "Approval confirmed. The burn's Ethereum gas is shown above: check it, then click Unwrap again to sign the burn.";
 
-/** One unwrap at a time: a call while one runs (a double click during the
- *  pre-checks) does nothing. The claim is taken synchronously. */
+export const UNWRAP_IN_FLIGHT_NOTICE = "An unwrap is already in progress — wait for it to finish (see Activity).";
+
+// Module scope, not per card: switching tabs unmounts the card while a
+// burn may still be signing, and a remounted card must not start another.
+let unwrapInFlight = false;
+
+/** One unwrap at a time per page load: a call while one runs (a double
+ *  click during the pre-checks, or a click on a remounted card) does
+ *  nothing but say so. The claim is taken synchronously. */
 export function createUnwrapFlow(): (input: UnwrapInput, view: UnwrapView) => Promise<void> {
-  let inFlight = false;
   return async (input, view) => {
-    if (inFlight) return;
-    inFlight = true;
+    if (unwrapInFlight) {
+      view.setNotice(UNWRAP_IN_FLIGHT_NOTICE);
+      return;
+    }
+    unwrapInFlight = true;
     view.setBusy("checking");
     view.setErr(null);
     view.setNotice(null);
     try {
       await runUnwrap(input, view);
     } finally {
-      inFlight = false;
+      unwrapInFlight = false;
       view.setBusy("idle");
     }
   };
@@ -122,7 +159,8 @@ function assertPlan(q: BurnQuote, network: EthNetwork, amount: bigint): void {
   if (q.amount !== amount) throw new Error("E_QUOTE_AMOUNT_MISMATCH — refusing to sign.");
 }
 
-async function runUnwrap({ network, ethAddress, pearlAddress, amount, gas }: UnwrapInput, view: UnwrapView): Promise<void> {
+async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas }: UnwrapInput, view: UnwrapView): Promise<void> {
+  // Set only once the approve is mined successfully.
   let approveTxHash: `0x${string}` | null = null;
   try {
     // Confirm-time re-quote: bind amount, re-check paused + pinned
@@ -135,6 +173,10 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, gas }: Unw
     ]);
     assertPlan(q2, network, amount);
     if (q2.paused) throw new Error("The bridge just paused — try again once it resumes.");
+    if (quoteChanged(quote, q2)) {
+      view.setQuote(q2);
+      throw new Error(QUOTE_CHANGED_MESSAGE);
+    }
     // Burning more WPRL than held reverts AFTER an approve's gas is spent
     // (audit C1); over the daily cap the contract reverts too (audit C6).
     if (balance < amount) throw new Error("You don't have that much WPRL.");
@@ -155,12 +197,20 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, gas }: Unw
         tier: "normal",
         ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: approveWei },
       });
-      approveTxHash = a.txHash;
       // Wait for the approve to MINE: the burn's gas estimate reverts
       // against pre-approve state (audit C1).
-      if (!(await waitForEthSuccess(network, a.txHash))) {
-        throw new Error(`Approve tx ${a.txHash} reverted — nothing burned. Try again.`);
+      let mined: boolean;
+      try {
+        mined = await waitForEthSuccess(network, a.txHash);
+      } catch (e) {
+        // Timed out or unreadable: the approve may still confirm. A retry
+        // now would sign a second approve.
+        throw new Error(
+          `Approve tx ${a.txHash} was sent but its confirmation wasn't seen (${(e as Error).message}). Nothing was burned. Check it on Etherscan and wait for it to confirm before trying again.`,
+        );
       }
+      if (!mined) throw new Error(`Approve tx ${a.txHash} reverted — nothing burned. Try again.`);
+      approveTxHash = a.txHash;
     }
     const burnWei = gas.burnWei;
     if (burnWei === null) {
@@ -208,8 +258,11 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, gas }: Unw
       raw === "E_ETH_GAS_ABOVE_REVIEW"
         ? "Ethereum gas rose above what you reviewed — nothing was signed for this step. Enter the amount again to review the new gas."
         : raw;
-    // The approve CONFIRMED (its receipt was awaited) before anything after
-    // it ran, so a retry re-reads the allowance and skips the approve.
+    // Nothing this run noted still holds (incl. an "already in progress"
+    // notice a second click left meanwhile).
+    view.setNotice(null);
+    // approveTxHash is set only after the approve's successful receipt, so
+    // a retry re-reads the allowance and skips the approve.
     view.setErr(
       approveTxHash ? `Approve confirmed (${approveTxHash}) but the burn didn't go out: ${msg}. Re-try Unwrap — it will skip the approve.` : msg,
     );

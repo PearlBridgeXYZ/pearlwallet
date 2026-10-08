@@ -24,14 +24,18 @@ import type { PrlPoolScan } from "./balances";
 import { fetchPrlUtxos, fetchVerifiedRawTx, MAX_UTXO_WALK_PAGES_HARD, probePearlTx, rawTxOutputs } from "./pearl-rpc";
 import {
   broadcastRecords,
+  BroadcastRefusedError,
   isStalledAccepted,
+  noteBroadcastUpdateFailed,
   outpointKey,
   resolveBroadcasts,
   withBroadcastLock,
   type BroadcastRecord,
 } from "./pending-spends";
 
-export type BroadcastCheck = "found" | "spent" | "absent-unspent" | "unknown";
+/** "unsaved": the result was certain (found / spent) but couldn't be saved,
+ *  so the record is unchanged. */
+export type BroadcastCheck = "found" | "spent" | "absent-unspent" | "unknown" | "unsaved";
 
 /** "unspent" only when complete walks list every input; "spent" only when
  *  a walk shows a transaction other than `rec.txid` spending an input.
@@ -92,19 +96,27 @@ function save(txid: string, r: BroadcastCheck): void {
   if (r === "spent") resolveBroadcasts([txid], "forget");
 }
 
-async function saveCertain(txid: string, r: BroadcastCheck): Promise<void> {
-  if (r !== "found" && r !== "spent") return;
-  await withBroadcastLock(async () => save(txid, r)).catch(() => {
-    /* saved by the next check or scan */
-  });
+/** Saves a certain result. "unsaved" when the lock was refused (another
+ *  tab broadcasting) or the write failed (also shown by
+ *  broadcastRecordIssue()); the record stays as it was until the next
+ *  check or scan saves it. */
+async function saveCertain(txid: string, r: BroadcastCheck): Promise<BroadcastCheck> {
+  if (r !== "found" && r !== "spent") return r;
+  try {
+    await withBroadcastLock(async () => save(txid, r));
+    return r;
+  } catch (e) {
+    if (e instanceof BroadcastRefusedError && e.reason === "storage") noteBroadcastUpdateFailed();
+    return "unsaved";
+  }
 }
 
 /** "Check status" of an "unknown" record (or an accepted one unsettled
- *  after ACCEPTED_STALL_MS); saves what is now certain. */
+ *  after ACCEPTED_STALL_MS); saves what is now certain ("unsaved" when
+ *  that couldn't be saved). */
 export async function checkBroadcast(txid: string): Promise<BroadcastCheck> {
   const { r } = await inspect(txid);
-  await saveCertain(txid, r);
-  return r;
+  return saveCertain(txid, r);
 }
 
 /** Manual release, after the user's explicit acknowledgement. Only
@@ -120,10 +132,7 @@ export async function checkBroadcast(txid: string): Promise<BroadcastCheck> {
 export async function releaseBroadcast(txid: string): Promise<BroadcastCheck> {
   await withBroadcastLock(async () => undefined);
   const { r, rec } = await inspect(txid);
-  if (r !== "absent-unspent" || !rec) {
-    await saveCertain(txid, r);
-    return r;
-  }
+  if (r !== "absent-unspent" || !rec) return saveCertain(txid, r);
   return withBroadcastLock(async () => {
     const now = eligible(txid);
     if (!now || now.state !== rec.state || now.createdAt !== rec.createdAt) return "unknown";

@@ -7,9 +7,10 @@ import { monotonicNow } from "../lib/monotonic";
 import { clearBalanceMemory } from "./balance-memory";
 import { clearPendingSpends } from "../services/pending-spends";
 import {
-  db,
   loadKeystore,
+  replaceKeystoreBlob,
   saveKeystore,
+  updateKeystoreAddresses,
   wipeKeystore,
   type KeystoreRecord,
   type KeystoreBlobJSON,
@@ -416,10 +417,12 @@ export const useWallet = create<WalletState>((set, get) => ({
         !sameList(rec.publicData.pearlChangePool, change) ||
         rec.publicData.pearlAddress !== out.addresses.pearl;
       if (needsUpdate) {
-        rec.publicData.pearlAddressPool = out.addresses.pearlPool;
-        rec.publicData.pearlChangePool = change;
-        rec.publicData.pearlAddress = out.addresses.pearl;
-        await saveKeystore(rec);
+        // Address lists only: the blob is never rewritten from this read.
+        await updateKeystoreAddresses({
+          pearlAddress: out.addresses.pearl,
+          pearlAddressPool: out.addresses.pearlPool,
+          pearlChangePool: change,
+        }, rec.publicData.pearlAddress);
       }
       set({ status: "unlocked", addresses: out.addresses, lastActivity: monotonicNow() });
       return { addresses: out.addresses };
@@ -494,15 +497,14 @@ export const useWallet = create<WalletState>((set, get) => ({
       // and this resume. Without this guard we'd write `set({blob:newBlob})`
       // into memory, broadcast `blob-updated`, but the on-disk row is
       // gone — on refresh the mnemonic is lost.
-      const rec = await loadKeystore();
-      if (!rec) {
+      // Only the blob is replaced: the address lists on disk may have been
+      // extended by another tab since we last read them.
+      if (!(await replaceKeystoreBlob(out.blob))) {
         cryptoWorker.reset();
         clearBalanceMemory();
         set({ status: "no-wallet", addresses: null, blob: null });
         throw new Error("E_WALLET_WIPED");
       }
-      rec.blob = out.blob;
-      await db.keystore.put(rec);
       set({ blob: out.blob });
       // Multi-tab safety: another open tab loaded the old blob into its
       // closure at init() time. Tell it the on-disk record changed so it
@@ -546,11 +548,13 @@ export const useWallet = create<WalletState>((set, get) => ({
       const int = next.internal.slice(0, MAX_ADDRESSES_PER_BRANCH);
       if (!isPrefixExtension(curExt, ext) || !isPrefixExtension(curInt, int)) return false;
       if (ext.length === curExt.length && int.length === curInt.length) return false;
-      const rec = await loadKeystore();
-      if (!rec || rec.publicData.pearlAddress !== curExt[0]) return false;
-      rec.publicData.pearlAddressPool = [...ext];
-      rec.publicData.pearlChangePool = [...int];
-      await saveKeystore(rec);
+      // Address lists only, read and written in one transaction: a password
+      // change another tab committed meanwhile is kept.
+      const saved = await updateKeystoreAddresses(
+        { pearlAddress: curExt[0]!, pearlAddressPool: ext, pearlChangePool: int },
+        curExt[0],
+      );
+      if (!saved) return false;
       // A lock (or reset) while the keystore was written: publish nothing.
       if (get().status !== "unlocked" || get().pearlAddressGeneration !== gen) return false;
       set({ addresses: { ...addresses, pearlPool: [...ext], pearlChange: [...int] } });
@@ -567,11 +571,11 @@ export const useWallet = create<WalletState>((set, get) => ({
       if (status !== "unlocked" || !addresses) return false;
       const ext = addresses.pearlPool.slice(0, RECEIVE_GAP_LIMIT);
       const int = (addresses.pearlChange ?? []).slice(0, RECEIVE_GAP_LIMIT);
-      const rec = await loadKeystore();
-      if (!rec || rec.publicData.pearlAddress !== addresses.pearlPool[0]) return false;
-      rec.publicData.pearlAddressPool = [...ext];
-      rec.publicData.pearlChangePool = [...int];
-      await saveKeystore(rec);
+      const saved = await updateKeystoreAddresses(
+        { pearlAddress: addresses.pearlPool[0]!, pearlAddressPool: ext, pearlChangePool: int },
+        addresses.pearlPool[0],
+      );
+      if (!saved) return false;
       // Locked while the keystore was written: publish nothing (lock
       // already cleared the session's memory).
       if (get().status !== "unlocked" || get().pearlAddressGeneration !== gen) return false;

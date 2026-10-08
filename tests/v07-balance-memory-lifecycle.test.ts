@@ -13,6 +13,20 @@ vi.mock("../src/storage/db", () => ({
   saveKeystore: async (r: KeystoreRecord) => {
     mem.rec = structuredClone(r);
   },
+  updateKeystoreAddresses: async (
+    lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
+    expectedPrimary?: string,
+  ) => {
+    if (!mem.rec) return false;
+    if (expectedPrimary !== undefined && mem.rec.publicData.pearlAddress !== expectedPrimary) return false;
+    mem.rec = structuredClone({ ...mem.rec, publicData: { ...mem.rec.publicData, ...lists } });
+    return true;
+  },
+  replaceKeystoreBlob: async (blob: KeystoreRecord["blob"]) => {
+    if (!mem.rec) return false;
+    mem.rec = structuredClone({ ...mem.rec, blob });
+    return true;
+  },
   wipeKeystore: async () => {
     mem.rec = undefined;
   },

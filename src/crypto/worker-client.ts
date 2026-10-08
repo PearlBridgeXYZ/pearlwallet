@@ -22,10 +22,16 @@ class WorkerClient {
         if (ev.data.ok) pending.resolve(ev.data.result);
         else pending.reject(new Error(ev.data.error));
       };
+      // An uncaught worker error or an undeliverable reply means the calls
+      // in flight may never be answered: fail them now instead of leaving
+      // their callers (one may hold the broadcast lock) waiting forever. A
+      // late reply to a failed call is ignored (its id is gone).
       this.worker.onerror = (ev) => {
         // eslint-disable-next-line no-console
         console.error("crypto worker error", ev);
+        this.failInflight("E_WORKER_ERROR");
       };
+      this.worker.onmessageerror = () => this.failInflight("E_WORKER_ERROR");
     }
     return this.worker;
   }
@@ -50,10 +56,13 @@ class WorkerClient {
       this.worker.terminate();
       this.worker = null;
     }
-    for (const { reject } of this.inflight.values()) {
-      reject(new Error("E_WORKER_RESET"));
-    }
+    this.failInflight("E_WORKER_RESET");
+  }
+
+  private failInflight(code: string): void {
+    const pending = [...this.inflight.values()];
     this.inflight.clear();
+    for (const { reject } of pending) reject(new Error(code));
   }
 }
 

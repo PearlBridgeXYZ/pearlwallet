@@ -12,7 +12,16 @@ import {
   readWprlBalanceOf,
 } from "../../services/eth-tx";
 import { broadcastPearlPrecomposed, composePearlSend, PEARL_PREVIEW_FRESHNESS_MS } from "../../services/pearl-tx";
-import { BURN_REVIEW_NOTICE, createUnwrapFlow, prepareWrapReview, wrapReviewSignable, type UnwrapBusy, type WrapReview } from "./bridge-flows";
+import {
+  BURN_REVIEW_NOTICE,
+  createUnwrapFlow,
+  prepareWrapReview,
+  QUOTE_CHANGED_MESSAGE,
+  quoteChanged,
+  wrapReviewSignable,
+  type UnwrapBusy,
+  type WrapReview,
+} from "./bridge-flows";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
 import { formatWei } from "../../lib/format";
 import type { UnwrapGasPreview } from "../../services/eth-tx";
@@ -473,6 +482,14 @@ function WrapCard(props: {
     const sendGrains = frozen.composed.amountGrains;
     try {
       const q2 = await recheck(sendGrains, deposit);
+      // The review showed this quote's fee, amount received and lane: a
+      // re-read that differs drops the review and shows the new numbers.
+      if (quoteChanged(review.quote, q2)) {
+        setReview(null);
+        setQuote(q2);
+        setErr(QUOTE_CHANGED_MESSAGE);
+        return;
+      }
       const res = await broadcastPearlPrecomposed(frozen, pearlNetwork);
       setReview(null);
       const now = Date.now();
@@ -641,7 +658,8 @@ function UnwrapCard(props: {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<UnwrapBusy>("idle");
   const quoteSeq = useRef(0);
-  // One unwrap at a time, claimed before its first await (bridge-flows.ts).
+  // One unwrap at a time per page load, claimed before its first await
+  // (bridge-flows.ts); a run survives this card unmounting.
   const unwrapFlow = useMemo(() => createUnwrapFlow(), []);
 
   useEffect(() => {
@@ -713,8 +731,8 @@ function UnwrapCard(props: {
   const unwrap = () => {
     if (!quote || !gas || !ethAddress || !pearlAddress || grains === null) return;
     void unwrapFlow(
-      { network: ethNetwork, ethAddress, pearlAddress, amount: grains, gas },
-      { setBusy, setErr, setNotice, setGas, setNeedsApprove, onStarted },
+      { network: ethNetwork, ethAddress, pearlAddress, amount: grains, quote, gas },
+      { setBusy, setErr, setNotice, setGas, setNeedsApprove, setQuote, onStarted },
     );
   };
 
