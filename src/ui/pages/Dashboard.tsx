@@ -8,7 +8,7 @@ import UpdatedAgo from "../components/UpdatedAgo";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { btxSurfaceOn } from "../../lib/features";
-import { useWalletBalances } from "../hooks/useWalletBalances";
+import { prlIncompleteNote, useWalletBalances } from "../hooks/useWalletBalances";
 import { formatGrains, formatWei, formatWprl, formatUSD } from "../../lib/format";
 
 export default function Dashboard() {
@@ -74,7 +74,7 @@ export default function Dashboard() {
         )}
         {(b.totalStatus === "partial" || b.totalStale) && b.totalUsd !== null && (
           <div className="mt-2 text-xs text-warn">
-            {b.totalStatus === "partial" ? "Some balances couldn't be read. The total may be low." : "Showing last known balance."}
+            {b.totalStatus === "partial" ? "Some balances couldn't be read completely. The total is an estimate and may be higher or lower." : "Showing last known balance."}
           </div>
         )}
         <UpdatedAgo at={b.prl.updatedAt} />
@@ -100,7 +100,7 @@ export default function Dashboard() {
               <div className="mt-1 font-mono text-xs tabular-nums text-text-3">{usdOf(b.prl.value)}</div>
               {(b.prl.status === "partial" || b.prl.stale) && (
                 <div className="mt-1 text-xs text-warn">
-                  Some addresses couldn't be read completely; the balance may be low.{" "}
+                  {prlIncompleteNote(b.prl)}{" "}
                   <button
                     type="button"
                     onClick={() => b.refetch()}

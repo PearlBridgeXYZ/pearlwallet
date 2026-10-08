@@ -247,7 +247,7 @@ export async function scanPrlWallet(set: PearlAddressSet, opts: ScanPrlWalletOpt
   const complete = reasons.length === 0;
 
   // Anything other than RPC failures (already counted by the summary)
-  // that leaves discovery incomplete still makes the total a lower bound.
+  // that leaves discovery incomplete still makes the total incomplete.
   const scan = summarizePoolScan(
     refs,
     perAddress,

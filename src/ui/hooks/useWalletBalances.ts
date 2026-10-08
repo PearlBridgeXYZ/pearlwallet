@@ -14,8 +14,12 @@
 //   value     best known value, or null if nothing is known yet
 //   status    "loading" — nothing known yet, first fetch in flight
 //             "ok"      — value is complete
-//             "partial" — value is a lower bound (some pool addresses
-//                         unreadable, or a page cap was hit)
+//             "partial" — value is an ESTIMATE that may be high or low:
+//                         unreadable addresses are left out (low), a
+//                         page-capped history is walked oldest-first and
+//                         can count receipts whose spends lie past the cap
+//                         (high), and a remembered last-good value can be
+//                         out of date either way. Never a spendable figure.
 //             "error"   — no usable value (latest fetch failed and there
 //                         is nothing earlier to fall back on)
 //   stale     true when (part of) value comes from an EARLIER successful
@@ -84,6 +88,18 @@ export interface AssetState<T> {
   stale: boolean;
   updatedAt: number | null;
   error?: string;
+  /** Why a PRL value is partial or stale (PRL only; absent when complete). */
+  incomplete?: PrlIncompleteness;
+}
+
+/** What made a PRL total incomplete; each case moves it in its own way. */
+export interface PrlIncompleteness {
+  /** Addresses with no value this scan and none remembered (not counted). */
+  unread: number;
+  /** Addresses shown at their last good value from an earlier scan. */
+  stale: number;
+  /** A history was capped, or the scan / address discovery did not finish. */
+  capped: boolean;
 }
 
 export interface WalletBalancesView {
@@ -251,7 +267,9 @@ export function derivePrlState(
     }
   });
   // Scan-level incompleteness (discovery cap, derive failure, no deriver,
-  // page caps): the total is a lower bound even if every address read ok.
+  // page caps) makes the total an estimate even if every address read ok.
+  // Not a lower bound: a capped walk is oldest-first, so it can count
+  // receipts whose spends lie beyond the cap.
   const wallet = scan as Partial<PrlWalletScan>;
   if (scan.degraded || (wallet.discovery !== undefined && !wallet.discovery.complete)) degraded = true;
   const n = scan.perAddress.length;
@@ -261,13 +279,38 @@ export function derivePrlState(
     return { value: null, status: "error", stale: false, updatedAt: null, error };
   }
   const status: AssetStatus = unknown > 0 || degraded ? "partial" : "ok";
+  const stale = staleCount > 0 || !!queryError;
   return {
     value: total,
     status,
-    stale: staleCount > 0 || !!queryError,
+    stale,
     updatedAt: oldest,
     ...(error ? { error } : {}),
+    ...(status === "partial" || stale
+      ? { incomplete: { unread: unknown, stale: staleCount, capped: degraded } }
+      : {}),
   };
+}
+
+/**
+ * Warning text for a partial or stale PRL value. Truthful in both
+ * directions: the figure is an estimate, never the spendable balance.
+ * Null when the value is complete and current.
+ */
+export function prlIncompleteNote(state: AssetState<bigint>): string | null {
+  if (state.status !== "partial" && !state.stale) return null;
+  const inc = state.incomplete ?? { unread: 0, stale: 0, capped: false };
+  const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+  const reasons: string[] = [];
+  if (inc.unread > 0) {
+    reasons.push(`${inc.unread} ${plural(inc.unread, "address couldn't be read and is", "addresses couldn't be read and are")} not counted.`);
+  }
+  if (inc.capped) reasons.push("Some address histories weren't read in full.");
+  if (inc.stale > 0) {
+    reasons.push(`${inc.stale} ${plural(inc.stale, "address shows its", "addresses show their")} last known balance.`);
+  }
+  if (reasons.length === 0) reasons.push("The latest scan failed; showing the previous result.");
+  return `${reasons.join(" ")} This is an estimate that may be higher or lower than your real balance, not the amount you can send.`;
 }
 
 /** Display state for a simple react-query-backed asset. React-query keeps

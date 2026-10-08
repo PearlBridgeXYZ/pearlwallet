@@ -4,6 +4,7 @@
 // ported CoinGecko fallback in the price function.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   scanPrlPool,
   fetchBalances,
@@ -18,6 +19,7 @@ import {
   prlScanQueryKey,
   rememberAddressResult,
   clearBalanceMemory,
+  prlIncompleteNote,
   type AssetState,
 } from "../src/ui/hooks/useWalletBalances";
 import { useUI } from "../src/state/ui-store";
@@ -25,6 +27,7 @@ import { useUI } from "../src/state/ui-store";
 const A = "prl1paaaa";
 const B = "prl1pbbbb";
 const C = "prl1pcccc";
+const D = "prl1pdddd";
 const SCRIPT = "5120" + "00".repeat(32);
 
 function ok(result: unknown): Response {
@@ -182,7 +185,7 @@ describe("derivePrlState — keep-last-good", () => {
     expect(s.status).not.toBe("error");
   });
 
-  it("a failed address with no memory → 'partial' (value is a lower bound)", () => {
+  it("a failed address with no memory → 'partial' (value is an estimate)", () => {
     const s = derivePrlState(
       scanOf([{ addr: A, grains: 5n }, { addr: B, grains: 1n }, { addr: C, fail: true }]),
       new Map(),
@@ -218,6 +221,49 @@ describe("derivePrlState — keep-last-good", () => {
     );
     expect(s.value).toBe(11n);
     expect(s.stale).toBe(true);
+  });
+});
+
+describe("prlIncompleteNote — partial PRL wording is truthful in both directions", () => {
+  it("complete and current → no note", () => {
+    const s = derivePrlState(scanOf([{ addr: A, grains: 5n }]), new Map());
+    expect(prlIncompleteNote(s)).toBeNull();
+  });
+
+  it("a page-capped history can overstate, so the note never claims 'may be low' only", () => {
+    // An oldest-first capped walk counts receipts whose spends lie past the cap.
+    const s = derivePrlState(scanOf([{ addr: A, grains: 600_000_000_000n, degraded: true }]), new Map());
+    expect(s.incomplete).toEqual({ unread: 0, stale: 0, capped: true });
+    const note = prlIncompleteNote(s)!;
+    expect(note).toMatch(/weren't read in full/);
+    expect(note).toMatch(/higher or lower/);
+    expect(note).toMatch(/not the amount you can send/);
+    expect(note).not.toMatch(/may be low|lower bound|at least/i);
+  });
+
+  it("names unread and stale addresses separately", () => {
+    const memory = new Map([[B, { grains: 700n, at: 5_000 }]]);
+    const s = derivePrlState(
+      scanOf([{ addr: A, grains: 5n }, { addr: B, fail: true }, { addr: C, fail: true }, { addr: D, grains: 1n }]),
+      memory,
+    );
+    expect(s.status).toBe("partial");
+    expect(s.incomplete).toEqual({ unread: 1, stale: 1, capped: false });
+    const note = prlIncompleteNote(s)!;
+    expect(note).toMatch(/^1 address couldn't be read and is not counted\. 1 address shows its last known balance\./);
+    expect(note).toMatch(/higher or lower/);
+  });
+
+  it("a failed refetch with nothing else to report says so", () => {
+    expect(
+      prlIncompleteNote({ value: 5n, status: "ok", stale: true, updatedAt: 1 }),
+    ).toMatch(/^The latest scan failed; showing the previous result\./);
+  });
+
+  it("the dashboard uses the note, not the old one-directional copy", () => {
+    const src = readFileSync("src/ui/pages/Dashboard.tsx", "utf8");
+    expect(src).toMatch(/prlIncompleteNote\(b\.prl\)/);
+    expect(src).not.toMatch(/may be low/);
   });
 });
 

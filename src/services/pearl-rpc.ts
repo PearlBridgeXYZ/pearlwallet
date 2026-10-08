@@ -515,8 +515,10 @@ export interface PrlBalanceResult {
  * displayed but Send says insufficient" failure mode.
  *
  * `degraded` here means either the walk hit the page cap OR at least
- * one vout was dropped for missing scriptHex. Both are signals that
- * the displayed total is a lower bound on the chain's real balance.
+ * one vout was dropped for missing scriptHex. Either way the displayed
+ * total is not the chain's real balance: a dropped vout makes it low,
+ * and a capped walk (oldest-first) can count receipts whose spends lie
+ * beyond the cap, making it high.
  */
 export async function fetchPrlBalanceGrains(
   address: string,

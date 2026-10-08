@@ -288,8 +288,9 @@ export interface Balances {
   prlUsd: number;
   wprlUsd: number;
   // "live" = full pool walked. "partial" = some pool addresses errored
-  //   but at least half succeeded — sum is under-reported; UI must
-  //   surface a warning so the user doesn't act on a low number.
+  //   (at least half succeeded) or a history hit the page cap — the sum
+  //   is an estimate that may be high or low; UI must surface a warning
+  //   so the user doesn't act on it.
   // "error" = whole walk failed.
   prlSource: "live" | "partial" | "error";
   wprlSource: "live" | "error" | "off";
@@ -342,9 +343,9 @@ export async function fetchBalances(
   if (prlR.status === "fulfilled") {
     prl = prlR.value.grains.reduce((acc, g) => acc + g, 0n);
     prlUtxos = prlR.value.utxos;
-    // Either a per-address failure OR a page-cap hit makes the sum
-    // a lower bound rather than a true balance — both surface as
-    // "partial" so the UI can warn the user.
+    // Either a per-address failure OR a page-cap hit makes the sum an
+    // estimate rather than a true balance (a capped oldest-first walk can
+    // overcount) — both surface as "partial" so the UI can warn the user.
     if (prlR.value.failures > 0 || prlR.value.degraded) prlSource = "partial";
     // Spendable UTXOs only from a complete scan; a partial one must never
     // be handed to Send as if it were the whole set.
