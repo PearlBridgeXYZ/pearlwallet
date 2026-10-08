@@ -20,6 +20,13 @@ import { prlScanQueryKey } from "../hooks/useWalletBalances";
 
 type FeeTier = "low" | "normal" | "high";
 // Same sat/vB tiers as Send. Combining coins is never urgent: default low.
+// Low = 1 sat/vB = the Pearl relay floor, checked against the live network
+// on 2026-10-08: the public node accepts transactions paying exactly
+// 1.000 sat/vB of virtual size (0.75 sat per serialized byte) into its
+// mempool and miners include them (one confirmed in the next block), and
+// near-floor 1.003-1.008 sat/vB transactions confirm routinely. Fees here
+// are ceil(weight / 4) x feerate, so the planned fee never falls below
+// the floor. Re-check before raising the default.
 const FEERATE_BY_TIER: Record<FeeTier, bigint> = { low: 1n, normal: 2n, high: 4n };
 // Reuse the dashboard's coin list only when it is this fresh.
 const UTXO_CACHE_FRESHNESS_MS = 30_000;
