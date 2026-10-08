@@ -42,13 +42,16 @@ export const ETH_RPC_DEFAULTS: Record<EthNetwork, readonly string[]> = {
 // wallet gets a CORS failure regardless of our CSP. PublicNode (also named
 // by G) is the default and works perfectly. Each host below is in the
 // override allowlist (ui-store) and the CSP connect-src.
+// v0.7: Cloudflare (cloudflare-eth.com) removed — it answers JSON-RPC
+// errors (-32603 / -32046) instead of data. Its host stays on the
+// override allowlist and in the CSP so an override saved by an older
+// build keeps loading until the user picks another provider.
 export interface EthRpcPreset {
   label: string;
   url: string;
 }
 export const ETH_RPC_PRESETS: readonly EthRpcPreset[] = [
   { label: "PublicNode (default)", url: "https://ethereum-rpc.publicnode.com" },
-  { label: "Cloudflare", url: "https://cloudflare-eth.com" },
   { label: "dRPC", url: "https://eth.drpc.org" },
 ];
 

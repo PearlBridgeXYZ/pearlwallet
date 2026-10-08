@@ -555,8 +555,6 @@ export default function Settings() {
           </p>
           <label className="mt-3 block text-xs text-text-3">
             Provider preset
-            {/* REDESIGN-NOTE: the Cloudflare preset now returns JSON-RPC errors (it was
-                dropped from the default chain); remove it from ETH_RPC_PRESETS in the chains module. */}
             <select
               className="input mt-1 w-full"
               value={ETH_RPC_PRESETS.some((p) => p.url === ethRpcDraft) ? ethRpcDraft : ""}

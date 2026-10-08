@@ -61,7 +61,14 @@ describe("RPC chain + presets", () => {
     // MEW + LlamaNodes send no CORS header → unusable in a browser → not offered
     expect(labels.some((l) => l.includes("mew"))).toBe(false);
     expect(labels.some((l) => l.includes("llama"))).toBe(false);
-    expect(ETH_RPC_PRESETS.length).toBe(3);
+    expect(ETH_RPC_PRESETS.length).toBe(2);
+  });
+
+  it("does not offer the broken Cloudflare endpoint (v0.7)", () => {
+    const hosts = ETH_RPC_PRESETS.map((p) => new URL(p.url).host);
+    expect(hosts).not.toContain("cloudflare-eth.com");
+    expect(ETH_RPC_PRESETS.map((p) => p.label.toLowerCase()).some((l) => l.includes("cloudflare"))).toBe(false);
+    expect(hosts).toEqual(["ethereum-rpc.publicnode.com", "eth.drpc.org"]);
   });
 
   it("allowlist still rejects an arbitrary host and non-https", () => {
