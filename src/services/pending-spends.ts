@@ -8,10 +8,11 @@
 //     the user acknowledged exactly those records (Send's "may pay twice"
 //     box); consolidation, vault and offline broadcasts wait.
 //  4. Nothing is released on a timer. "unknown" ends when the node holds the
-//     tx (→ "accepted"), when its inputs are seen spent, or by the user's
-//     explicit release after a check, re-run inside the lock, found the tx
-//     absent AND every input unspent. "accepted" ends when a complete scan
-//     no longer lists its inputs, or after 24 h; after 30 min it is listed
+//     tx (→ "accepted"), when another tx is seen spending an input, or by
+//     the user's explicit release after a check found the tx absent AND
+//     every input unspent (re-confirmed under the lock). "accepted" ends
+//     when a complete scan no longer lists its inputs and shows one spent,
+//     or after 24 h; after 30 min it is listed
 //     with the same Check status / Release (the node may have dropped it).
 //  5. Every write holds one exclusive Web Locks lock, kept across sign →
 //     record → submit → outcome: a suspended sender still holds it, so no

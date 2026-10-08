@@ -363,16 +363,17 @@ export interface ContractCallParams {
   tier: FeeTier;
   /** The gas ceiling the user reviewed (previewUnwrapGas). A call whose
    *  fresh fees or total cost exceed it is refused unsigned. */
-  ceiling?: EthGasCeiling;
+  ceiling: EthGasCeiling;
 }
 
 /** What the user saw before signing a bridge contract call. */
 export interface EthGasCeiling {
   /** Highest price per gas unit the call may sign. */
   maxFeePerGas: bigint;
-  /** Highest total (gas limit × max fee) in wei; null when the step
-   *  could not be estimated in advance (the burn after an approval). */
-  maxCostWei: bigint | null;
+  /** Highest total (gas limit × max fee) in wei the user was shown. Always
+   *  a number: a step whose total wasn't shown (the burn after an
+   *  approval) is estimated and reviewed again before it is signed. */
+  maxCostWei: bigint;
 }
 
 /** Headroom over the previewed max fee per gas (percent): the base fee
@@ -444,7 +445,7 @@ async function sendContractCall(
   to: `0x${string}`,
   data: Hex,
   tier: FeeTier,
-  ceiling?: EthGasCeiling,
+  ceiling: EthGasCeiling,
 ): Promise<SendResult> {
   const chainId = await chainIdFor(network);
   const client = ethClient(network);
@@ -453,11 +454,7 @@ async function sendContractCall(
   // exact-estimate tx that lands second pays slightly less gas but never
   // reverts; an exact-estimate tx that lands FIRST can run out.
   const [gas, fees] = await Promise.all([contractGas(network, from, to, data), suggestGas(network, tier)]);
-  if (
-    ceiling &&
-    (fees.maxFeePerGas > ceiling.maxFeePerGas ||
-      (ceiling.maxCostWei !== null && gas * fees.maxFeePerGas > ceiling.maxCostWei))
-  ) {
+  if (fees.maxFeePerGas > ceiling.maxFeePerGas || gas * fees.maxFeePerGas > ceiling.maxCostWei) {
     throw new Error("E_ETH_GAS_ABOVE_REVIEW");
   }
   const nonce = await client.getTransactionCount({ address: from, blockTag: "pending" });

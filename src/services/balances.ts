@@ -90,6 +90,8 @@ export type PoolAddressResult =
        *  also set by vouts dropped for a missing script, which leaves the
        *  rest of the set valid.) Absent = false. */
       capped?: boolean;
+      /** Spenders the walk saw (PrlUtxoSet.spentBy). Absent = none known. */
+      spentBy?: ReadonlyMap<string, string>;
     }
   | { status: "error"; error: string };
 
@@ -186,6 +188,7 @@ export async function walkPoolAddresses(
           utxos: r.utxos,
           used: r.used,
           capped: r.degraded,
+          spentBy: r.spentBy,
         };
       } catch (err) {
         if (opts.signal?.aborted) throw err;

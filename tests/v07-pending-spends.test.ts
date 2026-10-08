@@ -387,13 +387,19 @@ describe("G4 — resolution", () => {
       await noteScan(startedAt, [{ address: DEST, complete, utxos }]);
       expect(unresolvedBroadcasts(), `${startedAt} ${complete}`).toHaveLength(1);
     }
-    await noteScan(t0 + 1, [{ address: "prl1pother", complete: true, utxos: [] }]); // not its address
+    const spentBy = new Map([[`${C1}:0`, "ee".repeat(32)]]);
+    await noteScan(t0 + 1, [{ address: "prl1pother", complete: true, utxos: [], spentBy }]); // not its address
     expect(unresolvedBroadcasts()).toHaveLength(1);
+    // Input merely missing (its unconfirmed funding tx may have been
+    // evicted): no spender seen, so nothing settles.
     await noteScan(t0 + 1, [{ address: DEST, complete: true, utxos: [] }]);
+    await noteScan(t0 + 1, [{ address: DEST, complete: true, utxos: [], spentBy: new Map() }]);
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+    await noteScan(t0 + 1, [{ address: DEST, complete: true, utxos: [], spentBy }]);
     expect(broadcastRecords()).toEqual([]);
-    // Accepted records go the same way.
+    // Accepted records go the same way; our own tx as the spender settles too.
     seedRecords([{ ...r, state: "accepted" }]);
-    await noteScan(t0 + 1, [{ address: DEST, complete: true, utxos: [] }]);
+    await noteScan(t0 + 1, [{ address: DEST, complete: true, utxos: [], spentBy: new Map([[`${C1}:0`, T]]) }]);
     expect(broadcastRecords()).toEqual([]);
   });
 
@@ -432,6 +438,57 @@ describe("G4 — resolution", () => {
     // can never confirm: settled as "spent", never offered for release.
     unknown();
     hist = history(DEST, DEST_SCRIPT, [C1, C2], [{ txid: C2, vout: 0 }]);
+    await expect(checkBroadcast(f.txid)).resolves.toBe("spent");
+    expect(broadcastRecords()).toEqual([]);
+  });
+
+  // final-r2 S1 (N1a/N1b, expectations inverted): an unconfirmed funding
+  // tx evicted from the node makes the input vanish from the walk exactly
+  // like a spent one. With no spender seen, the hold must stay.
+  it("N1a: funding tx dropped (input absent, no spender seen) → Check says unknown and keeps the hold", async () => {
+    const f = signedFixture(91);
+    seedRecords([rec({ txid: f.txid, inputs: [`${C1}:0`, `${C2}:0`], addresses: [DEST] })]);
+    stubRpc((m, p) => {
+      if (m === "getrawtransaction") return NO_TX();
+      // C2's funding tx is gone: only C1 is listed, nothing spends C2.
+      if (m === "searchrawtransactions") return (p[2] as number) === 0 ? ok(history(DEST, DEST_SCRIPT, [C1])) : NO_ADDR();
+      return rpcErr(-32601, "nope");
+    });
+    await expect(checkBroadcast(f.txid)).resolves.toBe("unknown");
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+    expect(pendingOutpoints().has(`${C1}:0`)).toBe(true);
+    expect(pendingOutpoints().has(`${C2}:0`)).toBe(true);
+    await expect(releaseBroadcast(f.txid)).resolves.toBe("unknown");
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+  });
+
+  it("N1b: funding tx dropped → a later complete scan listing none of the inputs does not lift the hold", async () => {
+    const t0 = Date.now();
+    seedRecords([rec({ txid: T, inputs: [`${C1}:0`], addresses: [DEST], createdAt: t0 })]);
+    stubRpc((m) => (m === "getrawtransaction" ? NO_TX() : NO_ADDR())); // the address has no history left
+    await noteScan(t0 + 1, [{ address: DEST, complete: true, utxos: [], spentBy: new Map() }]);
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+    await expect(checkBroadcast(T)).resolves.toBe("unknown");
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+    expect(pendingOutpoints().has(`${C1}:0`)).toBe(true);
+  });
+
+  it("a spender seen in a walk is evidence; our own txid as spender is not 'spent'", async () => {
+    const f = signedFixture(93);
+    seedRecords([rec({ txid: f.txid, inputs: [`${C1}:0`], addresses: [DEST] })]);
+    let spender = "ee".repeat(32);
+    stubRpc((m, p) => {
+      if (m === "getrawtransaction") return NO_TX();
+      if (m === "searchrawtransactions") {
+        if ((p[2] as number) !== 0) return NO_ADDR();
+        return ok([...history(DEST, DEST_SCRIPT, [C1]), { txid: spender, vin: [{ txid: C1, vout: 0 }], vout: [] }]);
+      }
+      return rpcErr(-32601, "nope");
+    });
+    spender = f.txid;
+    await expect(checkBroadcast(f.txid)).resolves.toBe("unknown");
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+    spender = "ee".repeat(32);
     await expect(checkBroadcast(f.txid)).resolves.toBe("spent");
     expect(broadcastRecords()).toEqual([]);
   });
@@ -511,6 +568,34 @@ describe("G5 — the broadcast lock", () => {
     await expect(release).resolves.toBe("unknown"); // no longer "unknown": nothing released
     expect(broadcastRecords()).toEqual([expect.objectContaining({ txid: f.txid, state: "accepted" })]);
     expect(pendingOutpoints().size).toBe(2);
+  });
+
+  // final-r2 S10: the release's address walks run outside the lock.
+  it("a release's slow walk doesn't hold the lock; a record changed meanwhile isn't released", async () => {
+    const locks = useFakeLocks();
+    const f = signedFixture(77);
+    const page = deferred<Response>();
+    let walking = false;
+    stubRpc((m, p) => {
+      if (m === "getrawtransaction") return NO_TX();
+      if (m === "searchrawtransactions") {
+        if ((p[2] as number) !== 0) return NO_ADDR();
+        walking = true;
+        return page.promise;
+      }
+      return rpcErr(-32601, "nope");
+    });
+    seedRecords([rec({ txid: f.txid, inputs: [`${C1}:0`], addresses: [DEST] })]);
+    const release = releaseBroadcast(f.txid);
+    for (let i = 0; i < 20 && !walking; i++) await flush();
+    expect(walking).toBe(true);
+    expect(locks.isHeld("pearl-wallet-broadcast")).toBe(false);
+    // Another tab takes the lock immediately and, say, its broadcast of the
+    // same bytes is accepted while the walk is still running.
+    await withBroadcastLock(async () => seedRecords([rec({ txid: f.txid, inputs: [`${C1}:0`], addresses: [DEST], state: "accepted" })]), { ifAvailable: true });
+    page.resolve(ok(history(DEST, DEST_SCRIPT, [C1])));
+    await expect(release).resolves.toBe("unknown");
+    expect(broadcastRecords()).toEqual([expect.objectContaining({ txid: f.txid, state: "accepted" })]);
   });
 
   it("a second send waits for the first; a holder that never returns makes others give up unsent", async () => {

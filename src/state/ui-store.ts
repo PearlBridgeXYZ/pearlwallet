@@ -33,8 +33,11 @@ const ETH_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
 
 // BTX RPC override allowlist. Separate chain, separate endpoints — must NOT
 // share the Pearl list (a BTX override validated against Pearl hosts would
-// always fall back silently). Mirror these EXACTLY in the CSP connect-src
-// (public/_headers) and chains/btx/network.ts BTX_RPC_POOL.
+// always fall back silently). Mirror chains/btx/network.ts BTX_RPC_POOL.
+// While BTX_UI_ENABLED (lib/features.ts) is false these hosts are NOT in
+// the CSP connect-src (index.html, public/_headers), so nothing can reach
+// them; flipping the switch back on means re-adding them there (a test
+// in v018.test.ts holds the two together).
 const BTX_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "btx-rpc.pearlbridge.xyz",
   "btx-rpc2.pearlbridge.xyz",

@@ -403,8 +403,11 @@ describe("CSP parity — meta (index.html) vs header (_headers) connect-src", ()
     expect(onlyInMeta, `hosts in meta but not _headers: ${onlyInMeta}`).toEqual([]);
   });
 
-  it("both CSPs allow the BTX indexer edge pool", async () => {
+  // final-r2 S7: the BTX edge pool is in both CSPs exactly while the BTX
+  // build switch is on (re-add the hosts when flipping it back).
+  it("both CSPs allow the BTX indexer edge pool only while BTX_UI_ENABLED", async () => {
     const fs = await import("node:fs/promises");
+    const { BTX_UI_ENABLED } = await import("../src/lib/features");
     const html = await fs.readFile("index.html", "utf8");
     const headers = await fs.readFile("public/_headers", "utf8");
     for (const host of [
@@ -412,8 +415,8 @@ describe("CSP parity — meta (index.html) vs header (_headers) connect-src", ()
       "https://btx-rpc2.pearlbridge.xyz",
       "https://btx-rpc3.pearlbridge.xyz",
     ]) {
-      expect(html, `index.html allows ${host}`).toContain(host);
-      expect(headers, `_headers allows ${host}`).toContain(host);
+      expect(html.includes(host), `index.html allows ${host}`).toBe(BTX_UI_ENABLED);
+      expect(headers.includes(host), `_headers allows ${host}`).toBe(BTX_UI_ENABLED);
     }
   });
 });

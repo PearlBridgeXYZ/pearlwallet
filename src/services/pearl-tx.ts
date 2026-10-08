@@ -699,6 +699,8 @@ async function signAndBroadcast(
   composed: ComposedPearlTx,
   network: PearlNetwork,
   acknowledged: readonly string[] = [],
+  /** Runs under the broadcast lock right before signing (may throw). */
+  beforeSign: () => void = () => {},
 ): Promise<SendPearlResult> {
   const req: PearlTxRequest = {
     utxos: composed.utxos.map((u) => ({
@@ -726,6 +728,7 @@ async function signAndBroadcast(
     acknowledged,
   };
   const txid = await broadcastRecorded(plan, async () => {
+    beforeSign();
     const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
     return raw;
   });
@@ -794,6 +797,7 @@ export async function broadcastSignedPearlTx(
 /**
  * Sign + broadcast a Pearl tx the UI has already composed and shown the
  * user. Refuses to sign a preview older than PEARL_PREVIEW_FRESHNESS_MS
+ * (checked on the click and again under the lock, just before signing)
  * so a long-delayed click can't capture a stale UTXO set (a hostile
  * sentry could have returned different coins on the second walk).
  */
@@ -804,10 +808,14 @@ export async function broadcastPearlPrecomposed(
   /** "unknown" broadcasts the user explicitly accepted may pay twice. */
   acknowledged: readonly string[] = [],
 ): Promise<SendPearlResult> {
-  if (now - frozen.composedAt > PEARL_PREVIEW_FRESHNESS_MS) {
-    throw new Error("E_PREVIEW_STALE");
-  }
-  return await signAndBroadcast(frozen.composed, network, acknowledged);
+  const stale = (t: number) => {
+    if (t - frozen.composedAt > PEARL_PREVIEW_FRESHNESS_MS) throw new Error("E_PREVIEW_STALE");
+  };
+  stale(now);
+  // Checked again at signing time: waiting for another tab's broadcast
+  // (up to LOCK_WAIT_MS) must not stretch the preview's freshness.
+  const skew = now - Date.now();
+  return await signAndBroadcast(frozen.composed, network, acknowledged, () => stale(Date.now() + skew));
 }
 
 export async function sendPearl(opts: ComposeOptions): Promise<SendPearlResult> {

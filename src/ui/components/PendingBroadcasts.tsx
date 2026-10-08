@@ -4,7 +4,7 @@
 // the screen that broadcast never hides one. Each entry has "Check status";
 // "Release" appears only after a check found the transaction absent and
 // every coin it spends unspent, and needs an explicit acknowledgement (the
-// release repeats that check inside the broadcast lock). Accepted broadcasts
+// release repeats that check and re-confirms it under the broadcast lock). Accepted broadcasts
 // still unconfirmed after ACCEPTED_STALL_MS are listed the same way (the
 // node may have dropped them; their coins stay reserved). It also says when
 // the record itself can't be read or saved, and — in browsers without Web
@@ -62,7 +62,7 @@ function resolvedNote(rec: BroadcastRecord, r: BroadcastCheck): string | null {
     return `The network has ${short(txid)} (pending or confirmed). It's no longer unknown.`;
   }
   if (r === "spent") {
-    return `The network doesn't have ${short(txid)}, and a coin it spends was spent by another transaction, so it can never confirm. It was removed. Check the explorer if you're unsure which payment went through.`;
+    return `The network doesn't have ${short(txid)}, and it shows another transaction spending one of its coins, so this one can't confirm. It was removed. Check the explorer if you're unsure which payment went through.`;
   }
   return null;
 }
@@ -83,7 +83,13 @@ function Row({ rec, onResolved }: { rec: BroadcastRecord; onResolved: (text: str
       if (done) return onResolved(done);
       setResult(r);
       setAck(false);
-      if (r === "unknown") setNote(release ? "Couldn't confirm that again, so nothing was released. Try again in a moment." : "Couldn't check right now. Try again in a moment.");
+      if (r === "unknown") {
+        setNote(
+          release
+            ? "Couldn't confirm that again, so nothing was released. Try again later."
+            : "Not settled: the network couldn't be read, or it shows neither this transaction, nor its coins unspent, nor another transaction spending them (the payment that funded them may have been dropped). Its coins stay reserved. Try again later and check the explorer.",
+        );
+      }
       if (r === "found") setNote("The network still has it; it is waiting to be confirmed.");
     } catch (e) {
       setNote(

@@ -183,7 +183,7 @@ describe("S4 — Bridge fees are shown before anything is signed", () => {
     const fee = (10n * 2n + 2n) * GWEI;
     const base = { network: "mainnet" as const, from: FROM, tier: "normal" as const, amount: 1_000n };
     // Fee per gas rose above the review.
-    await expect(approveWprlForBridge({ ...base, ceiling: { maxFeePerGas: fee - 1n, maxCostWei: null } })).rejects.toThrow(
+    await expect(approveWprlForBridge({ ...base, ceiling: { maxFeePerGas: fee - 1n, maxCostWei: 10n ** 30n } })).rejects.toThrow(
       "E_ETH_GAS_ABOVE_REVIEW",
     );
     // Total above the reviewed total.
@@ -207,8 +207,10 @@ describe("S4 — Bridge fees are shown before anything is signed", () => {
     expect(page).not.toMatch(/is not\s+shown here/);
     expect(page).not.toMatch(/pearlAddress\.slice\(/);
     expect(page).toMatch(/<Row k="Payout to" v=\{pearlAddress \?\? "—"\} \/>/);
-    expect(page).toMatch(/ceiling: \{ maxFeePerGas: gas\.maxFeePerGas, maxCostWei: gas\.approveWei \}/);
-    expect(page).toMatch(/ceiling: \{ maxFeePerGas: gas\.maxFeePerGas, maxCostWei: gas\.burnWei \}/);
+    // The signing flows live in bridge-flows.ts (behaviour: v07-review-final-r2).
+    const flows = src("src/ui/pages/bridge-flows.ts");
+    expect(flows).toMatch(/ceiling: \{ maxFeePerGas: gas\.maxFeePerGas, maxCostWei: approveWei \}/);
+    expect(flows).toMatch(/ceiling: \{ maxFeePerGas: gas\.maxFeePerGas, maxCostWei: burnWei \}/);
   });
 });
 
@@ -218,12 +220,13 @@ describe("S5 — an accepted broadcast that never settles can be checked and rel
   const ADDR = "prl1pstalled";
   const C1 = "11".repeat(32);
   const T = "ab".repeat(32);
-  function node(listed: boolean) {
+  function node(listed: boolean, spentElsewhere = false) {
     return stubRpc((m, p) => {
       if (m === "getrawtransaction") return NO_TX();
       if (m === "searchrawtransactions") {
-        if (p[0] !== ADDR || (p[2] as number) !== 0 || !listed) return NO_ADDR();
-        return ok([{ txid: C1, vin: [], vout: [{ value: 1, n: 0, scriptPubKey: { address: ADDR, hex: SCRIPT } }] }]);
+        if (p[0] !== ADDR || (p[2] as number) !== 0 || (!listed && !spentElsewhere)) return NO_ADDR();
+        const fund = { txid: C1, vin: [], vout: [{ value: 1, n: 0, scriptPubKey: { address: ADDR, hex: SCRIPT } }] };
+        return ok(spentElsewhere ? [fund, { txid: "ee".repeat(32), vin: [{ txid: C1, vout: 0 }], vout: [] }] : [fund]);
       }
       return rpcErr(-32601, "nope");
     });
@@ -252,11 +255,14 @@ describe("S5 — an accepted broadcast that never settles can be checked and rel
     expect(pendingOutpoints().has(`${C1}:0`)).toBe(true);
   });
 
-  it("a stalled record whose input another tx spent is dropped as 'spent'", async () => {
+  it("a stalled record whose input another tx is seen spending is dropped as 'spent'; one merely missing stays", async () => {
     seedRecords([
       rec({ txid: T, inputs: [`${C1}:0`], addresses: [ADDR], state: "accepted", createdAt: Date.now() - ACCEPTED_STALL_MS - 1 }),
     ]);
-    node(false);
+    node(false); // funding tx gone too (evicted parent): no positive evidence
+    await expect(checkBroadcast(T)).resolves.toBe("unknown");
+    expect(pendingOutpoints().has(`${C1}:0`)).toBe(true);
+    node(false, true);
     await expect(checkBroadcast(T)).resolves.toBe("spent");
     expect(broadcastRecords()).toEqual([]);
   });

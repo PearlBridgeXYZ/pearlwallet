@@ -43,6 +43,7 @@ import {
   sumManualUtxoValue,
 } from "../../lib/offline-signing/manual-utxo";
 import type { PearlTxRequest } from "../../crypto/worker";
+import { parsePRL } from "../../lib/format";
 
 type Tab = "compose" | "sign" | "broadcast";
 
@@ -119,6 +120,18 @@ interface ComposeTabProps {
   network: PearlNetwork;
 }
 
+/** The composer's amount in grains; null for empty or invalid input. Same
+ *  parser as every other amount field: a minus sign or more than 8
+ *  decimals is invalid, never silently dropped or truncated. */
+export function offlineAmountGrains(text: string): bigint | null {
+  if (!text.trim()) return null;
+  try {
+    return parsePRL(text);
+  } catch {
+    return null;
+  }
+}
+
 function ComposeTab({ pool, network }: ComposeTabProps) {
   const changePool = useWallet((s) => s.addresses?.pearlChange);
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
@@ -138,16 +151,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
     [mode, manualUtxoText],
   );
 
-  const amountGrains = useMemo(() => {
-    if (!amountPrl.trim()) return null;
-    try {
-      const [whole, frac = ""] = amountPrl.trim().split(".");
-      const fracPadded = (frac + "00000000").slice(0, 8);
-      return BigInt(whole!) * 100_000_000n + BigInt(fracPadded || "0");
-    } catch {
-      return null;
-    }
-  }, [amountPrl]);
+  const amountGrains = useMemo(() => offlineAmountGrains(amountPrl), [amountPrl]);
 
   async function generateLive() {
     setBusy(true);

@@ -4,6 +4,7 @@ import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { btxSurfaceOn } from "../../lib/features";
 import { dataUrl } from "../../lib/qr";
+import { copyWithAutoClear } from "../../lib/clipboard";
 import { useQuery } from "@tanstack/react-query";
 import { cryptoWorker } from "../../crypto/worker-client";
 
@@ -35,11 +36,10 @@ export default function Receive() {
   const [copied, setCopied] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [prlIndex, setPrlIndex] = useState(0);
-  // Timer handles tracked in refs so we can cancel on unmount. A 60-second
-  // clipboard-clear left to fire after navigation could clobber a buffer
-  // the user copied something else into in the meantime.
+  // The "Copied" flag's timer dies with the page; the 60-second clipboard
+  // clear doesn't (lib/clipboard.ts — it only clears a clipboard that
+  // still holds exactly the copied address).
   const copiedFlagTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clipboardClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const pearlPool = useMemo(
     () => addresses?.pearlPool ?? (addresses ? [addresses.pearl] : []),
@@ -61,37 +61,16 @@ export default function Receive() {
   useEffect(() => {
     return () => {
       if (copiedFlagTimerRef.current) clearTimeout(copiedFlagTimerRef.current);
-      if (clipboardClearTimerRef.current) clearTimeout(clipboardClearTimerRef.current);
     };
   }, []);
 
-  // Auto-clear the clipboard 60s after copy so an address (not as
-  // sensitive as a key, but still a privacy/correlation signal) doesn't
-  // sit in the OS paste buffer indefinitely. Best-effort: a clipboard
-  // write that happened after this copy will be respected — we only
-  // clear if the clipboard *still* contains exactly our address.
   async function copy() {
     if (!addr) return;
     try {
-      await navigator.clipboard.writeText(addr);
+      await copyWithAutoClear(addr);
       setCopied(true);
       if (copiedFlagTimerRef.current) clearTimeout(copiedFlagTimerRef.current);
       copiedFlagTimerRef.current = setTimeout(() => setCopied(false), 1500);
-      // Cancel any pending clear before scheduling a new one — back-to-back
-      // copies of two different addresses should be governed by the LATER
-      // address's window, not the earlier one's.
-      if (clipboardClearTimerRef.current) clearTimeout(clipboardClearTimerRef.current);
-      const copiedAddr = addr;
-      clipboardClearTimerRef.current = setTimeout(async () => {
-        try {
-          const current = await navigator.clipboard.readText();
-          if (current === copiedAddr) {
-            await navigator.clipboard.writeText("");
-          }
-        } catch {
-          // Permissions or focus restrictions — best-effort only.
-        }
-      }, 60_000);
     } catch {
       // ignore
     }

@@ -597,6 +597,12 @@ export interface PrlUtxoSet {
    *  address the node reports as "No information available" (-5) or with
    *  an empty first page is unused. */
   used: boolean;
+  /** outpoint ("txid:vout") → txid of the transaction the walk saw
+   *  spending it, for outputs the walk saw paying this address (so the
+   *  funding tx is known to the node too). Positive evidence that a coin
+   *  moved, unlike its mere absence from `utxos` (an evicted unconfirmed
+   *  funding tx also drops it). */
+  spentBy?: ReadonlyMap<string, string>;
 }
 
 export interface FetchUtxosOptions {
@@ -647,6 +653,7 @@ export async function fetchPrlUtxos(
   type Held = { valueGrains: bigint; scriptHex: string };
   const utxo = new Map<string, Held>();
   const seenOutputs = new Set<string>();
+  const spenders = new Map<string, string>();
   let pageCount = 0;
   let degraded = false;
   let droppedNoScript = 0;
@@ -671,7 +678,7 @@ export async function fetchPrlUtxos(
       if (msg.includes("No information available about address")) {
         if (pageCount === 0) {
           rememberCompleteHistory(address, [], epoch);
-          return { utxos: [], degraded: false, droppedNoScript: 0, used: false };
+          return { utxos: [], degraded: false, droppedNoScript: 0, used: false, spentBy: new Map() };
         }
         // -5 after earlier non-empty pages: history ended exactly at a
         // page boundary. Keep what the walk already gathered.
@@ -709,6 +716,7 @@ export async function fetchPrlUtxos(
       for (const vin of tx.vin) {
         if (!vin.txid || vin.vout === undefined) continue;
         utxo.delete(`${vin.txid}:${vin.vout}`);
+        if (typeof tx.txid === "string") spenders.set(`${vin.txid}:${vin.vout}`, tx.txid.toLowerCase());
       }
     }
 
@@ -728,7 +736,9 @@ export async function fetchPrlUtxos(
       scriptHex: held.scriptHex,
     });
   }
-  return { utxos: out, degraded, droppedNoScript, used: pageCount > 0 };
+  const spentBy = new Map<string, string>();
+  for (const [key, spender] of spenders) if (seenOutputs.has(key)) spentBy.set(key.toLowerCase(), spender);
+  return { utxos: out, degraded, droppedNoScript, used: pageCount > 0, spentBy };
 }
 
 /**

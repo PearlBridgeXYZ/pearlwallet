@@ -6,20 +6,13 @@ import { useWallet } from "../../state/wallet-store";
 import { db, type BridgeCrossingRecord } from "../../storage/db";
 import { bridgeConfig } from "../../services/bridge";
 import {
-  approveWprlForBridge,
   getEthReceiptStatus,
   previewUnwrapGas,
   readWprlAllowance,
   readWprlBalanceOf,
-  requestBurn,
-  waitForEthSuccess,
 } from "../../services/eth-tx";
-import {
-  broadcastPearlPrecomposed,
-  composePearlSend,
-  PEARL_PREVIEW_FRESHNESS_MS,
-  type FrozenPearlTx,
-} from "../../services/pearl-tx";
+import { broadcastPearlPrecomposed, composePearlSend, PEARL_PREVIEW_FRESHNESS_MS } from "../../services/pearl-tx";
+import { BURN_REVIEW_NOTICE, createUnwrapFlow, prepareWrapReview, wrapReviewSignable, type UnwrapBusy, type WrapReview } from "./bridge-flows";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
 import { formatWei } from "../../lib/format";
 import type { UnwrapGasPreview } from "../../services/eth-tx";
@@ -360,15 +353,20 @@ function WrapCard(props: {
   const [grains, setGrains] = useState<bigint | null>(null);
   const [quote, setQuote] = useState<MintQuote | null>(null);
   const [depositAddr, setDepositAddr] = useState<string | null>(null);
-  // The composed transaction the user reviewed (network fee included);
-  // only this exact transaction is signed.
-  const [review, setReview] = useState<{ frozen: FrozenPearlTx } | null>(null);
+  // What the user reviewed — quote, deposit address and the composed
+  // transaction (network fee included) as one object; only this exact
+  // transaction is signed, and the review shows only this.
+  const [review, setReview] = useState<WrapReview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Claimed before the first await: a double click can't start a step twice.
+  const inFlight = useRef(false);
   const quoteSeq = useRef(0);
 
-  // Debounced quote + deposit address preview.
+  // Debounced quote + deposit address preview. Every change of the input
+  // bumps quoteSeq, which also discards a review still being composed.
   useEffect(() => {
+    const seq = ++quoteSeq.current;
     setQuote(null);
     setGrains(null);
     setReview(null);
@@ -383,7 +381,6 @@ function WrapCard(props: {
       return;
     }
     setGrains(g);
-    const seq = ++quoteSeq.current;
     const t = setTimeout(async () => {
       try {
         const [q, dep] = await Promise.all([
@@ -429,48 +426,53 @@ function WrapCard(props: {
   };
 
   // Step 1: compose the transaction and show its network fee. Nothing is
-  // signed here.
+  // signed here. A review composed for an amount the user has since
+  // changed is discarded (quoteSeq).
   const prepare = async () => {
-    if (!quote || !depositAddr || !ethAddress || grains === null || busy) return;
+    if (!quote || !depositAddr || !ethAddress || grains === null || quote.amount !== grains || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setErr(null);
-    // Capture the trusted amount in a local so nothing async can swap it.
-    const sendGrains = grains;
-    const dest = depositAddr;
+    const seq = quoteSeq.current;
+    const stale = () => quoteSeq.current !== seq;
     try {
-      await recheck(sendGrains, dest);
-      const composed = await composePearlSend({
-        network: pearlNetwork,
-        pool,
-        changePool,
-        deriveMore,
-        // Bound to the address generation when this walk starts.
-        onDiscovered: useWallet.getState().pearlDiscoveryHandler(),
-        destination: dest,
-        amountGrains: sendGrains, // user's amount, never the API echo
-        includeTip: false,
+      const r = await prepareWrapReview({
+        quote,
+        deposit: depositAddr,
+        stale,
+        recheck,
+        compose: (destination, amountGrains) =>
+          composePearlSend({
+            network: pearlNetwork,
+            pool,
+            changePool,
+            deriveMore,
+            // Bound to the address generation when this walk starts.
+            onDiscovered: useWallet.getState().pearlDiscoveryHandler(),
+            destination,
+            amountGrains, // user's amount, never the API echo
+            includeTip: false,
+          }),
       });
-      const out = composed.outputs[0];
-      if (!out || out.address !== dest || out.amountGrains !== sendGrains || composed.tipGrains !== 0n) {
-        throw new Error("E_COMPOSE_MISMATCH — refusing to sign; retry the quote.");
-      }
-      setReview({ frozen: { composed, composedAt: Date.now() } });
+      if (r && !stale()) setReview(r);
     } catch (e) {
-      setErr(refusalMessage(e) ?? (e as Error).message);
+      if (!stale()) setErr(refusalMessage(e) ?? (e as Error).message);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
 
   // Step 2: sign and broadcast exactly the reviewed transaction.
   const wrap = async () => {
-    if (!review || !depositAddr || !ethAddress || grains === null || busy) return;
+    if (!wrapReviewSignable(review) || !ethAddress || inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setErr(null);
-    const { frozen } = review;
+    const { frozen, deposit } = review;
     const sendGrains = frozen.composed.amountGrains;
     try {
-      const q2 = await recheck(sendGrains, depositAddr);
+      const q2 = await recheck(sendGrains, deposit);
       const res = await broadcastPearlPrecomposed(frozen, pearlNetwork);
       setReview(null);
       const now = Date.now();
@@ -508,9 +510,14 @@ function WrapCard(props: {
           : (refusalMessage(e) ?? msg),
       );
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
+
+  // A review shows only what it froze; before one, the live quote.
+  const shown = review?.quote ?? quote;
+  const shownDeposit = review?.deposit ?? depositAddr;
 
   return (
     <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
@@ -530,21 +537,24 @@ function WrapCard(props: {
           inputMode="decimal"
           placeholder="0.0"
           value={amount}
+          // Fixed while a review is composed or shown: what is reviewed
+          // is what gets signed. "Change amount" reopens it.
+          disabled={busy || review !== null}
           onChange={(e) => setAmount(e.target.value)}
         />
       </label>
 
-      {quote && (
+      {shown && (
         <div className="rounded-pb border border-line-strong bg-surface-2 p-4 text-sm leading-relaxed">
           <h3 className="mb-3 text-base font-semibold tracking-tight">Review before you sign</h3>
-          <Row k="Bridge fee" v={`${fmtPrl(quote.fee)} (${quote.feeBps} bps)`} />
-          <Row k="You receive" v={`${grainsToPrlString(quote.net)} WPRL`} />
+          <Row k="Bridge fee" v={`${fmtPrl(shown.fee)} (${shown.feeBps} bps)`} />
+          <Row k="You receive" v={`${grainsToPrlString(shown.net)} WPRL`} />
           <Row
             k="Lane"
             v={
-              quote.lane === "fast"
+              shown.lane === "fast"
                 ? "fast — mints right after confirmation"
-                : `slow — queued ~${Math.round(quote.slowLaneDelaySeconds / 3600)}h (fast window is full)`
+                : `slow — queued ~${Math.round(shown.slowLaneDelaySeconds / 3600)}h (fast window is full)`
             }
           />
           {review ? (
@@ -564,7 +574,7 @@ function WrapCard(props: {
               Plus the Pearl network fee, shown in the next step before anything is signed.
             </p>
           )}
-          {!quote.withinDailyCap && (
+          {!shown.withinDailyCap && (
             <p className="mt-2 text-warn break-words">
               Amount exceeds today’s remaining bridge capacity — it will queue.
             </p>
@@ -572,10 +582,10 @@ function WrapCard(props: {
         </div>
       )}
 
-      {depositAddr && (
+      {shownDeposit && (
         <div className="rounded-pb border border-line p-3 text-xs leading-relaxed">
           <div className="mb-1 text-text-3">PRL will be sent to your bridge deposit address:</div>
-          <div className="break-all font-mono min-w-0 tabular-nums">{depositAddr}</div>
+          <div className="break-all font-mono min-w-0 tabular-nums">{shownDeposit}</div>
           <div className="mt-1 text-text-3">
             Verify this matches the address shown for your wallet on pearlbridge.xyz before sending.
           </div>
@@ -585,13 +595,18 @@ function WrapCard(props: {
       {err && <p className="text-sm text-danger leading-relaxed break-words">{err}</p>}
 
       {review ? (
-        <button
-          onClick={() => void wrap()}
-          disabled={!quote || !depositAddr || busy || status?.paused === true}
-          className="btn-primary min-w-11"
-        >
-          {busy ? "Sending…" : `Sign and wrap ${grainsToPrlString(review.frozen.composed.amountGrains)} PRL`}
-        </button>
+        <>
+          <button
+            onClick={() => void wrap()}
+            disabled={!wrapReviewSignable(review) || busy || status?.paused === true}
+            className="btn-primary min-w-11"
+          >
+            {busy ? "Sending…" : `Sign and wrap ${grainsToPrlString(review.frozen.composed.amountGrains)} PRL`}
+          </button>
+          <button type="button" onClick={() => setReview(null)} disabled={busy} className="btn-secondary min-h-11 self-start">
+            Change amount
+          </button>
+        </>
       ) : (
         <button
           onClick={() => void prepare()}
@@ -623,8 +638,11 @@ function UnwrapCard(props: {
   // anything above them (E_ETH_GAS_ABOVE_REVIEW).
   const [gas, setGas] = useState<UnwrapGasPreview | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"idle" | "approving" | "burning">("idle");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [busy, setBusy] = useState<UnwrapBusy>("idle");
   const quoteSeq = useRef(0);
+  // One unwrap at a time, claimed before its first await (bridge-flows.ts).
+  const unwrapFlow = useMemo(() => createUnwrapFlow(), []);
 
   useEffect(() => {
     setQuote(null);
@@ -632,6 +650,7 @@ function UnwrapCard(props: {
     setNeedsApprove(null);
     setGas(null);
     setErr(null);
+    setNotice(null);
     if (!amount || !ethAddress || !pearlAddress) return;
     let g: bigint;
     try {
@@ -691,119 +710,12 @@ function UnwrapCard(props: {
     return () => clearTimeout(t);
   }, [amount, ethAddress, pearlAddress, ethNetwork]);
 
-  const unwrap = async () => {
-    if (!quote || !gas || !ethAddress || !pearlAddress || grains === null || busy !== "idle") return;
-    setErr(null);
-    const burnGrains = grains; // user's amount, never the API echo (audit H1)
-    let approveTxHash: `0x${string}` | null = null;
-    try {
-      // Confirm-time re-quote: bind amount, re-check paused + pinned
-      // addresses, RE-READ allowance + balance just before signing
-      // (audit H1/M2/N2/C1/C6).
-      const [q2, allowance, balance] = await Promise.all([
-        fetchBurnQuote(burnGrains, pearlAddress),
-        readWprlAllowance(ethNetwork, ethAddress),
-        readWprlBalanceOf(ethNetwork, ethAddress),
-      ]);
-      const cfg = bridgeConfig(ethNetwork);
-      if (
-        q2.bridgeController.toLowerCase() !== cfg.bridgeController.toLowerCase() ||
-        q2.wprl.toLowerCase() !== cfg.wprl.toLowerCase()
-      ) {
-        throw new Error("E_BRIDGE_ADDRESS_MISMATCH — refusing to sign.");
-      }
-      if (q2.amount !== burnGrains) {
-        throw new Error("E_QUOTE_AMOUNT_MISMATCH — refusing to sign.");
-      }
-      if (q2.paused) {
-        throw new Error("The bridge just paused — try again once it resumes.");
-      }
-      // Balance precheck (audit C1): burning more WPRL than held would make
-      // requestBurn's burnFrom revert AFTER an approve's gas is spent.
-      if (balance < burnGrains) {
-        throw new Error("You don't have that much WPRL.");
-      }
-      // Daily burn cap (audit C6): burns have NO slow lane — over-cap the
-      // contract reverts outright, again after approve gas. Refuse here.
-      if (!q2.withinDailyCap) {
-        throw new Error("Amount exceeds today's remaining burn capacity — try a smaller amount.");
-      }
-      if (allowance < burnGrains) {
-        // The reviewed gas covered no approval: review again.
-        if (gas.approveWei === null) {
-          throw new Error("Your WPRL approval changed since the review — enter the amount again to review the gas.");
-        }
-        setBusy("approving");
-        // Exact-amount approval (not infinite): allowance dies with this
-        // burn, so a future contract compromise can't drain pre-approved
-        // WPRL.
-        const a = await approveWprlForBridge({
-          network: ethNetwork,
-          from: ethAddress,
-          amount: burnGrains,
-          tier: "normal",
-          ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: gas.approveWei },
-        });
-        approveTxHash = a.txHash;
-        // C1: WAIT for the approve to MINE before burning. requestBurn's gas
-        // estimate runs against latest state; if allowance is still 0 it
-        // reverts and the burn throws. Blocking here also prevents a retry
-        // from broadcasting a SECOND approve (the catch no longer claims
-        // "no re-approve needed" falsely).
-        const ok = await waitForEthSuccess(ethNetwork, a.txHash);
-        if (!ok) {
-          throw new Error(`Approve tx ${a.txHash} reverted — nothing burned. Try again.`);
-        }
-      }
-      setBusy("burning");
-      const r = await requestBurn({
-        network: ethNetwork,
-        from: ethAddress,
-        amount: burnGrains,
-        pearlAddress,
-        tier: "normal",
-        ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: gas.burnWei },
-      });
-      const now = Date.now();
-      try {
-        await onStarted({
-          id: r.txHash,
-          direction: "unwrap",
-          amountGrains: burnGrains.toString(),
-          netGrains: q2.net.toString(),
-          createdAt: now,
-          phase: "relay",
-          relayState: null,
-          confirmations: 0,
-          settledRef: null,
-          approveTxHash,
-          updatedAt: now,
-        });
-      } catch {
-        // Burn is on-chain; only the local record failed (audit H2/M3).
-        setErr(`Burn submitted, but failed to save tracking. SAVE THIS burn tx: ${r.txHash}`);
-        return;
-      }
-    } catch (e) {
-      // Distinguish post-broadcast failures so the user knows funds moved
-      // (audit M3): if the approve already landed and the burn threw, say
-      // so explicitly.
-      const raw = (e as Error).message;
-      const msg =
-        raw === "E_ETH_GAS_ABOVE_REVIEW"
-          ? "Ethereum gas rose above what you reviewed — nothing was signed for this step. Enter the amount again to review the new gas."
-          : raw;
-      if (approveTxHash) {
-        // The approve CONFIRMED (we waited on its receipt) before the burn
-        // step ran, so a retry re-reads the now-set allowance and skips
-        // straight to burning — no second approve (audit C1).
-        setErr(`Approve confirmed (${approveTxHash}) but burn failed: ${msg}. Re-try Unwrap — it will skip the approve.`);
-      } else {
-        setErr(msg);
-      }
-    } finally {
-      setBusy("idle");
-    }
+  const unwrap = () => {
+    if (!quote || !gas || !ethAddress || !pearlAddress || grains === null) return;
+    void unwrapFlow(
+      { network: ethNetwork, ethAddress, pearlAddress, amount: grains, gas },
+      { setBusy, setErr, setNotice, setGas, setNeedsApprove, onStarted },
+    );
   };
 
   return (
@@ -824,6 +736,7 @@ function UnwrapCard(props: {
           inputMode="decimal"
           placeholder="0.0"
           value={amount}
+          disabled={busy !== "idle"}
           onChange={(e) => setAmount(e.target.value)}
         />
       </label>
@@ -850,7 +763,7 @@ function UnwrapCard(props: {
               <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
                 Ethereum gas is paid in ETH.{" "}
                 {gas.burnWei === null
-                  ? "The burn's gas units can only be estimated once the approval confirms; its price per unit is capped as shown. "
+                  ? "The burn's gas can only be estimated once the approval confirms. Unwrap sends the approval first, then shows the burn's maximum gas; a second click signs the burn. "
                   : ""}
                 A step whose gas would exceed what is shown is refused before signing.
               </p>
@@ -864,17 +777,22 @@ function UnwrapCard(props: {
         </div>
       )}
 
+      {notice && <p role="status" className="text-sm text-warn leading-relaxed break-words">{notice}</p>}
       {err && <p className="text-sm text-danger leading-relaxed break-words">{err}</p>}
 
       <button
-        onClick={() => void unwrap()}
+        onClick={unwrap}
         disabled={!quote || !gas || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false}
         className="btn-primary min-w-11"
       >
-        {busy === "approving"
+        {busy === "checking"
+          ? "Checking…"
+          : busy === "approving"
           ? "Approving…"
           : busy === "burning"
           ? "Burning…"
+          : notice === BURN_REVIEW_NOTICE && quote
+          ? `Sign the burn of ${grainsToPrlString(quote.amount)} WPRL`
           : quote
           ? `Unwrap ${grainsToPrlString(quote.amount)} WPRL`
           : "Unwrap"}
