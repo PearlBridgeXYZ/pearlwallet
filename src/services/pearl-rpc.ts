@@ -530,6 +530,11 @@ export interface PrlUtxoSet {
    *  surfaces it so a "500k displayed but Send says insufficient" gap
    *  becomes legible instead of mysterious. */
   droppedNoScript: number;
+  /** True when the address has ANY transaction history (spent or not).
+   *  Address discovery uses this as "used" for the BIP-44 gap limit; an
+   *  address the node reports as "No information available" (-5) or with
+   *  an empty first page is unused. */
+  used: boolean;
 }
 
 export interface FetchUtxosOptions {
@@ -594,8 +599,13 @@ export async function fetchPrlUtxos(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("No information available about address")) {
-        if (pageCount === 0) rememberCompleteHistory(address, []);
-        return { utxos: [], degraded: false, droppedNoScript: 0 };
+        if (pageCount === 0) {
+          rememberCompleteHistory(address, []);
+          return { utxos: [], degraded: false, droppedNoScript: 0, used: false };
+        }
+        // -5 after earlier non-empty pages: history ended exactly at a
+        // page boundary. Keep what the walk already gathered.
+        break;
       }
       throw err;
     }
@@ -648,7 +658,7 @@ export async function fetchPrlUtxos(
       scriptHex: held.scriptHex,
     });
   }
-  return { utxos: out, degraded, droppedNoScript };
+  return { utxos: out, degraded, droppedNoScript, used: pageCount > 0 };
 }
 
 /**

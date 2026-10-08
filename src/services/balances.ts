@@ -16,6 +16,21 @@ import { mapWithConcurrency } from "./rpc-limiter";
 import { fetchPrlPriceUsd } from "./prices";
 import { ethClient } from "../chains/ethereum/rpc";
 import type { EthNetwork } from "../chains/ethereum/network";
+import type { HdBranch } from "../crypto/hd";
+import type { RpcPriority } from "./rpc-limiter";
+
+/** One wallet address and the HD (branch, index) that derives it under
+ *  the single-sig account m/86'/808276'/0'. */
+export interface WalletAddressRef {
+  address: string;
+  branch: HdBranch;
+  index: number;
+}
+
+/** Plain address lists are the external branch, index = position. */
+export function toAddressRefs(pool: readonly (string | WalletAddressRef)[]): WalletAddressRef[] {
+  return pool.map((a, i) => (typeof a === "string" ? { address: a, branch: 0, index: i } : { ...a }));
+}
 
 /**
  * Native ETH balance in wei. Used for the gas-balance pre-check on the
@@ -45,26 +60,33 @@ interface PoolWalkResult {
   // result. The total is still summed but under-reports — UI surfaces
   // a "partial" label so the user doesn't trust the visible balance.
   degraded: boolean;
-  /** UTXO list aggregated across the pool, tagged with poolIndex.
+  /** UTXO list aggregated across the pool, tagged with (branch, index).
    *  Surfaced so the wallet store can cache it; Send then opens the
    *  Preview instantly instead of repeating the pool walk. */
   utxos: PoolUtxoRecord[];
 }
 
+/** A spendable UTXO plus the HD (branch, index) of the key that controls
+ *  it. The signer re-derives that key and refuses unless its P2TR script
+ *  equals `scriptHex`. */
 export interface PoolUtxoRecord extends PrlUtxo {
-  poolIndex: number;
+  branch: HdBranch;
+  index: number;
 }
 
-/** Outcome of one pool address in a scan. */
+/** Outcome of one pool address in a scan. `used` = the address has any
+ *  transaction history (drives the discovery gap limit). */
 export type PoolAddressResult =
-  | { status: "ok"; grains: bigint; degraded: boolean; utxos: PrlUtxo[] }
+  | { status: "ok"; grains: bigint; degraded: boolean; utxos: PrlUtxo[]; used: boolean }
   | { status: "error"; error: string };
 
 export interface PrlPoolScanProgress {
   done: number;
   total: number;
-  /** Index of the address that just finished. */
+  /** Index (in scan order) of the address that just finished. */
   index: number;
+  /** The address that just finished and its (branch, index). */
+  ref: WalletAddressRef;
   result: PoolAddressResult;
 }
 
@@ -73,7 +95,10 @@ export interface PrlPoolScanProgress {
  * scans — display-side keep-last-good lives in the UI hook, not here.
  */
 export interface PrlPoolScan {
+  /** Addresses in scan order (parallel to `refs` and `perAddress`). */
   pool: string[];
+  /** (branch, index) of each scanned address. */
+  refs: WalletAddressRef[];
   perAddress: PoolAddressResult[];
   /** Sum over addresses that succeeded in THIS scan. */
   grains: bigint;
@@ -95,42 +120,71 @@ export interface ScanPrlPoolOptions {
   signal?: AbortSignal;
   /** Override parallelism (default: pearlRpcTuning().scanConcurrency). */
   concurrency?: number;
+  /** Per-address UTXO walk depth (see fetchPrlUtxos). */
+  maxPages?: number;
+  /** Token-bucket lane (default "high"). */
+  priority?: RpcPriority;
 }
 
 /**
- * Walks every pool address (bounded concurrency, shared rate limiter) and
- * reports per-address progress as each one finishes. Never throws for
- * per-address RPC failures — they are reported in `perAddress`/`source`.
+ * Walks each address once (bounded concurrency, shared rate limiter) and
+ * reports progress. Building block for scanPrlPool and address discovery.
+ * `doneBase`/`totalOf` let a multi-round caller keep one progress counter.
  */
-export async function scanPrlPool(pool: string[], opts: ScanPrlPoolOptions = {}): Promise<PrlPoolScan> {
-  const startedAt = Date.now();
-  let done = 0;
-  const perAddress = await mapWithConcurrency(
-    pool,
+export async function walkPoolAddresses(
+  refs: readonly WalletAddressRef[],
+  opts: ScanPrlPoolOptions,
+  progress: { doneBase: number; indexBase: number; total: () => number } = {
+    doneBase: 0,
+    indexBase: 0,
+    total: () => refs.length,
+  },
+): Promise<PoolAddressResult[]> {
+  let done = progress.doneBase;
+  return mapWithConcurrency(
+    refs,
     opts.concurrency ?? pearlRpcTuning().scanConcurrency,
-    async (addr, index): Promise<PoolAddressResult> => {
+    async (ref, i): Promise<PoolAddressResult> => {
       let result: PoolAddressResult;
       try {
         // v0.3.1: single unified walk. Same call Send uses — balance and
         // spendable can never diverge for any reason other than a UTXO
         // being spent between the two walks.
-        const r = await fetchPrlUtxos(addr, { signal: opts.signal, priority: "high" });
+        const r = await fetchPrlUtxos(ref.address, {
+          signal: opts.signal,
+          priority: opts.priority ?? "high",
+          maxPages: opts.maxPages,
+        });
         let g = 0n;
         for (const u of r.utxos) g += u.valueGrains;
-        result = { status: "ok", grains: g, degraded: r.degraded || r.droppedNoScript > 0, utxos: r.utxos };
+        result = {
+          status: "ok",
+          grains: g,
+          degraded: r.degraded || r.droppedNoScript > 0,
+          utxos: r.utxos,
+          used: r.used,
+        };
       } catch (err) {
         if (opts.signal?.aborted) throw err;
         result = { status: "error", error: err instanceof Error ? err.message : String(err) };
       }
       done++;
-      opts.onProgress?.({ done, total: pool.length, index, result });
+      opts.onProgress?.({ done, total: progress.total(), index: progress.indexBase + i, ref, result });
       return result;
     },
   );
+}
 
+/** Aggregates per-address results into one scan record. */
+export function summarizePoolScan(
+  refs: readonly WalletAddressRef[],
+  perAddress: PoolAddressResult[],
+  startedAt: number,
+  extraDegraded = false,
+): PrlPoolScan {
   let grains = 0n;
   let failures = 0;
-  let degraded = false;
+  let degraded = extraDegraded;
   const utxos: PoolUtxoRecord[] = [];
   perAddress.forEach((r, i) => {
     if (r.status === "error") {
@@ -139,15 +193,16 @@ export async function scanPrlPool(pool: string[], opts: ScanPrlPoolOptions = {})
     }
     grains += r.grains;
     if (r.degraded) degraded = true;
-    for (const u of r.utxos) utxos.push({ ...u, poolIndex: i });
+    const ref = refs[i]!;
+    for (const u of r.utxos) utxos.push({ ...u, branch: ref.branch, index: ref.index });
   });
   // If MORE than half the pool failed we treat the whole walk as a
   // bust — the visible balance would be too suspect to show.
   const source: PrlPoolScan["source"] =
-    failures > pool.length / 2 ? "error" : failures > 0 || degraded ? "partial" : "live";
-  const finishedAt = Date.now();
+    failures > refs.length / 2 ? "error" : failures > 0 || degraded ? "partial" : "live";
   return {
-    pool: [...pool],
+    pool: refs.map((r) => r.address),
+    refs: refs.map((r) => ({ ...r })),
     perAddress,
     grains: source === "error" ? 0n : grains,
     failures,
@@ -157,8 +212,26 @@ export async function scanPrlPool(pool: string[], opts: ScanPrlPoolOptions = {})
     // at most this old), so Send's freshness window is never overstated.
     spendable: source === "live" ? { utxos, fetchedAt: startedAt } : null,
     startedAt,
-    finishedAt,
+    finishedAt: Date.now(),
   };
+}
+
+/**
+ * Walks every pool address (bounded concurrency, shared rate limiter) and
+ * reports per-address progress as each one finishes. Never throws for
+ * per-address RPC failures — they are reported in `perAddress`/`source`.
+ * Plain strings are external-branch addresses at index = position; pass
+ * WalletAddressRefs to scan other branches. No gap-limit discovery here —
+ * see services/discovery.ts (scanPrlWallet).
+ */
+export async function scanPrlPool(
+  pool: readonly (string | WalletAddressRef)[],
+  opts: ScanPrlPoolOptions = {},
+): Promise<PrlPoolScan> {
+  const startedAt = Date.now();
+  const refs = toAddressRefs(pool);
+  const perAddress = await walkPoolAddresses(refs, opts);
+  return summarizePoolScan(refs, perAddress, startedAt);
 }
 
 async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
@@ -167,7 +240,8 @@ async function fetchPoolBalances(pool: string[]): Promise<PoolWalkResult> {
   const grains = scan.perAddress.map((r) => (r.status === "ok" ? r.grains : 0n));
   const utxos: PoolUtxoRecord[] = [];
   scan.perAddress.forEach((r, i) => {
-    if (r.status === "ok") for (const u of r.utxos) utxos.push({ ...u, poolIndex: i });
+    const ref = scan.refs[i]!;
+    if (r.status === "ok") for (const u of r.utxos) utxos.push({ ...u, branch: ref.branch, index: ref.index });
   });
   return { grains, failures: scan.failures, degraded: scan.degraded, utxos };
 }

@@ -26,6 +26,12 @@ export interface KeystoreRecord {
     // External receive pool. Optional for forward-compat with v0.1.2 records
     // saved before multi-address support; missing → re-derived on next unlock.
     pearlAddressPool?: string[];
+    // v0.7: internal/change branch (m/86'/808276'/0'/1/i), ordered by
+    // index. Optional + non-indexed: records saved before v0.7 lack it and
+    // get it on the next unlock (no Dexie version bump, no data loss).
+    // Both pools may grow past 20 as address discovery finds used
+    // addresses; unlock re-derives exactly the persisted counts.
+    pearlChangePool?: string[];
     ethAddress: string;
     pearlNetwork: PearlNetwork;
     ethNetwork: EthNetwork;

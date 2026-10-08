@@ -107,6 +107,9 @@ interface ComposeTabProps {
 }
 
 function ComposeTab({ pool, network }: ComposeTabProps) {
+  const changePool = useWallet((s) => s.addresses?.pearlChange);
+  const deriveMore = useWallet((s) => s.derivePearlAddresses);
+  const onDiscovered = useWallet((s) => s.extendPearlAddresses);
   const [mode, setMode] = useState<"live" | "manual">("live");
   const [destination, setDestination] = useState("");
   const [amountPrl, setAmountPrl] = useState("");
@@ -149,6 +152,9 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
       const composed = await composePearlSend({
         network,
         pool,
+        changePool,
+        deriveMore,
+        onDiscovered,
         destination: destination.trim(),
         amountGrains,
         includeTip: false,
@@ -162,7 +168,8 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
           vout: u.vout,
           valueGrains: u.valueGrains.toString(),
           scriptHex: u.scriptHex,
-          poolIndex: u.poolIndex,
+          poolIndex: u.index,
+          ...(u.branch === 1 ? { branch: 1 as const } : {}),
         })),
         outputs: composed.outputs.map((o) => ({
           address: o.address,
@@ -212,6 +219,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         valueGrains: string;
         scriptHex: string;
         poolIndex: number;
+        branch?: 0 | 1;
       }> = [];
       for (const u of inputs) {
         let scriptHex = u.scriptHex;
@@ -234,6 +242,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
           valueGrains: u.valueGrains,
           scriptHex,
           poolIndex: u.poolIndex,
+          ...(u.branch === 1 ? { branch: 1 as const } : {}),
         });
       }
       const totalIn = sumManualUtxoValue(inputs);
@@ -446,8 +455,18 @@ function SignTab({ network, pool }: SignTabProps) {
       if (status !== "unlocked") {
         throw new Error("Wallet must be unlocked to sign");
       }
+      // Payload poolIndex is the HD index within `branch` (absent = 0).
+      // The worker derives that key and refuses any input whose script
+      // it does not reproduce (E_PEARL_FOREIGN_INPUT).
       const req: PearlTxRequest = {
-        utxos: decoded.utxos,
+        utxos: decoded.utxos.map((u) => ({
+          txid: u.txid,
+          vout: u.vout,
+          valueGrains: u.valueGrains,
+          scriptHex: u.scriptHex,
+          branch: u.branch ?? 0,
+          index: u.poolIndex,
+        })),
         outputs: decoded.outputs,
         network,
       };
@@ -521,7 +540,7 @@ function SignTab({ network, pool }: SignTabProps) {
               <ul className="ml-4 list-disc">
                 {decoded.utxos.map((u, i) => (
                   <li key={i} className="font-mono">
-                    {u.txid.slice(0, 12)}…:{u.vout} · {grainsToPrl(u.valueGrains)} PRL · pool[{u.poolIndex}]
+                    {u.txid.slice(0, 12)}…:{u.vout} · {grainsToPrl(u.valueGrains)} PRL · {u.branch === 1 ? "change" : "pool"}[{u.poolIndex}]
                   </li>
                 ))}
               </ul>

@@ -3,13 +3,11 @@
 // and the sentry RPC.
 
 import {
-  fetchPrlUtxos,
   broadcastPearlTx,
-  pearlRpcTuning,
   MAX_UTXO_WALK_PAGES_HARD,
-  type PrlUtxo,
 } from "./pearl-rpc";
-import { mapWithConcurrency } from "./rpc-limiter";
+import { scanPrlPool, type PoolUtxoRecord, type PrlPoolScan } from "./balances";
+import { scanPrlWallet, type DeriveMoreAddresses } from "./discovery";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
 import type { PearlNetwork } from "../chains/pearl/network";
 import { cryptoWorker } from "../crypto/worker-client";
@@ -34,7 +32,8 @@ const FIXED_OVERHEAD_VBYTES = 11n;
 const DUST_LIMIT_GRAINS = 546n;
 
 export interface ComposedPearlTx {
-  utxos: { txid: string; vout: number; valueGrains: bigint; scriptHex: string; poolIndex: number }[];
+  /** Picked inputs; (branch, index) names the HD key that controls each. */
+  utxos: { txid: string; vout: number; valueGrains: bigint; scriptHex: string; branch: 0 | 1; index: number }[];
   outputs: { address: string; amountGrains: bigint }[];
   feeGrains: bigint;
   tipGrains: bigint;
@@ -51,10 +50,19 @@ export interface ComposedPearlTx {
 
 export interface ComposeOptions {
   network: PearlNetwork;
-  pool: string[]; // receive-pool addresses, ordered by index
+  /** External (receive) branch addresses, ordered by index. Change is
+   *  paid back to pool[0] (external index 0). */
+  pool: string[];
+  /** Internal (change) branch addresses, ordered by index. When given,
+   *  the live walk covers both branches with gap-limit discovery
+   *  (services/discovery.ts); when omitted, only `pool` is walked. */
+  changePool?: string[];
+  /** Derives addresses past the known set during the live walk. */
+  deriveMore?: DeriveMoreAddresses;
+  /** Receives the discovered address set when the live walk extended it. */
+  onDiscovered?: (set: { external: string[]; internal: string[] }) => unknown;
   destination: string;
   amountGrains: bigint;
-  /** Change is paid back to the pool's primary address (index 0). */
   feerateSatPerVbyte?: bigint;
   /** When true, include the v0.1.4 tip output to the PearlBridge dev
    *  team address. UI exposes a per-tx toggle bound to a global pref. */
@@ -79,41 +87,49 @@ function estimateFee(numInputs: number, numOutputs: number, feerate: bigint): bi
   return vbytes * feerate;
 }
 
-export interface PoolUtxo extends PrlUtxo { poolIndex: number }
+export type PoolUtxo = PoolUtxoRecord;
 
 async function listPoolUtxos(
-  pool: string[],
-  opts: { maxPages?: number } = {},
+  opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages">,
 ): Promise<{ utxos: PoolUtxo[]; degraded: boolean }> {
-  let degraded = false;
-  let failures = 0;
+  // v0.7: pacing comes from the shared Pearl RPC token bucket; a few
+  // addresses walk in parallel. With a change branch supplied the walk
+  // is the same gap-limit discovery scan the dashboard runs.
+  let scan: PrlPoolScan;
+  if (opts.changePool) {
+    const w = await scanPrlWallet(
+      { external: opts.pool, internal: opts.changePool },
+      { maxPages: opts.maxPages, deriveMore: opts.deriveMore },
+    );
+    if (
+      opts.onDiscovered &&
+      (w.discovered.external.length > opts.pool.length || w.discovered.internal.length > opts.changePool.length)
+    ) {
+      try {
+        await opts.onDiscovered(w.discovered);
+      } catch {
+        /* persistence is best-effort; the scan result stands */
+      }
+    }
+    scan = w;
+  } else {
+    scan = await scanPrlPool(opts.pool, { maxPages: opts.maxPages });
+  }
+  // Mirror balances.ts tolerance — a single pool address being
+  // unavailable shouldn't deny the user spending from the rest; the
+  // result is flagged degraded so a shortfall offers a deeper retry.
   const out: PoolUtxo[] = [];
-  // v0.7: pacing comes from the shared Pearl RPC token bucket (replaces
-  // the old fixed 300 ms gap); a few addresses walk in parallel. Results
-  // are collected per index so poolIndex tagging is order-independent.
-  const perAddr = await mapWithConcurrency(pool, pearlRpcTuning().scanConcurrency, async (addr) => {
-    try {
-      return await fetchPrlUtxos(addr, { maxPages: opts.maxPages });
-    } catch {
-      return null;
-    }
+  scan.perAddress.forEach((r, i) => {
+    if (r.status !== "ok") return;
+    const ref = scan.refs[i]!;
+    for (const u of r.utxos) out.push({ ...u, branch: ref.branch, index: ref.index });
   });
-  perAddr.forEach((r, i) => {
-    if (!r) {
-      // Mirror balances.ts tolerance — a single pool address being
-      // unavailable shouldn't deny the user spending from the rest.
-      degraded = true;
-      failures++;
-      return;
-    }
-    if (r.degraded) degraded = true;
-    for (const u of r.utxos) out.push({ ...u, poolIndex: i });
-  });
+  const degraded = scan.degraded || scan.failures > 0;
   // Nothing found AND some addresses could not be read: that is an RPC
   // problem, not an empty wallet. Say so instead of E_NO_UTXOS.
-  if (out.length === 0 && failures > 0) {
+  if (out.length === 0 && scan.failures > 0) {
     throw new Error(
-      `E_UTXO_SCAN_INCOMPLETE: ${failures} of ${pool.length} addresses could not be read (Pearl RPC busy) — try again`,
+      `E_UTXO_SCAN_INCOMPLETE: ${scan.failures} of ${scan.pool.length} addresses could not be read (Pearl RPC busy) — try again`,
     );
   }
   // Largest-first selection is the simplest, lowest-input-count
@@ -190,7 +206,7 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
       a.valueGrains > b.valueGrains ? -1 : a.valueGrains < b.valueGrains ? 1 : 0,
     );
   } else {
-    const live = await listPoolUtxos(opts.pool, { maxPages: opts.maxPages });
+    const live = await listPoolUtxos(opts);
     avail = live.utxos;
     degraded = live.degraded;
   }
@@ -238,11 +254,20 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
     outputs.push({ address: tipAddressFor(opts.network), amountGrains: tipGrains });
   }
   if (change > 0n) {
+    // Change stays on external index 0 (unchanged behaviour); paying
+    // change to the internal branch is a separate, deliberate step.
     outputs.push({ address: opts.pool[0]!, amountGrains: change });
   }
 
   return {
-    utxos: picked,
+    utxos: picked.map((u) => ({
+      txid: u.txid,
+      vout: u.vout,
+      valueGrains: u.valueGrains,
+      scriptHex: u.scriptHex,
+      branch: u.branch,
+      index: u.index,
+    })),
     outputs,
     feeGrains: fee,
     tipGrains,
@@ -304,7 +329,8 @@ async function signAndBroadcast(
       vout: u.vout,
       valueGrains: u.valueGrains.toString(),
       scriptHex: u.scriptHex,
-      poolIndex: u.poolIndex,
+      branch: u.branch,
+      index: u.index,
     })),
     outputs: composed.outputs.map((o) => ({
       address: o.address,

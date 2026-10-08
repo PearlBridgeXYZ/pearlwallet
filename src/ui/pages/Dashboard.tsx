@@ -20,7 +20,18 @@ export default function Dashboard() {
   // Each asset shows as soon as its own source answers; the total needs
   // only PRL + price and is null (never $0.00) while either is unknown.
   const pool = addresses ? addresses.pearlPool ?? [addresses.pearl] : [];
-  const b = useWalletBalances({ pool, ethAddr: addresses?.eth, ethEnabled });
+  // Both single-sig branches + gap-limit discovery (services/discovery.ts);
+  // newly found addresses are persisted to the keystore record.
+  const derivePearlAddresses = useWallet((s) => s.derivePearlAddresses);
+  const extendPearlAddresses = useWallet((s) => s.extendPearlAddresses);
+  const b = useWalletBalances({
+    pool,
+    changePool: addresses?.pearlChange,
+    deriveMore: derivePearlAddresses,
+    onDiscovered: extendPearlAddresses,
+    ethAddr: addresses?.eth,
+    ethEnabled,
+  });
   const price = b.price.value;
   const usdOf = (v: bigint | null) =>
     v !== null && price !== null ? `≈ ${formatUSD((price * Number(v)) / 1e8)}` : "";

@@ -23,17 +23,23 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
   const addresses = useWallet((s) => s.addresses);
   const ethNetwork = useWallet((s) => s.ethNetwork);
 
+  // Both single-sig branches: without the change branch a send would be
+  // shown as spending its change too.
+  const pearlAll = addresses
+    ? [...(addresses.pearlPool ?? [addresses.pearl]), ...(addresses.pearlChange ?? [])]
+    : [];
+
   const activityQ = useQuery({
     queryKey: [
       "activity",
-      addresses?.pearlPool?.join(",") ?? addresses?.pearl,
+      pearlAll.join(","),
       addresses?.eth,
       ethNetwork,
       limit,
     ],
     queryFn: () =>
       fetchActivity(
-        addresses!.pearlPool ?? [addresses!.pearl],
+        pearlAll,
         addresses!.eth as `0x${string}`,
         ethNetwork,
         limit,

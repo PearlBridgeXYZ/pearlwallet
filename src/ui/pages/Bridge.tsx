@@ -341,6 +341,10 @@ function WrapCard(props: {
   onStarted: (rec: BridgeCrossingRecord) => Promise<void>;
 }) {
   const { status, ethAddress, pool, pearlNetwork, onStarted } = props;
+  // Spend from both single-sig branches (change lives on branch 1).
+  const changePool = useWallet((s) => s.addresses?.pearlChange);
+  const deriveMore = useWallet((s) => s.derivePearlAddresses);
+  const onDiscovered = useWallet((s) => s.extendPearlAddresses);
   const [amount, setAmount] = useState("");
   // The user's locally-parsed amount — the ONLY trusted source of how much
   // PRL to send. The API quote is advisory (fees/lane); we never send its
@@ -417,6 +421,9 @@ function WrapCard(props: {
       const res = await sendPearl({
         network: pearlNetwork,
         pool,
+        changePool,
+        deriveMore,
+        onDiscovered,
         destination: depositAddr,
         amountGrains: sendGrains, // user's amount, never the API echo
         includeTip: false,

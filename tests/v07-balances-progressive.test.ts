@@ -76,7 +76,8 @@ describe("scanPrlPool", () => {
     expect(scan.source).toBe("live");
     expect(scan.grains).toBe(600_000_000n);
     expect(scan.spendable).not.toBeNull();
-    expect(scan.spendable!.utxos.map((u) => u.poolIndex).sort()).toEqual([0, 1, 2]);
+    expect(scan.spendable!.utxos.map((u) => u.index).sort()).toEqual([0, 1, 2]);
+    expect(scan.spendable!.utxos.every((u) => u.branch === 0)).toBe(true);
     expect(scan.spendable!.fetchedAt).toBe(scan.startedAt);
   });
 

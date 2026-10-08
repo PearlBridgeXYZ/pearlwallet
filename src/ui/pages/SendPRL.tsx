@@ -77,6 +77,9 @@ export default function SendPRL() {
   const queryClient = useQueryClient();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
   const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
+  const changePool = useWallet((s) => s.addresses?.pearlChange);
+  const deriveMore = useWallet((s) => s.derivePearlAddresses);
+  const onDiscovered = useWallet((s) => s.extendPearlAddresses);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
@@ -128,6 +131,9 @@ export default function SendPRL() {
         ? await composePearlSendDeepRetry({
             network: pearlNetwork,
             pool,
+            changePool,
+            deriveMore,
+            onDiscovered,
             destination: validated!.dest,
             amountGrains: validated!.grains,
             feerateSatPerVbyte: FEERATE_BY_TIER[tier],
@@ -136,6 +142,9 @@ export default function SendPRL() {
         : await composePearlSend({
             network: pearlNetwork,
             pool,
+            changePool,
+            deriveMore,
+            onDiscovered,
             destination: validated!.dest,
             amountGrains: validated!.grains,
             feerateSatPerVbyte: FEERATE_BY_TIER[tier],

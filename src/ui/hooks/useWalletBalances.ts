@@ -3,8 +3,9 @@
 // Replaces the single serial `fetchBalances` query with four independent
 // queries so each asset renders as soon as its own source answers:
 //
-//   • PRL   — pool scan (services/balances.ts scanPrlPool), with
-//             per-address progress ("Scanning 7/20")
+//   • PRL   — wallet scan over the external AND change branches with
+//             gap-limit address discovery (services/discovery.ts
+//             scanPrlWallet), with per-address progress ("Scanning 7/40")
 //   • WPRL  — ERC-20 balance on Ethereum
 //   • ETH   — native gas balance on Ethereum
 //   • price — /api/prl-price
@@ -32,7 +33,7 @@
 // that single scan was complete. Nothing in this module writes merged,
 // partial or remembered data anywhere Send reads from.
 
-import { useSyncExternalStore } from "react";
+import { useRef, useSyncExternalStore } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import {
   scanPrlPool,
@@ -42,6 +43,7 @@ import {
   type PrlPoolScanProgress,
 } from "../../services/balances";
 import { fetchPrlPriceUsd } from "../../services/prices";
+import { scanPrlWallet, type DeriveMoreAddresses } from "../../services/discovery";
 
 export type AssetStatus = "loading" | "ok" | "partial" | "error";
 
@@ -77,13 +79,16 @@ export interface WalletBalancesView {
 
 // ─── Query keys / cadence ────────────────────────────────────────────────
 
-/** React-query key of the PRL pool scan. SendPRL reads `spendable` from
- *  this cache entry, so both sides must build the key with this helper. */
+/** React-query key of the PRL wallet scan. SendPRL reads `spendable` from
+ *  this cache entry, so both sides must build the key with this helper.
+ *  v0.7: keyed by wallet identity (external index 0), not the whole list —
+ *  discovery grows the list mid-session and must not restart the scan.
+ *  The scan itself records which addresses it covered (`scan.refs`). */
 export function prlScanQueryKey(pool: readonly string[]): readonly [string, string] {
-  return ["prl-pool-scan", pool.join(",")] as const;
+  return ["prl-pool-scan", pool[0] ?? ""] as const;
 }
 
-/** A full scan is ~20+ paced requests; refetch every minute. */
+/** A full scan is ~40+ paced requests; refetch every minute. */
 export const PRL_SCAN_REFETCH_MS = 60_000;
 export const ETH_REFETCH_MS = 30_000;
 export const PRICE_REFETCH_MS = 60_000;
@@ -229,31 +234,68 @@ function errMsg(e: unknown): string {
 // ─── Hook ────────────────────────────────────────────────────────────────
 
 export interface UseWalletBalancesArgs {
+  /** External (receive) branch addresses, ordered by index. */
   pool: readonly string[];
+  /** Internal (change) branch addresses. When given, the scan covers both
+   *  branches with gap-limit discovery. */
+  changePool?: readonly string[];
+  /** Derives addresses past the known set (discovery). */
+  deriveMore?: DeriveMoreAddresses;
+  /** Persists a discovered (extended) address set. */
+  onDiscovered?: (set: { external: string[]; internal: string[] }) => unknown;
   ethAddr?: string;
   ethEnabled: boolean;
 }
 
-export function useWalletBalances({ pool, ethAddr, ethEnabled }: UseWalletBalancesArgs): WalletBalancesView {
-  const poolKey = pool.join(",");
+export function useWalletBalances({
+  pool,
+  changePool,
+  deriveMore,
+  onDiscovered,
+  ethAddr,
+  ethEnabled,
+}: UseWalletBalancesArgs): WalletBalancesView {
   const key = prlScanQueryKey(pool);
+  const poolKey = key[1];
+  // The query is keyed by wallet identity; the scan reads the CURRENT
+  // address lists and callbacks at run time so a list extended by
+  // discovery is picked up by the next refetch without restarting this one.
+  const latest = useRef({ pool, changePool, deriveMore, onDiscovered });
+  latest.current = { pool, changePool, deriveMore, onDiscovered };
 
   const prlQ = useQuery({
     queryKey: key,
     queryFn: async ({ signal }) => {
-      const list = poolKey ? poolKey.split(",") : [];
-      setProgress(poolKey, { done: 0, total: list.length, running: true });
+      const cur = latest.current;
+      const ext = [...cur.pool];
+      const int = cur.changePool ? [...cur.changePool] : null;
+      setProgress(poolKey, { done: 0, total: ext.length + (int?.length ?? 0), running: true });
+      let lastTotal = ext.length + (int?.length ?? 0);
+      const onProgress = (p: PrlPoolScanProgress) => {
+        rememberAddressResult(p.ref.address, p, Date.now());
+        lastTotal = p.total;
+        setProgress(poolKey, { done: p.done, total: p.total, running: true });
+      };
       try {
-        return await scanPrlPool(list, {
-          signal,
-          onProgress: (p) => {
-            rememberAddressResult(list[p.index]!, p, Date.now());
-            setProgress(poolKey, { done: p.done, total: p.total, running: true });
-          },
-        });
+        if (!int) return await scanPrlPool(ext, { signal, onProgress });
+        const scan = await scanPrlWallet(
+          { external: ext, internal: int },
+          { signal, onProgress, deriveMore: cur.deriveMore },
+        );
+        if (
+          cur.onDiscovered &&
+          (scan.discovered.external.length > ext.length || scan.discovered.internal.length > int.length)
+        ) {
+          try {
+            await cur.onDiscovered(scan.discovered);
+          } catch {
+            /* best-effort persistence; the scan result stands */
+          }
+        }
+        return scan;
       } finally {
-        const cur = progressByPool.get(poolKey);
-        setProgress(poolKey, { done: cur?.done ?? 0, total: list.length, running: false });
+        const p = progressByPool.get(poolKey);
+        setProgress(poolKey, { done: p?.done ?? 0, total: lastTotal, running: false });
       }
     },
     enabled: pool.length > 0,
