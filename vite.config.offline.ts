@@ -67,6 +67,11 @@ export default defineConfig({
     },
   },
   worker: {
-    format: "es",
+    // Classic (iife) worker, not ES module. The inline worker is started from
+    // a blob: URL; under file:// the document origin is opaque ("null") and
+    // Chromium refuses to load a *module* worker from a blob:null URL (worker
+    // error event, no key operations possible). A classic worker from the same
+    // blob loads fine. The web build (vite.config.ts) keeps its own setting.
+    format: "iife",
   },
 });

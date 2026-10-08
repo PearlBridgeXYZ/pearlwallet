@@ -53,3 +53,15 @@ describe("no root-absolute asset paths in the bundle source", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("offline inline worker loads under file://", () => {
+  // Under file:// the document origin is opaque; Chromium rejects a *module*
+  // worker started from a blob:null URL (worker error event, so no key
+  // generation, import or signing). A classic worker from the same blob
+  // loads. The offline config must therefore build the worker as iife.
+  it("vite.config.offline.ts builds the worker in classic (iife) format", () => {
+    const cfg = readFileSync(join(ROOT, "vite.config.offline.ts"), "utf8");
+    expect(cfg).toMatch(/worker:\s*\{[\s\S]*?format:\s*"iife"/);
+    expect(cfg).not.toMatch(/worker:\s*\{[^}]*format:\s*"es"/);
+  });
+});
