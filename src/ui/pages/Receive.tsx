@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
+import { btxSurfaceOn } from "../../lib/features";
 import { dataUrl } from "../../lib/qr";
 import { useQuery } from "@tanstack/react-query";
 import { cryptoWorker } from "../../crypto/worker-client";
@@ -11,7 +12,7 @@ type Tab = "prl" | "wprl" | "btx";
 export default function Receive() {
   const addresses = useWallet((s) => s.addresses);
   const ethEnabled = useUI((s) => s.ethEnabled);
-  const btxEnabled = useUI((s) => s.btxEnabled);
+  const btxOn = btxSurfaceOn(useUI((s) => s.btxEnabled));
   const [tab, setTab] = useState<Tab>("prl");
 
   // BTX receive address — derived in the crypto worker (ML-DSA/SLH-DSA keygen,
@@ -20,7 +21,7 @@ export default function Receive() {
     queryKey: ["btxAddress"],
     queryFn: () => cryptoWorker.call<"deriveBtx", { btx: string }>("deriveBtx", {}),
     staleTime: Infinity,
-    enabled: btxEnabled,
+    enabled: btxOn,
   });
   const btxAddress = btxAddrQ.data?.btx;
 
@@ -28,8 +29,8 @@ export default function Receive() {
   // so we don't render a tab that's hidden anyway.
   useEffect(() => {
     if (!ethEnabled && tab === "wprl") setTab("prl");
-    if (!btxEnabled && tab === "btx") setTab("prl");
-  }, [ethEnabled, btxEnabled, tab]);
+    if (!btxOn && tab === "btx") setTab("prl");
+  }, [ethEnabled, btxOn, tab]);
   const [qr, setQr] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [showAll, setShowAll] = useState(false);
@@ -101,7 +102,7 @@ export default function Receive() {
       <p className="mb-6 text-sm leading-7 text-text-2">
         Share your address or QR code with the sender. Check the asset and network before sending.
       </p>
-      {(ethEnabled || btxEnabled) && (
+      {(ethEnabled || btxOn) && (
         <div className="mb-6 inline-flex max-w-full flex-wrap gap-1 rounded-pb border border-line bg-surface-2 p-1 text-sm">
           <button
             type="button"
@@ -129,7 +130,7 @@ export default function Receive() {
               WPRL
             </button>
           )}
-          {btxEnabled && (
+          {btxOn && (
             <button
               type="button"
               onClick={() => setTab("btx")}
@@ -209,7 +210,15 @@ export default function Receive() {
       ) : null}
 
       <p className="mt-6 border-l-2 border-warn-line bg-warn-bg p-4 text-sm leading-6 text-warn">
-        Only send {tab.toUpperCase()} to this address. {tab === "wprl" ? "This is an Ethereum address — sending other ERC-20s to it works (you'll see them in a block explorer), but the wallet only tracks WPRL." : tab === "btx" ? "This is a post-quantum P2MR address (btx1z…) on the BTX L1 — send only native BTX. WBTX (wrapped BTX) lives on Ethereum; do not send it here." : "Pearl L1 only — do not send other assets."}
+        Only send {tab.toUpperCase()} to this address.{" "}
+        {tab === "wprl"
+          ? "This is an Ethereum address — sending other ERC-20s to it works (you'll see them in a block explorer), but the wallet only tracks WPRL."
+          : tab === "prl"
+          ? "Pearl L1 only — do not send other assets."
+          : null}
+        {btxOn && tab === "btx" && (
+          <>This is a post-quantum P2MR address (btx1z…) on the BTX L1 — send only native BTX. WBTX (wrapped BTX) lives on Ethereum; do not send it here.</>
+        )}
       </p>
     </Page>
   );

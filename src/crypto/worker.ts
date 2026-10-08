@@ -19,6 +19,7 @@ import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
 import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm, clearBtxAccountSecrets } from "../chains/btx/derive";
 import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
+import { assertBtxUiEnabled } from "../lib/features";
 import { vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
@@ -439,6 +440,9 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
     case "deriveBtx": {
       // BTX (post-quantum) receive address at index 0. ML-DSA + SLH-DSA keygen
       // is ~1.8s, so derive once and cache on the session.
+      // Refused outright while the BTX front end is switched off
+      // (lib/features.ts): no screen should ask, so a request is a bug.
+      assertBtxUiEnabled();
       if (!session) throw new Error("E_LOCKED");
       if (!session.btxAddress) {
         session.btxAddress = deriveBtxAddressFromSeed(session.seed, 0);
@@ -450,6 +454,7 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // Derive the index-0 account WITH its ML-DSA secret, sign every input,
       // and return the signed tx. The secret is derived on demand and not
       // retained past this call (the session keeps only the seed).
+      assertBtxUiEnabled(); // E_BTX_DISABLED while the BTX front end is off
       if (!session) throw new Error("E_LOCKED");
       const acct = deriveBtxAccount(btxMasterIkm(session.seed), 0, 0, true);
       // Zero the ML-DSA secret on EVERY exit — success, a validation throw

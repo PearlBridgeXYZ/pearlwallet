@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
@@ -8,6 +8,8 @@ import { prepareBtxSpend, broadcastBtxTx, assertValidBtxRecipient, type BtxSpend
 import { isValidBtxAddress } from "../../chains/btx/address";
 import { btxTxExplorerUrl, BTX_SEND_ENABLED } from "../../chains/btx/network";
 import { formatGrains, parsePRL } from "../../lib/format";
+import { btxSurfaceOn } from "../../lib/features";
+import { useUI } from "../../state/ui-store";
 
 type Stage = "form" | "preview" | "sending" | "done";
 
@@ -19,11 +21,19 @@ export default function SendBTX() {
   const [plan, setPlan] = useState<BtxSpendPlan | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const btxOn = btxSurfaceOn(useUI((s) => s.btxEnabled));
+
+  // Belt-and-braces with App's route element + bounce: never derive BTX keys
+  // or show this page while the BTX surface is off.
+  useEffect(() => {
+    if (!btxOn) navigate("/dashboard", { replace: true });
+  }, [btxOn, navigate]);
 
   const addrQ = useQuery({
     queryKey: ["btxAddress"],
     queryFn: () => cryptoWorker.call<"deriveBtx", { btx: string }>("deriveBtx", {}),
     staleTime: Infinity,
+    enabled: btxOn,
   });
   const from = addrQ.data?.btx;
   const balQ = useQuery({
@@ -71,6 +81,8 @@ export default function SendBTX() {
       setStage("preview");
     }
   }
+
+  if (!btxOn) return null;
 
   if (!BTX_SEND_ENABLED) {
     return (

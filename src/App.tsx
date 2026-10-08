@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useNavigate, useLocation } from "react-router-
 import { useWallet, AUTO_LOCK_MS, type WalletStatus } from "./state/wallet-store";
 import { useUI } from "./state/ui-store";
 import { monotonicNow } from "./lib/monotonic";
+import { BTX_UI_ENABLED, btxRouteTarget } from "./lib/features";
 import Splash from "./ui/pages/Splash";
 import OnboardingCreate from "./ui/pages/OnboardingCreate";
 import OnboardingRestore from "./ui/pages/OnboardingRestore";
@@ -240,13 +241,14 @@ export default function App() {
     }
   }, [offlineSigningEnabled, status, location.pathname, navigate]);
 
-  // BTX surface bounce: deep-linking /send/btx with BTX disabled returns home.
+  // BTX surface bounce: deep-linking /send/btx with BTX off (build switch
+  // BTX_UI_ENABLED, or the user's toggle) returns home. With the build switch
+  // off the route element below is already a <Navigate>, so SendBTX never
+  // mounts; this effect covers the user-toggle case.
   useEffect(() => {
     if (status !== "unlocked") return;
-    if (btxEnabled) return;
-    if (location.pathname === "/send/btx") {
-      navigate("/dashboard", { replace: true });
-    }
+    const target = btxRouteTarget(location.pathname, btxEnabled);
+    if (target !== null) navigate(target, { replace: true });
   }, [btxEnabled, status, location.pathname, navigate]);
 
   return (
@@ -262,7 +264,10 @@ export default function App() {
           <Route path="/send/prl" element={<SendPRL />} />
           <Route path="/send/wprl" element={<SendWPRL />} />
           <Route path="/send/eth" element={<SendETH />} />
-          <Route path="/send/btx" element={<SendBTX />} />
+          <Route
+            path="/send/btx"
+            element={BTX_UI_ENABLED ? <SendBTX /> : <Navigate to="/dashboard" replace />}
+          />
           <Route path="/bridge" element={<Bridge />} />
           <Route path="/history" element={<History />} />
           <Route path="/settings" element={<Settings />} />
