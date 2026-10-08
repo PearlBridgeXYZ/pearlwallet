@@ -95,28 +95,39 @@ export default function OnboardingRestore() {
   }
 
   return (
-    <div className="mx-auto max-w-md px-4 py-8">
-      <h1 className="text-2xl font-semibold">Restore your wallet.</h1>
-      <p className="mt-2 text-sm text-ink-500">
-        Enter your 12- or 24-word recovery phrase. Words are masked by default.
+    <div className="shell-width my-8 max-w-lg sm:my-12">
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Bring your wallet</p>
+      <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Import your wallet.</h1>
+      <p className="mt-3 text-sm leading-7 text-text-2">
+        Enter your 12- or 24-word recovery phrase, or paste the whole phrase into any word field. The fields fill automatically and stay masked.
       </p>
 
-      <div className="mt-4 flex items-center gap-3 text-sm">
+      <aside className="mt-6 border-l-2 border-accent bg-surface-2 p-4 text-sm leading-6 text-text-2">
+        <h2 className="font-semibold">Which addresses will appear?</h2>
+        <p className="mt-1">
+          PearlWallet scans standard Pearl (BIP-86) receive addresses from your
+          recovery phrase. Funds on other address types, change addresses or
+          beyond the scanned range may not appear. Keep your original wallet
+          and recovery phrase until you have checked your balances.
+        </p>
+      </aside>
+
+      <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-line py-2 text-sm">
         <span>Phrase length:</span>
-        <label className="flex items-center gap-1">
+        <label className="flex min-h-11 items-center gap-2">
           <input type="radio" checked={length === 12} onChange={() => setLen(12)} />
           12 words
         </label>
-        <label className="flex items-center gap-1">
+        <label className="flex min-h-11 items-center gap-2">
           <input type="radio" checked={length === 24} onChange={() => setLen(24)} />
           24 words
         </label>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="card mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3">
         {words.map((w, i) => (
           <label key={i} className="block">
-            <span className="label">#{i + 1}</span>
+            <span className="label">Word {i + 1}</span>
             <input
               className="input mono"
               type="password"
@@ -131,7 +142,9 @@ export default function OnboardingRestore() {
         ))}
       </div>
 
-      <div className="mt-6 flex flex-col gap-3">
+      <div className="mt-8 flex flex-col gap-4 border-t border-heading pt-5">
+        <h2 className="text-lg font-semibold">Protect this device</h2>
+        <p className="text-sm leading-6 text-text-2">Choose a password for this browser. It does not change your recovery phrase.</p>
         <label className="block">
           <span className="label">Set an unlock password</span>
           <input
@@ -141,7 +154,7 @@ export default function OnboardingRestore() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <span className="mt-1 block text-xs text-ink-500">
+          <span className="mt-1 block text-xs text-text-3">
             Strength: {pwStrength.label}
           </span>
         </label>
@@ -155,18 +168,18 @@ export default function OnboardingRestore() {
             onChange={(e) => setPasswordConfirm(e.target.value)}
           />
         </label>
-        <label className="mt-2 flex items-start gap-2 text-sm">
+        <label className="mt-2 flex min-h-11 items-start gap-3 border-t border-line pt-4 text-sm leading-6">
           <input
             type="checkbox"
             checked={acknowledged}
             onChange={(e) => setAcknowledged(e.target.checked)}
             className="mt-1"
           />
-          <span>I understand there is no recovery. If I lose my recovery phrase, my funds are gone.</span>
+          <span>I understand that only my recovery phrase can restore my wallet. If I lose it, my funds are gone. The PearlBridge team cannot recover them.</span>
         </label>
       </div>
 
-      {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+      {error && <p className="mt-3 text-sm text-danger">{error}</p>}
 
       <button
         type="button"
@@ -174,20 +187,20 @@ export default function OnboardingRestore() {
         disabled={busy}
         className="btn-primary mt-6 w-full"
       >
-        {busy ? "Restoring..." : "Restore wallet"}
+        {busy ? "Importing…" : "Import wallet"}
       </button>
 
       {overwriteOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6">
           <div className="card max-w-md">
             <h2 className="text-lg font-semibold">Replace the wallet on this device?</h2>
-            <p className="mt-2 text-sm text-ink-500">
+            <p className="mt-3 text-sm leading-7 text-text-2">
               A different wallet is already stored in this browser. Restoring
               will overwrite it. Anything currently on this device will be
               unreachable unless you also have its recovery phrase saved
               elsewhere.
             </p>
-            <p className="mt-2 text-sm text-ink-500">
+            <p className="mt-3 text-sm leading-7 text-text-2">
               If you don't know what the existing wallet is, cancel and check
               with whoever uses this browser first.
             </p>

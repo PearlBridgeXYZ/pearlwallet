@@ -279,6 +279,7 @@ export default function Settings() {
 
   return (
     <Page title="Settings">
+      <p className="mb-6 text-sm leading-7 text-text-2">Manage access to this device, network connections and wallet preferences.</p>
       {/* Install PWA card — InstallPWA self-suppresses when already
           installed, when running from file://, or when the browser
           offers no install path (desktop Safari/Firefox). Sits at the
@@ -288,8 +289,9 @@ export default function Settings() {
         <InstallPWA variant="card" />
       </div>
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Account</h2>
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Device access</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">Lock this wallet when you step away. It also locks automatically after five minutes of inactivity.</p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button
             disabled={status !== "unlocked"}
@@ -304,54 +306,66 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Change password</h2>
-        <div className="mt-3 flex flex-col gap-2">
-          <input
-            className="input"
-            type="password"
-            placeholder="Current password"
-            value={oldPw}
-            onChange={(e) => setOldPw(e.target.value)}
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="New password"
-            value={newPw}
-            onChange={(e) => setNewPw(e.target.value)}
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="Confirm new password"
-            value={newPw2}
-            onChange={(e) => setNewPw2(e.target.value)}
-          />
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Change password</h2>
+        <div className="mt-4 flex flex-col gap-4">
+          <label className="block min-w-0 flex-1">
+            <span className="label">Current password</span>
+            <input
+              className="input"
+              type="password"
+              placeholder="Current password"
+              value={oldPw}
+              onChange={(e) => setOldPw(e.target.value)}
+            />
+          </label>
+          <label className="block min-w-0 flex-1">
+            <span className="label">New password</span>
+            <input
+              className="input"
+              type="password"
+              placeholder="New password"
+              value={newPw}
+              onChange={(e) => setNewPw(e.target.value)}
+            />
+          </label>
+          <label className="block min-w-0 flex-1">
+            <span className="label">Confirm new password</span>
+            <input
+              className="input"
+              type="password"
+              placeholder="Confirm new password"
+              value={newPw2}
+              onChange={(e) => setNewPw2(e.target.value)}
+            />
+          </label>
           <button onClick={doChangePassword} className="btn-primary self-start">
             Change password
           </button>
         </div>
       </section>
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Export recovery phrase</h2>
-        <p className="mt-2 text-xs text-ink-500">
-          Re-enter your password to view your 12-word phrase. Never share it. Never enter it on any website.
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Export recovery phrase</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Re-enter your password to view your recovery phrase. Write it down privately and never share it. Only enter it when importing into a wallet you trust.
         </p>
-        <div className="mt-3 flex gap-2">
-          <input
-            className="input"
-            type="password"
-            placeholder="Password"
-            value={pwExport}
-            onChange={(e) => setPwExport(e.target.value)}
-          />
+        <div className="mt-4 flex flex-wrap items-end gap-3">
+          <label className="block min-w-0 flex-1">
+            <span className="label">Password to reveal phrase</span>
+            <input
+              className="input"
+              type="password"
+              placeholder="Password"
+              value={pwExport}
+              onChange={(e) => setPwExport(e.target.value)}
+            />
+          </label>
           <button onClick={doExport} className="btn-secondary">Show</button>
         </div>
         {showMnemonic && (
-          <div className="card mt-3 bg-amber-50 dark:bg-amber-900/20">
-            <p className="text-xs text-amber-700 dark:text-amber-400">
+          <div className="card mt-3 border-warn-line bg-warn-bg">
+            <p className="text-xs text-warn">
               Don't screenshot this. Write it down.
             </p>
             {mnemonicValue ? (
@@ -359,12 +373,12 @@ export default function Settings() {
                 <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-sm">
                   {mnemonicValue}
                 </pre>
-                <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                <p className="mt-2 text-xs text-warn">
                   Auto-hiding in {mnemonicSecondsLeft}s.
                 </p>
               </>
             ) : (
-              <p className="mt-2 text-xs text-ink-500">
+              <p className="mt-3 text-sm leading-7 text-text-2">
                 Hidden. Re-enter your password above to reveal again.
               </p>
             )}
@@ -378,73 +392,65 @@ export default function Settings() {
         )}
       </section>
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Pearl RPC endpoint</h2>
-        <p className="mt-2 text-xs text-ink-500">
-          Defaults to the PearlBridgeXYZ team RPC at{" "}
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Pearl RPC endpoint</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Uses the PearlBridge RPC at{" "}
           <span className="font-mono">{defaultRpcUrl}</span>
-          {pearlRpcOverride && " (currently overridden — see below)"}. Point at any
-          btcd-compatible JSON-RPC endpoint you trust, or leave blank to use the default.
+          {pearlRpcOverride && " (currently overridden — see below)"}. Leave blank
+          to use the default, or enter a supported PearlBridge RPC URL.
         </p>
-        <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-          A malicious RPC can lie about your balance and tx state, and can see your addresses.
-          It cannot move funds (your keys never leave this browser), but only point at endpoints you trust.
+        <p className="mt-3 border-l-2 border-warn-line pl-3 text-xs leading-6 text-warn">
+          RPC services can see your addresses and can report incorrect balances or
+          transaction details. Use an endpoint you trust.
         </p>
-        <p className="mt-1 text-xs text-ink-500">
-          Note: the wallet&apos;s strict Content Security Policy only permits
-          requests to the default RPC hosts. A custom RPC URL on a different
-          host will be blocked by the browser unless you&apos;re running the
-          wallet from source with an adjusted CSP.
+        <p className="mt-2 text-xs leading-6 text-text-3">
+          This wallet accepts only supported RPC hosts. Other hosts are blocked.
         </p>
-        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-          <input
-            className="input mono flex-1"
-            placeholder={defaultRpcUrl}
-            value={rpcDraft}
-            autoComplete="off"
-            autoCapitalize="off"
-            spellCheck={false}
-            onChange={(e) => setRpcDraft(e.target.value)}
-          />
+        <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
+          <label className="block min-w-0 flex-1">
+            <span className="label">Pearl RPC URL</span>
+            <input
+              className="input mono min-w-0 flex-1"
+              placeholder={defaultRpcUrl}
+              value={rpcDraft}
+              autoComplete="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              onChange={(e) => setRpcDraft(e.target.value)}
+            />
+          </label>
           <button onClick={() => saveRpc()} className="btn-primary">Save</button>
           <button onClick={resetRpc} className="btn-secondary" disabled={!pearlRpcOverride && !rpcDraft}>
             Reset
           </button>
         </div>
-        {rpcStatus && <p className="mt-2 text-xs text-ink-500">{rpcStatus}</p>}
+        {rpcStatus && <p className="mt-3 text-sm leading-7 text-text-2">{rpcStatus}</p>}
       </section>
 
-      <section className="card mb-4 border-pearl-200 dark:border-pearl-900/40">
-        <h2 className="text-sm font-semibold">Ethereum surface (WPRL + ETH + Bridge)</h2>
-        <p className="mt-2 text-xs text-ink-500">
-          The Ethereum side of the wallet — Wrapped PRL on Ethereum, native
-          ETH for gas, and the PearlBridge mint/burn flow — is{" "}
-          <span className="font-medium">on by default</span> as of v0.4.2.
-          If you only hold PRL on Pearl L1, turn it off and the wallet
-          stays Pearl-only: no Eth RPC calls, no WPRL/ETH tiles, no
-          Bridge button. With it on you get the Send WPRL, Send ETH,
-          and Bridge surfaces and the wallet polls the Eth chain for
-          balances.
+      <section className="card mb-6 border-line-strong">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Ethereum and bridging</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Enable WPRL, ETH and PearlBridge. Turn this off for a Pearl-only
+          view with no Ethereum balance lookups. Enabled by default.
         </p>
-        <p className="mt-1 text-xs text-ink-500">
-          Same BIP-39 seed, same Eth address (BIP-44{" "}
-          <span className="font-mono">m/44'/60'/0'/0/0</span>) — the
-          toggle is purely a UI gate, not a key change. Your Eth address
-          is identical whether the surface is on or off.
+        <p className="mt-2 text-xs leading-6 text-text-3">
+          Your Ethereum address stays the same when you turn this setting off
+          and back on. Your recovery phrase does not change.
         </p>
-        <label className="mt-3 flex items-center gap-2 text-sm">
+        <label className="mt-4 flex min-h-11 items-center gap-3 border-t border-line pt-3 text-sm">
           <input
             type="checkbox"
             checked={ethEnabled}
             onChange={(e) => setEthEnabled(e.target.checked)}
           />
-          Enable Ethereum surface (WPRL, ETH, Bridge)
+          Show WPRL, ETH and Bridge
         </label>
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-3 text-sm leading-7 text-text-2">
           Status:{" "}
           {ethEnabled
-            ? "Eth surface ON — WPRL, ETH, and Bridge are visible"
-            : "Eth surface OFF — Pearl-only wallet"}
+            ? "Ethereum on — WPRL, ETH and Bridge are visible"
+            : "Ethereum off — Pearl-only view"}
         </p>
       </section>
 
@@ -528,29 +534,21 @@ export default function Settings() {
       )}
 
       {ethEnabled && (
-        <section className="card mb-4">
-          <h2 className="text-sm font-semibold">Ethereum RPC endpoint</h2>
-          <p className="mt-2 text-xs text-ink-500">
-            Defaults to a diversified chain — PublicNode, then Cloudflare,
-            then dRPC as fallbacks
-            {ethRpcOverride && " (currently overridden — see below)"}. Pick a
-            provider preset below, point at any Ethereum JSON-RPC endpoint
-            you trust, or leave blank to use the defaults.
+        <section className="card mb-6">
+          <h2 className="border-b border-line pb-3 text-lg font-semibold">Ethereum RPC endpoint</h2>
+          <p className="mt-3 text-sm leading-7 text-text-2">
+            Use the default Ethereum connection or choose a supported RPC preset.
+            {ethRpcOverride && " A custom connection is currently selected."}{" "}
+            Leave the URL blank to return to the default.
           </p>
-          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-            A malicious RPC can lie about your balance, gas market, and tx
-            state, and can see your address. It cannot move funds (your
-            keys never leave this browser) but only point at endpoints
-            you trust.
+          <p className="mt-3 border-l-2 border-warn-line pl-3 text-xs leading-6 text-warn">
+            RPC services can see your address and can report incorrect balances,
+            network fees or transaction details. Use an endpoint you trust.
           </p>
-          <p className="mt-1 text-xs text-ink-500">
-            Note: the wallet&apos;s strict Content Security Policy only
-            permits requests to the default Eth RPC hosts. A custom RPC
-            URL on a different host will be blocked by the browser unless
-            you&apos;re running the wallet from source with an adjusted
-            CSP.
+          <p className="mt-2 text-xs leading-6 text-text-3">
+            This wallet accepts only supported RPC hosts. Other hosts are blocked.
           </p>
-          <label className="mt-3 block text-xs text-ink-500">
+          <label className="mt-3 block text-xs text-text-3">
             Provider preset
             <select
               className="input mt-1 w-full"
@@ -561,7 +559,7 @@ export default function Settings() {
                 if (url) saveEthRpc(url); // presets are allowlisted — apply immediately
               }}
             >
-              <option value="">Default chain (PublicNode → Cloudflare → dRPC)</option>
+              <option value="">Default connection</option>
               {ETH_RPC_PRESETS.map((p) => (
                 <option key={p.url} value={p.url}>
                   {p.label}
@@ -569,39 +567,40 @@ export default function Settings() {
               ))}
             </select>
           </label>
-          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-            <input
-              className="input mono flex-1"
-              placeholder="Or paste a custom https:// RPC URL"
-              value={ethRpcDraft}
-              autoComplete="off"
-              autoCapitalize="off"
-              spellCheck={false}
-              onChange={(e) => setEthRpcDraft(e.target.value)}
-            />
+          <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-end">
+            <label className="block min-w-0 flex-1">
+              <span className="label">Ethereum RPC URL</span>
+              <input
+                className="input mono min-w-0 flex-1"
+                placeholder="Supported https:// RPC URL"
+                value={ethRpcDraft}
+                autoComplete="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                onChange={(e) => setEthRpcDraft(e.target.value)}
+              />
+            </label>
             <button onClick={() => saveEthRpc()} className="btn-primary">Save</button>
             <button onClick={resetEthRpc} className="btn-secondary" disabled={!ethRpcOverride && !ethRpcDraft}>
               Reset
             </button>
           </div>
-          {ethRpcStatus && <p className="mt-2 text-xs text-ink-500">{ethRpcStatus}</p>}
+          {ethRpcStatus && <p className="mt-3 text-sm leading-7 text-text-2">{ethRpcStatus}</p>}
         </section>
       )}
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Tip the PearlWallet devs</h2>
-        <p className="mt-2 text-xs text-ink-500">
-          When you send PRL, the wallet can add a small tip output to the
-          PearlWallet developer fees address — <span className="font-medium">10 bps</span>{" "}
-          of the send amount, with a <span className="font-medium">1 PRL</span> floor for
-          small transactions. The tip helps keep the project running.
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Optional developer tip</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          PRL sends can include a <span className="font-medium">0.1%</span> tip
+          to support development, with a minimum of <span className="font-medium">1 PRL</span>.
+          The tip is on by default and is shown in the send preview.
         </p>
-        <p className="mt-1 text-xs text-ink-500">
-          <span className="font-medium">It's fully optional.</span> Uncheck this box, save,
-          and the wallet will never add a tip output — using the wallet is free
-          beyond on-chain fees.
+        <p className="mt-2 text-xs leading-6 text-text-3">
+          Turn it off below to remove the tip from future sends. The setting
+          saves immediately. Network and bridge fees are separate.
         </p>
-        <label className="mt-3 flex items-center gap-2 text-sm">
+        <label className="mt-4 flex min-h-11 items-center gap-3 border-t border-line pt-3 text-sm">
           <input
             type="checkbox"
             checked={tipEnabled}
@@ -609,95 +608,82 @@ export default function Settings() {
           />
           Enable tip on outgoing PRL transactions (default on)
         </label>
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-3 text-sm leading-7 text-text-2">
           Status:{" "}
           {tipEnabled
-            ? "tip ON — 10 bps / 1 PRL min will appear in send previews"
-            : "tip OFF — no extra output is added to your transactions"}
+            ? "Tip on — 0.1%, minimum 1 PRL, shown before sending"
+            : "Tip off — no developer tip added"}
         </p>
       </section>
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">
           Multisig vaults
         </h2>
-        <p className="mt-2 text-xs text-ink-500">
-          The <span className="font-medium">Vaults</span> surface lets you
-          create and co-sign m-of-n multisig vaults (BIP-342 tapscript
-          under a NUMS-bound P2TR output, BIP-67-sorted cosigner pubkeys)
-          and auto-imports a vault from a cosign request when you hold a
-          signing key in it. On by default.
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Create and co-sign shared vaults with a chosen number of required
+          approvals. Enabled by default.
         </p>
-        <p className="mt-1 text-xs text-ink-500">
-          Turn this off for a pure-singlesig wallet — the Vaults nav entry
-          and routes disappear and the wallet behaves exactly as singlesig.
-          Your existing vault records aren't deleted; they reappear if you
-          turn it back on.
+        <p className="mt-2 text-xs leading-6 text-text-3">
+          Turning this off hides vaults. Existing vault records stay on this
+          device and reappear when you turn it back on.
         </p>
-        <label className="mt-3 flex items-center gap-2 text-sm">
+        <label className="mt-4 flex min-h-11 items-center gap-3 border-t border-line pt-3 text-sm">
           <input
             type="checkbox"
             checked={multisigEnabled}
             onChange={(e) => setMultisigEnabled(e.target.checked)}
           />
-          Show the Vaults surface
+          Show multisig vaults
         </label>
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-3 text-sm leading-7 text-text-2">
           Status:{" "}
           {multisigEnabled
-            ? "Vaults ON — available at /vaults"
-            : "Vaults OFF — wallet behaves exactly as singlesig"}
+            ? "Vaults on — available in your wallet"
+            : "Vaults off — hidden from your wallet"}
         </p>
       </section>
 
-      <section className="card mb-4 border-amber-200 dark:border-amber-900/40">
-        <h2 className="text-sm font-semibold">
-          Experimental: offline signing (Armory-style)
+      <section className="card mb-6 border-warn-line">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">
+          Offline signing · Experimental
         </h2>
-        <p className="mt-2 text-xs text-ink-500">
-          Offline signing splits the wallet into three roles —{" "}
-          <span className="font-medium">Watcher</span> (online, builds an
-          unsigned transaction with current UTXO data),{" "}
-          <span className="font-medium">Signer</span> (offline / air-gapped,
-          adds signatures), and{" "}
-          <span className="font-medium">Broadcaster</span> (online, pushes
-          the signed transaction). The three machines exchange payloads
-          by QR or copy-paste — no shared network, no key on the online
-          side. The same wallet code runs in all three roles.
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Prepare a transaction online, sign it on an offline machine, then
+          broadcast it online. Transfer transaction data between machines using
+          QR codes or copy and paste. Keep your recovery phrase on the offline signer.
         </p>
-        <p className="mt-1 text-xs text-ink-500">
-          A fully-offline machine can also{" "}
-          <span className="font-medium">compose</span> a transaction
-          itself by pasting a manually-curated UTXO list. The signer
-          page then accepts that just like a watcher-built payload.
+        <p className="mt-2 text-xs leading-6 text-text-3">
+          Advanced users can also prepare a transaction offline by supplying
+          a list of unspent outputs.
         </p>
-        <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-          The wire format is v1 and may evolve. Don't trust a payload
-          encoded today to be decodable by a future major release —
-          keep watcher + signer + broadcaster on matching versions.
+        <p className="mt-3 border-l-2 border-warn-line pl-3 text-xs leading-6 text-warn">
+          Use matching wallet versions on all machines. The transaction format
+          may change between releases.
         </p>
-        <label className="mt-3 flex items-center gap-2 text-sm">
+        <label className="mt-4 flex min-h-11 items-center gap-3 border-t border-line pt-3 text-sm">
           <input
             type="checkbox"
             checked={offlineSigningEnabled}
             onChange={(e) => setOfflineSigningEnabled(e.target.checked)}
           />
-          Enable offline signing surface (experimental, default off)
+          Enable offline signing (experimental, default off)
         </label>
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-3 text-sm leading-7 text-text-2">
           Status:{" "}
           {offlineSigningEnabled
-            ? "Offline signing ON — see Offline Signing in the nav"
-            : "Offline signing OFF"}
+            ? "Offline signing on — available from your dashboard"
+            : "Offline signing off"}
         </p>
       </section>
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Display</h2>
-        <div className="mt-3 flex items-center gap-3 text-sm">
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Display</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">PearlWallet currently uses the light paper theme. Your saved preference is retained.</p>
+        <div className="mt-3 flex flex-wrap items-center gap-3 text-sm">
           <span>Theme:</span>
           {(["system", "light", "dark"] as const).map((t) => (
-            <label key={t} className="flex items-center gap-1 capitalize">
+            <label key={t} className="flex min-h-11 items-center gap-2 capitalize">
               <input
                 type="radio"
                 checked={theme === t}
@@ -709,34 +695,40 @@ export default function Settings() {
         </div>
       </section>
 
-      <section className="card mb-4 border-red-200 dark:border-red-900/40">
-        <h2 className="text-sm font-semibold text-red-700 dark:text-red-400">Danger zone</h2>
-        <p className="mt-2 text-xs text-ink-500">
-          Wiping the wallet from this browser deletes the encrypted keystore here.
-          You&apos;ll need your recovery phrase to restore. Password required so
-          a passer-by with brief device access can&apos;t nuke your keystore.
+      <section className="card mb-6 border-danger-line">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold text-danger">Danger zone</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Wiping removes the encrypted wallet from this browser. Save your recovery
+          phrase first; you will need it to restore access. Enter your password
+          and the confirmation below to remove this wallet.
         </p>
-        <div className="mt-3 flex flex-col gap-2">
-          <input
-            className="input"
-            placeholder='Type "wipe my wallet"'
-            value={wipePhrase}
-            onChange={(e) => setWipePhrase(e.target.value)}
-          />
-          <input
-            className="input"
-            type="password"
-            placeholder="Your password"
-            value={wipePassword}
-            onChange={(e) => setWipePassword(e.target.value)}
-            autoComplete="current-password"
-          />
-          <button onClick={doWipe} className="btn-danger self-start">Wipe</button>
+        <div className="mt-4 flex flex-col gap-4">
+          <label className="block min-w-0 flex-1">
+            <span className="label">Type “wipe my wallet” to confirm</span>
+            <input
+              className="input"
+              placeholder='Type "wipe my wallet"'
+              value={wipePhrase}
+              onChange={(e) => setWipePhrase(e.target.value)}
+            />
+          </label>
+          <label className="block min-w-0 flex-1">
+            <span className="label">Confirm your password</span>
+            <input
+              className="input"
+              type="password"
+              placeholder="Your password"
+              value={wipePassword}
+              onChange={(e) => setWipePassword(e.target.value)}
+              autoComplete="current-password"
+            />
+          </label>
+          <button onClick={doWipe} className="btn-danger self-start">Wipe wallet from this browser</button>
         </div>
       </section>
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      {success && <p className="text-sm text-emerald-700">{success}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
+      {success && <p className="text-sm text-ok">{success}</p>}
     </Page>
   );
 }

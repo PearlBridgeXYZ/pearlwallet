@@ -9,16 +9,18 @@ export default function History() {
 
   return (
     <Page title="History">
-      <div className="mb-4 flex gap-2 text-sm">
+      <p className="mb-6 text-sm leading-7 text-text-2">Your PRL and WPRL activity, with transaction details from each network.</p>
+      <div className="mb-6 inline-flex gap-1 rounded-pb border border-line bg-surface-2 p-1 text-sm">
         {(["all", "prl", "wprl"] as Filter[]).map((f) => (
           <button
             key={f}
             type="button"
             onClick={() => setFilter(f)}
+            aria-pressed={filter === f}
             className={
               filter === f
-                ? "rounded-full bg-pearl-700 px-3 py-1 text-white"
-                : "rounded-full border border-ink-300 px-3 py-1 text-ink-600 dark:border-ink-700 dark:text-ink-300"
+                ? "min-h-11 min-w-16 rounded-pb bg-accent-bg px-4 py-2 font-semibold text-on-accent"
+                : "min-h-11 min-w-16 rounded-pb px-4 py-2 text-text-3 hover:text-heading"
             }
           >
             {f.toUpperCase()}
@@ -27,9 +29,9 @@ export default function History() {
       </div>
       <div className="card">
         <ActivityList filter={filter} limit={100} />
-        <p className="mt-4 text-xs text-ink-500">
-          Pearl is scanned via your configured sentry RPC; WPRL is scanned via
-          the last ~100k Ethereum blocks. Native ETH transfers are not listed
+        <p className="mt-6 border-t border-line pt-4 text-xs leading-6 text-text-3">
+          Pearl activity comes from your configured RPC. WPRL activity covers
+          roughly the latest 100,000 Ethereum blocks. Native ETH transfers are not listed
           here — view your Ethereum address on Etherscan for the full picture.
         </p>
       </div>

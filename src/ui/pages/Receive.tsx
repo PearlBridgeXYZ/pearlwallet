@@ -98,15 +98,19 @@ export default function Receive() {
 
   return (
     <Page title="Receive">
+      <p className="mb-6 text-sm leading-7 text-text-2">
+        Share your address or QR code with the sender. Check the asset and network before sending.
+      </p>
       {(ethEnabled || btxEnabled) && (
-        <div className="mb-4 inline-flex rounded-xl border border-ink-200 p-1 text-sm dark:border-ink-800">
+        <div className="mb-6 inline-flex max-w-full flex-wrap gap-1 rounded-pb border border-line bg-surface-2 p-1 text-sm">
           <button
             type="button"
             onClick={() => setTab("prl")}
+            aria-pressed={tab === "prl"}
             className={
               tab === "prl"
-                ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
-                : "rounded-lg px-3 py-1 text-ink-500"
+                ? "min-h-11 min-w-16 rounded-pb bg-accent-bg px-4 py-2 font-semibold text-on-accent"
+                : "min-h-11 min-w-16 rounded-pb px-4 py-2 text-text-3 hover:text-heading"
             }
           >
             PRL
@@ -115,10 +119,11 @@ export default function Receive() {
             <button
               type="button"
               onClick={() => setTab("wprl")}
+              aria-pressed={tab === "wprl"}
               className={
                 tab === "wprl"
-                  ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
-                  : "rounded-lg px-3 py-1 text-ink-500"
+                  ? "min-h-11 min-w-16 rounded-pb bg-accent-bg px-4 py-2 font-semibold text-on-accent"
+                  : "min-h-11 min-w-16 rounded-pb px-4 py-2 text-text-3 hover:text-heading"
               }
             >
               WPRL
@@ -128,10 +133,11 @@ export default function Receive() {
             <button
               type="button"
               onClick={() => setTab("btx")}
+              aria-pressed={tab === "btx"}
               className={
                 tab === "btx"
-                  ? "rounded-lg bg-pearl-700 px-3 py-1 text-white"
-                  : "rounded-lg px-3 py-1 text-ink-500"
+                  ? "min-h-11 min-w-16 rounded-pb bg-accent-bg px-4 py-2 font-semibold text-on-accent"
+                  : "min-h-11 min-w-16 rounded-pb px-4 py-2 text-text-3 hover:text-heading"
               }
             >
               BTX
@@ -140,54 +146,56 @@ export default function Receive() {
         </div>
       )}
 
-      <div className="card flex flex-col items-center">
+      <div className="card flex flex-col items-center gap-2">
         {qr ? (
           <img
             src={qr}
             alt={`${tab.toUpperCase()} receive address QR code`}
-            className="h-64 w-64 rounded-lg"
+            className="h-auto w-64 max-w-full border border-line bg-white p-2"
           />
         ) : (
-          <div className="h-64 w-64 animate-pulse rounded-lg bg-ink-100 dark:bg-ink-800" />
+          <div className="aspect-square w-64 max-w-full animate-pulse rounded-pb bg-surface-2" role="status" aria-label="Loading receive QR code" />
         )}
         {tab === "prl" && pearlPool.length > 1 ? (
-          <div className="mt-3 text-xs text-ink-500">
+          <div className="mt-3 text-xs text-text-3">
             Receive address #{prlIndex} of {pearlPool.length - 1}
           </div>
         ) : null}
-        <div className="mt-2 max-w-full break-all font-mono text-sm">{addr}</div>
-        <button type="button" onClick={copy} className="btn-secondary mt-4">
+        <div className="mt-3 w-full break-all border-y border-line py-4 text-center font-mono text-sm leading-6">{addr}</div>
+        <button type="button" onClick={copy} className="btn-primary mt-2 w-full sm:w-auto">
           {copied ? "Copied!" : "Copy address"}
         </button>
       </div>
 
       {tab === "prl" && pearlPool.length > 1 ? (
-        <div className="card mt-4">
-          <div className="flex items-center justify-between">
+        <div className="mt-8 border-t border-heading pt-4">
+          <div className="flex flex-wrap items-center justify-between gap-x-4">
             <h2 className="text-sm font-semibold">All receive addresses</h2>
             <button
               type="button"
               onClick={() => setShowAll((v) => !v)}
-              className="text-xs text-pearl-700 hover:underline"
+              aria-expanded={showAll}
+              className="min-h-11 shrink-0 text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent"
             >
               {showAll ? "Hide" : `Show all (${pearlPool.length})`}
             </button>
           </div>
-          <p className="mt-2 text-xs text-ink-500">
-            Pearl L1 is UTXO-based, so your wallet uses a pool of derived addresses.
-            Any of these can receive — the wallet aggregates balances across all of them.
+          <p className="mt-2 text-sm leading-6 text-text-2">
+            These Pearl addresses belong to the same wallet. Any of them can receive PRL;
+            PearlWallet combines their balances. Select a number to show its QR code above.
           </p>
           {showAll ? (
-            <ul className="mt-3 space-y-1 text-xs">
+            <ul className="mt-3 divide-y divide-line text-xs">
               {pearlPool.map((a, i) => (
-                <li key={a} className="flex items-center gap-2">
+                <li key={a} className="flex items-center gap-3 py-2">
                   <button
                     type="button"
                     onClick={() => setPrlIndex(i)}
+                    aria-pressed={i === prlIndex}
                     className={
                       i === prlIndex
-                        ? "rounded bg-pearl-700 px-2 py-0.5 text-white"
-                        : "rounded px-2 py-0.5 text-ink-500 hover:bg-ink-100 dark:hover:bg-ink-800"
+                        ? "min-h-11 min-w-11 rounded-pb bg-accent-bg px-2 py-2 text-on-accent"
+                        : "min-h-11 min-w-11 rounded-pb px-2 py-2 text-text-3 hover:bg-surface-2"
                     }
                   >
                     #{i}
@@ -200,7 +208,7 @@ export default function Receive() {
         </div>
       ) : null}
 
-      <p className="mt-4 text-xs text-ink-500">
+      <p className="mt-6 border-l-2 border-warn-line bg-warn-bg p-4 text-sm leading-6 text-warn">
         Only send {tab.toUpperCase()} to this address. {tab === "wprl" ? "This is an Ethereum address — sending other ERC-20s to it works (you'll see them in a block explorer), but the wallet only tracks WPRL." : tab === "btx" ? "This is a post-quantum P2MR address (btx1z…) on the BTX L1 — send only native BTX. WBTX (wrapped BTX) lives on Ethereum; do not send it here." : "Pearl L1 only — do not send other assets."}
       </p>
     </Page>

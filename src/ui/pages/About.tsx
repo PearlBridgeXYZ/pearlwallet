@@ -4,94 +4,113 @@ import { BUILD_GIT_SHA, BUILD_TIME, BUILD_VERSION } from "../../build-info";
 export default function About() {
   return (
     <Page title="About PearlWallet">
-      <div className="card space-y-4 text-sm">
-        <section>
-          <h2 className="font-semibold">What is this?</h2>
-          <p className="mt-1 text-ink-600 dark:text-ink-300">
-            PearlWallet is a non-custodial browser wallet for Pearl L1 (PRL) and the
-            Ethereum-side wrapper (WPRL). Your keys are generated, encrypted, and used entirely
-            in your browser. We never see them.
+      <p className="mb-8 max-w-xl text-base leading-7 text-text-2">
+        An open-source, non-custodial wallet for PRL on Pearl and WPRL and ETH
+        on Ethereum. Built by the PearlBridge team.
+      </p>
+      <div className="space-y-8 text-sm leading-7">
+        <section className="card shadow-slabsm sm:shadow-slab">
+          <p className="text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Your keys</p>
+          <h2 className="mt-2 text-xl font-semibold">Your recovery phrase is your responsibility.</h2>
+          <p className="mt-3 text-text-2">
+            Your recovery phrase is created and encrypted in your browser. No
+            server stores or receives your keys. Keep your 12- or 24-word phrase
+            somewhere safe: there is no password reset or support unlock. If you
+            lose access to your wallet and your phrase, your funds cannot be recovered.
           </p>
         </section>
 
-        <section>
-          <h2 className="font-semibold">Open source</h2>
-          <p className="mt-1 text-ink-600 dark:text-ink-300">
-            Every line of code that touches your keys is auditable. The repository lives at{" "}
-            <a
-              href="https://github.com/PearlBridgeXYZ/pearlwallet"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2"
-            >
-              github.com/PearlBridgeXYZ/pearlwallet
-            </a>
-            . Reproducible builds: the build SHA shown below matches the public commit.
+        <section className="border-t border-heading pt-5">
+          <h2 className="text-lg font-semibold">Open source. Publicly reviewed.</h2>
+          <p className="mt-3 text-text-2">
+            Read the code and build the wallet yourself. The repository includes
+            public security review reports covering versions v0.1.0 through v0.4.3.
+            These are AI-assisted, multi-model reviews; they do not guarantee
+            that the current wallet is free of vulnerabilities.
+          </p>
+          <a
+            href="https://github.com/PearlBridgeXYZ/pearlwallet"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex min-h-11 items-center text-accent underline decoration-line underline-offset-4 hover:decoration-accent"
+          >
+            View source and review reports ↗
+          </a>
+        </section>
+
+        <section className="border-t border-heading pt-5">
+          <h2 className="text-lg font-semibold">Privacy and local protection</h2>
+          <p className="mt-3 text-text-2">
+            The app has no analytics or trackers. Balance and activity lookups
+            use PearlBridge and public Ethereum RPC services. Those services can
+            see your IP address and the wallet addresses you query.
+          </p>
+          <p className="mt-3 text-text-2">
+            Your wallet is encrypted with AES-256-GCM. Signing runs in an isolated
+            worker, and the wallet locks after five minutes of inactivity.
           </p>
         </section>
 
-        <section>
-          <h2 className="font-semibold">What "non-custodial" means</h2>
-          <p className="mt-1 text-ink-600 dark:text-ink-300">
-            You alone hold the recovery phrase. If you lose it, your funds are gone — there's no
-            recovery, no support ticket, no remote unlock. That's not a flaw; it's the design.
+        <section className="border-t border-heading pt-5">
+          <h2 className="text-lg font-semibold">Sign offline</h2>
+          <p className="mt-3 text-text-2">
+            Download the single-file HTML wallet from GitHub releases for
+            signing on an offline machine. Check the asset&apos;s SHA-256 shown
+            by GitHub. Broadcasting a signed transaction still requires an
+            online machine.
+          </p>
+          <a
+            href="https://github.com/PearlBridgeXYZ/pearlwallet/releases/latest"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex min-h-11 items-center text-accent underline decoration-line underline-offset-4 hover:decoration-accent"
+          >
+            View downloads ↗
+          </a>
+        </section>
+
+        <section className="border-t border-heading pt-5">
+          <h2 className="text-lg font-semibold">Bridge between Pearl and Ethereum</h2>
+          <p className="mt-3 text-text-2">
+            PearlBridge lets you move between PRL on Pearl and WPRL on Ethereum.
+            PRL backing is held on Pearl L1 and is publicly checkable. Bridging
+            carries smart-contract and operational risk.
+          </p>
+          <a
+            href="https://pearlbridge.xyz/audit"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex min-h-11 items-center text-accent underline decoration-line underline-offset-4 hover:decoration-accent"
+          >
+            Check live bridge backing ↗
+          </a>
+        </section>
+
+        <section className="border-t border-heading pt-5">
+          <h2 className="text-lg font-semibold">Optional developer tip</h2>
+          <p className="mt-3 text-text-2">
+            PRL sends include an optional 0.1% developer tip, with a minimum of
+            1 PRL. It is on by default and can be turned off in Settings. Network
+            and bridge fees are separate.
           </p>
         </section>
 
-        <section>
-          <h2 className="font-semibold">What the wallet does NOT do</h2>
-          <ul className="mt-1 list-disc pl-5 text-ink-600 dark:text-ink-300">
-            <li>Spend your funds without your authorization.</li>
-            <li>See your balance on our servers — we look it up from public chain data.</li>
-            <li>Hold your keys, ever.</li>
-          </ul>
-        </section>
-
-        <section>
-          <h2 className="font-semibold">Offline / air-gapped use</h2>
-          <p className="mt-1 text-ink-600 dark:text-ink-300">
-            Every GitHub release attaches a single-file HTML build —
-            {" "}
-            <span className="font-mono">pearlwallet-offline-vX.Y.Z.html</span>
-            {" "}
-            — that runs entirely from
-            {" "}
-            <span className="font-mono">file://</span>
-            {" "}
-            with no external fetches. Save it to a USB stick, audit the
-            SHA-256, and sign transactions on a machine that never
-            touches the network. Broadcasting still needs an online
-            relay, but key material and signing stay air-gapped.{" "}
-            <a
-              href="https://github.com/PearlBridgeXYZ/pearlwallet/releases/latest"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2"
-            >
-              Latest release ↗
-            </a>
-          </p>
-        </section>
-
-        <section>
-          <h2 className="font-semibold">How the bridge works</h2>
-          <p className="mt-1 text-ink-600 dark:text-ink-300">
-            PearlBridge locks PRL on Pearl L1 and mints an equivalent amount of WPRL on Ethereum
-            (and vice versa). It's a lock-and-mint design with multi-sig validation, not a swap.
-          </p>
-        </section>
-
-        <section>
-          <h2 className="font-semibold">Build</h2>
-          <dl className="mt-1 grid grid-cols-2 gap-2 text-ink-600 dark:text-ink-300">
-            <dt>Version</dt>
-            <dd className="font-mono">{BUILD_VERSION}</dd>
-            <dt>Git SHA</dt>
-            <dd className="font-mono">{BUILD_GIT_SHA}</dd>
-            <dt>Built</dt>
-            <dd className="font-mono">{BUILD_TIME}</dd>
+        <section className="border-t border-heading pt-5">
+          <h2 className="text-lg font-semibold">Build information</h2>
+          <dl className="mt-4 grid grid-cols-[auto_minmax(0,1fr)] gap-x-6 gap-y-3 text-text-2">
+            <dt className="text-text-3">Version</dt>
+            <dd className="break-all font-mono">{BUILD_VERSION}</dd>
+            <dt className="text-text-3">Git SHA</dt>
+            <dd className="break-all font-mono">{BUILD_GIT_SHA}</dd>
+            <dt className="text-text-3">Built</dt>
+            <dd className="break-all font-mono">{BUILD_TIME}</dd>
           </dl>
         </section>
+
+        <aside className="border-t border-line pt-5 text-xs leading-6 text-text-3">
+          <p>PearlBridge is an independent project, not affiliated with Pearl Research Labs. PearlWallet is experimental, pre-1.0 software. Only store what you can afford to lose.</p>
+          <p className="mt-2">Report security issues to <a className="inline-flex min-h-11 items-center break-all text-accent underline underline-offset-4" href="mailto:bridgedev@mailbox.org">bridgedev@mailbox.org</a>.</p>
+        </aside>
       </div>
     </Page>
   );

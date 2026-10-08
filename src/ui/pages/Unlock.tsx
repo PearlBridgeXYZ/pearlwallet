@@ -46,10 +46,12 @@ export default function Unlock() {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center px-4 py-8">
-      <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-semibold">Welcome back.</h1>
-        <form onSubmit={submit} className="mt-6 flex flex-col gap-3">
+    <div className="shell-width flex min-h-full items-center justify-center py-10 sm:py-16">
+      <div className="card w-full max-w-md shadow-slabsm sm:shadow-slab">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">PearlWallet · Locked</p>
+        <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Welcome back.</h1>
+        <p className="mt-3 text-sm leading-7 text-text-2">Enter your password to unlock the wallet stored in this browser.</p>
+        <form onSubmit={submit} className="mt-6 flex flex-col gap-4">
           <label className="block">
             <span className="label">Password</span>
             <input
@@ -61,20 +63,19 @@ export default function Unlock() {
               onChange={(e) => setPassword(e.target.value)}
             />
           </label>
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-danger">{error}</p>}
           <button type="submit" disabled={busy} className="btn-primary w-full">
             {busy ? "Unlocking..." : "Unlock"}
           </button>
         </form>
-        <div className="mt-6 flex flex-col gap-2 text-sm">
-          <Link to="/onboarding/restore" className="text-pearl-700 hover:underline">
-            Wrong password? Restore from recovery phrase
+        <div className="mt-6 flex flex-col gap-2 border-t border-line pt-4 text-sm">
+          <Link to="/onboarding/restore" className="inline-flex min-h-11 items-center text-accent underline decoration-line underline-offset-4 hover:decoration-accent">
+            Forgot your password? Import your recovery phrase
           </Link>
-          <p className="text-xs text-ink-500">
-            To wipe this wallet without restoring, unlock first, then
-            use Settings → Danger zone. Wiping requires your password
-            so a passer-by with brief device access cannot nuke the
-            keystore.
+          <p className="text-xs leading-6 text-text-3">
+            There is no password reset or support unlock. Your recovery phrase
+            lets you import the wallet and choose a new password. To remove
+            this wallet from the browser, unlock it and open Settings → Danger zone.
           </p>
         </div>
       </div>

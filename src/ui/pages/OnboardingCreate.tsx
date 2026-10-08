@@ -111,16 +111,17 @@ export default function OnboardingCreate() {
 
   if (step === "generate") {
     return (
-      <div className="mx-auto max-w-md px-4 py-8">
-        <h1 className="text-2xl font-semibold">Your new wallet is ready.</h1>
-        <p className="mt-2 text-sm text-ink-500">
+      <div className="shell-width my-8 max-w-lg sm:my-12">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Create wallet · 1 / 3</p>
+        <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Back up your recovery phrase.</h1>
+        <p className="mt-3 text-sm leading-7 text-text-2">
           Write these words down on paper and store them somewhere safe.
           Anyone with these words controls your wallet.
         </p>
 
-        <div className="mt-4 flex items-center gap-3 text-sm">
+        <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-line py-2 text-sm">
           <span>Phrase length:</span>
-          <label className="flex items-center gap-1">
+          <label className="flex min-h-11 items-center gap-2">
             <input
               type="radio"
               checked={strength === 128}
@@ -128,7 +129,7 @@ export default function OnboardingCreate() {
             />
             12 words
           </label>
-          <label className="flex items-center gap-1">
+          <label className="flex min-h-11 items-center gap-2">
             <input
               type="radio"
               checked={strength === 256}
@@ -138,19 +139,19 @@ export default function OnboardingCreate() {
           </label>
         </div>
 
-        <div className="card mt-4">
-          <ol className="grid grid-cols-3 gap-3 font-mono text-sm">
+        <div className="card mt-6 shadow-slabsm sm:shadow-slab">
+          <ol className="grid grid-cols-2 gap-x-4 gap-y-3 font-mono text-sm sm:grid-cols-3">
             {words.map((w, i) => (
-              <li key={i} className="flex items-baseline gap-2">
-                <span className="w-6 text-right text-xs text-ink-400">{i + 1}.</span>
+              <li key={i} className="flex min-w-0 items-baseline gap-2 border-b border-line pb-2">
+                <span className="w-6 text-right text-xs text-text-3">{i + 1}.</span>
                 <span>{w}</span>
               </li>
             ))}
           </ol>
         </div>
 
-        <p className="mt-3 text-xs text-ink-500">
-          Writing down is safer. Clipboard can be read by malware.
+        <p className="mt-3 text-xs text-text-3">
+          Keep a paper backup somewhere private. Avoid screenshots and clipboard copies.
         </p>
 
         <div className="mt-6 flex gap-3">
@@ -169,10 +170,11 @@ export default function OnboardingCreate() {
 
   if (step === "verify") {
     return (
-      <div className="mx-auto max-w-md px-4 py-8">
-        <h1 className="text-2xl font-semibold">Confirm your phrase.</h1>
-        <p className="mt-2 text-sm text-ink-500">
-          Type words 3, 7, and 11 below.
+      <div className="shell-width my-8 max-w-lg sm:my-12">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Create wallet · 2 / 3</p>
+        <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Confirm your phrase.</h1>
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Use your paper backup to enter words 3, 7 and 11. This checks that you saved your phrase correctly.
         </p>
 
         <div className="mt-4 flex flex-col gap-3">
@@ -198,7 +200,7 @@ export default function OnboardingCreate() {
         </div>
 
         {verifyAttempts > 0 && !checkVerify() && (
-          <p className="mt-3 text-sm text-red-600">Words don't match. Check what you wrote down.</p>
+          <p className="mt-3 text-sm text-danger">Words don't match. Check what you wrote down.</p>
         )}
 
         <div className="mt-6 flex gap-3">
@@ -222,9 +224,10 @@ export default function OnboardingCreate() {
 
   if (step === "password") {
     return (
-      <div className="mx-auto max-w-md px-4 py-8">
-        <h1 className="text-2xl font-semibold">Set an unlock password.</h1>
-        <p className="mt-2 text-sm text-ink-500">
+      <div className="shell-width my-8 max-w-lg sm:my-12">
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Create wallet · 3 / 3</p>
+        <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Set an unlock password.</h1>
+        <p className="mt-3 text-sm leading-7 text-text-2">
           This password protects your wallet on this device. It's separate from your recovery phrase.
           If you forget the password, restore from the recovery phrase. If you lose both, your funds are gone.
         </p>
@@ -239,7 +242,7 @@ export default function OnboardingCreate() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
-            <span className="mt-1 block text-xs text-ink-500">
+            <span className="mt-1 block text-xs text-text-3">
               Strength: {pwStrength.label}
             </span>
           </label>
@@ -253,18 +256,18 @@ export default function OnboardingCreate() {
               onChange={(e) => setPasswordConfirm(e.target.value)}
             />
           </label>
-          <label className="mt-2 flex items-start gap-2 text-sm">
+          <label className="mt-2 flex min-h-11 items-start gap-3 border-t border-line pt-4 text-sm leading-6">
             <input
               type="checkbox"
               checked={acknowledged}
               onChange={(e) => setAcknowledged(e.target.checked)}
               className="mt-1"
             />
-            <span>I understand there is no recovery. If I lose my recovery phrase, my funds are gone.</span>
+            <span>I understand that only my recovery phrase can restore my wallet. If I lose it, my funds are gone. The PearlBridge team cannot recover them.</span>
           </label>
         </div>
 
-        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
+        {error && <p className="mt-3 text-sm text-danger">{error}</p>}
 
         <div className="mt-6 flex gap-3">
           <button type="button" onClick={() => setStep("verify")} className="btn-secondary">
@@ -281,15 +284,15 @@ export default function OnboardingCreate() {
         </div>
 
         {overwriteOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6">
             <div className="card max-w-md">
               <h2 className="text-lg font-semibold">Replace the wallet on this device?</h2>
-              <p className="mt-2 text-sm text-ink-500">
+              <p className="mt-3 text-sm leading-7 text-text-2">
                 A wallet is already stored in this browser. Creating a new one
                 will overwrite it. Anything currently on this device will be
                 unreachable unless you have its recovery phrase saved elsewhere.
               </p>
-              <p className="mt-2 text-sm text-ink-500">
+              <p className="mt-3 text-sm leading-7 text-text-2">
                 If you're not sure, cancel and unlock the existing wallet first.
               </p>
               <div className="mt-4 flex gap-3">
@@ -319,15 +322,16 @@ export default function OnboardingCreate() {
 
   // done
   return (
-    <div className="mx-auto max-w-md px-4 py-8">
-      <h1 className="text-2xl font-semibold">Wallet created.</h1>
+    <div className="shell-width my-8 max-w-lg sm:my-12">
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Ready to receive</p>
+      <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Wallet created.</h1>
       <div className="card mt-6 space-y-3 text-sm">
         <div>
-          <div className="text-xs text-ink-500">Your Pearl address</div>
+          <div className="text-xs text-text-3">Your Pearl address</div>
           <div className="break-all font-mono">{addresses?.pearl}</div>
         </div>
         <div>
-          <div className="text-xs text-ink-500">Your Ethereum address (for WPRL)</div>
+          <div className="text-xs text-text-3">Your Ethereum address (for WPRL)</div>
           <div className="break-all font-mono">{addresses?.eth}</div>
         </div>
       </div>
