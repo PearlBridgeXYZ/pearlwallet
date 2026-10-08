@@ -494,6 +494,10 @@ function WrapCard(props: {
                 : `slow — queued ~${Math.round(quote.slowLaneDelaySeconds / 3600)}h (fast window is full)`
             }
           />
+          <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
+            Plus the Pearl network fee, which is set when the transaction is built and is not
+            shown here.
+          </p>
           {!quote.withinDailyCap && (
             <p className="mt-2 text-warn break-words">
               Amount exceeds today’s remaining bridge capacity — it will queue.
@@ -726,6 +730,10 @@ function UnwrapCard(props: {
           <Row k="Payout to" v={pearlAddress ? `${pearlAddress.slice(0, 14)}…${pearlAddress.slice(-8)}` : "—"} />
           {needsApprove && <Row k="Step 1" v="approve WPRL (exact amount)" />}
           <Row k={needsApprove ? "Step 2" : "Transaction"} v="requestBurn on PearlBridge" />
+          <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
+            Plus Ethereum gas, paid in ETH and set when each transaction is sent; it is not
+            shown here.
+          </p>
           {!quote.withinDailyCap && (
             <p className="mt-2 text-warn break-words">
               Amount exceeds today’s remaining burn capacity.

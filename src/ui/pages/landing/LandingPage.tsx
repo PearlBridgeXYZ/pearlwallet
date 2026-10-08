@@ -33,7 +33,7 @@ const pillars = [
 const steps = [
   { title: "Create or import.", text: "Start with a new recovery phrase, or bring an existing 12- or 24-word phrase. Keep a written backup somewhere safe." },
   { title: "Set your password.", text: "Your wallet is encrypted on this device. Keep your recovery phrase: there is no password reset or support unlock." },
-  { title: "Review, then sign.", text: "Send and receive, or bridge PRL and WPRL. Check the destination, amount and fees in the transaction preview before you sign." },
+  { title: "Review, then sign.", text: "Send and receive, or bridge PRL and WPRL. A PRL send shows the destination, amount and network fee before you sign; a bridge transfer shows the bridge fee." },
 ];
 
 const faqs: { question: string; answer: ReactNode }[] = [
@@ -41,7 +41,7 @@ const faqs: { question: string; answer: ReactNode }[] = [
   { question: "What if I lose my recovery phrase?", answer: "Without your recovery phrase, you cannot restore your wallet if you lose access to this device. There is no password reset or support unlock. Write down the phrase and keep it somewhere safe." },
   { question: "What security reviews are available?", answer: <>There are 36 public review reports covering v0.1.0 through v0.4.3. They are AI-assisted multi-model reviews. No paid third-party audit has taken place yet. <ExternalLink href={SOURCE}>Read the reports</ExternalLink></> },
   { question: "Does the wallet track me?", answer: "The app has no analytics or trackers. Pearl balance and history lookups go through PearlBridge’s public RPC. Network providers can see your IP address and the wallet addresses you query." },
-  { question: "Is there a fee?", answer: "PRL sends include an optional 0.1% developer tip, with a minimum of 1 PRL. It is on by default and can be turned off in Settings. Network and bridge fees are shown before you sign." },
+  { question: "Is there a fee?", answer: "PRL sends include an optional 0.1% developer tip, with a minimum of 1 PRL. It is on by default and can be turned off in Settings. PRL sends show the network fee before you sign. Bridge transfers show the bridge fee; their Pearl network fee or Ethereum gas is added when the transaction is built." },
   { question: "Is WPRL backed?", answer: <>WPRL is intended to be backed by PRL held on Pearl. Review the live backing information before bridging. <ExternalLink href={BACKING}>Check bridge backing</ExternalLink></> },
   { question: "Who builds PearlWallet?", answer: <>The PearlBridge team, an independent project not affiliated with Pearl Research Labs. For responsible security disclosure, contact <a className="landing-link" href="mailto:bridgedev@mailbox.org">bridgedev@mailbox.org</a>.</> },
 ];
@@ -150,7 +150,7 @@ export default function LandingPage() {
 
         <aside className="landing-fees" aria-labelledby="fees-title">
           <h2 id="fees-title">A note on fees</h2>
-          <p>PRL sends include an optional <strong>0.1% developer tip, minimum 1 PRL</strong>. It is on by default. You can turn it off in Settings. Network and bridge fees are shown before you sign.</p>
+          <p>PRL sends include an optional <strong>0.1% developer tip, minimum 1 PRL</strong>. It is on by default. You can turn it off in Settings. PRL sends show the network fee before you sign. Bridge transfers show the bridge fee; their Pearl network fee or Ethereum gas is added when the transaction is built.</p>
         </aside>
 
         <section className="landing-closing" aria-labelledby="closing-title">
