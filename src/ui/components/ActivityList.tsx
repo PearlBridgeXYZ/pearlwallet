@@ -3,6 +3,8 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { useWallet } from "../../state/wallet-store";
+import { getScanBaseline } from "../../state/balance-memory";
+import { activityPool, prlScanQueryKey } from "../hooks/useWalletBalances";
 import { fetchActivity, type ActivityItem } from "../../services/activity";
 import { formatGrains, formatWprl } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
@@ -24,9 +26,11 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
   const ethNetwork = useWallet((s) => s.ethNetwork);
 
   // Both single-sig branches: without the change branch a send would be
-  // shown as spending its change too.
+  // shown as spending its change too. Change addresses the balance refresh
+  // skips (known unused, past the window) are skipped here as well.
+  const external = addresses ? addresses.pearlPool ?? [addresses.pearl] : [];
   const pearlAll = addresses
-    ? [...(addresses.pearlPool ?? [addresses.pearl]), ...(addresses.pearlChange ?? [])]
+    ? activityPool(external, addresses.pearlChange ?? [], getScanBaseline(prlScanQueryKey(external)[1]))
     : [];
 
   const activityQ = useQuery({

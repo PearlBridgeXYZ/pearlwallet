@@ -349,6 +349,8 @@ export default function SendPRL() {
       );
       setTxid(hash);
       setStage("sent");
+      // The dashboard's coin list is now out of date (as after Combine).
+      void queryClient.invalidateQueries({ queryKey: prlScanQueryKey(pool) });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (e instanceof BroadcastStatusUnknownError) {
@@ -356,6 +358,7 @@ export default function SendPRL() {
         // and never leave a live preview that could send a second payment.
         setUnknownTxid(e.txid);
         setStage("unknown");
+        void queryClient.invalidateQueries({ queryKey: prlScanQueryKey(pool) });
       } else if (e instanceof PendingSpendConflictError) {
         setError("A coin in this preview is already being spent by another transaction from this wallet — refreshing…");
         previewQ.refetch();

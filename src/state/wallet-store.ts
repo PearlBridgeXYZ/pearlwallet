@@ -439,7 +439,9 @@ export const useWallet = create<WalletState>((set, get) => ({
     // Remembered per-address balances and scan state must not outlive
     // the session either.
     clearBalanceMemory();
-    set({ status: "locked", addresses: null });
+    // Bump the address generation too: an address write still awaiting
+    // the keystore (extend / reset) must not publish its lists after this.
+    set({ status: "locked", addresses: null, pearlAddressGeneration: get().pearlAddressGeneration + 1 });
   },
 
   async wipe(password) {
@@ -535,9 +537,9 @@ export const useWallet = create<WalletState>((set, get) => ({
 
   async extendPearlAddresses(next, generation) {
     return walletLock(async () => {
-      const { status, addresses } = get();
+      const { status, addresses, pearlAddressGeneration: gen } = get();
       if (status !== "unlocked" || !addresses) return false;
-      if (generation !== undefined && generation !== get().pearlAddressGeneration) return false;
+      if (generation !== undefined && generation !== gen) return false;
       const curExt = addresses.pearlPool;
       const curInt = addresses.pearlChange ?? [];
       const ext = next.external.slice(0, MAX_ADDRESSES_PER_BRANCH);
@@ -549,6 +551,8 @@ export const useWallet = create<WalletState>((set, get) => ({
       rec.publicData.pearlAddressPool = [...ext];
       rec.publicData.pearlChangePool = [...int];
       await saveKeystore(rec);
+      // A lock (or reset) while the keystore was written: publish nothing.
+      if (get().status !== "unlocked" || get().pearlAddressGeneration !== gen) return false;
       set({ addresses: { ...addresses, pearlPool: [...ext], pearlChange: [...int] } });
       return true;
     });
@@ -559,7 +563,7 @@ export const useWallet = create<WalletState>((set, get) => ({
     // was planned over the list being discarded.
     set({ pearlAddressGeneration: get().pearlAddressGeneration + 1 });
     return walletLock(async () => {
-      const { status, addresses } = get();
+      const { status, addresses, pearlAddressGeneration: gen } = get();
       if (status !== "unlocked" || !addresses) return false;
       const ext = addresses.pearlPool.slice(0, RECEIVE_GAP_LIMIT);
       const int = (addresses.pearlChange ?? []).slice(0, RECEIVE_GAP_LIMIT);
@@ -568,6 +572,9 @@ export const useWallet = create<WalletState>((set, get) => ({
       rec.publicData.pearlAddressPool = [...ext];
       rec.publicData.pearlChangePool = [...int];
       await saveKeystore(rec);
+      // Locked while the keystore was written: publish nothing (lock
+      // already cleared the session's memory).
+      if (get().status !== "unlocked" || get().pearlAddressGeneration !== gen) return false;
       // Scan baselines and cached scans describe the longer lists.
       clearBalanceMemory();
       // Bump again as the short lists become visible: a scan that started

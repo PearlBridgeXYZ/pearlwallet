@@ -443,6 +443,23 @@ describe("G4 — resolution", () => {
     expect(unresolvedBroadcasts()).toHaveLength(1);
   });
 
+  it("an input output the node returned without its script is unlisted, not spent: Check and Release both say unknown", async () => {
+    const f = signedFixture(57);
+    seedRecords([rec({ txid: f.txid, inputs: [`${C1}:0`, `${C2}:0`], addresses: [DEST] })]);
+    const hist = history(DEST, DEST_SCRIPT, [C1, C2]) as { vout: { scriptPubKey: { hex?: string } }[] }[];
+    delete hist[1]!.vout[0]!.scriptPubKey.hex; // C2:0 — dropped by the walk
+    stubRpc((m, p) => {
+      if (m === "getrawtransaction") return NO_TX();
+      if (m === "searchrawtransactions") return (p[2] as number) === 0 ? ok(hist) : NO_ADDR();
+      return rpcErr(-32601, "nope");
+    });
+    await expect(checkBroadcast(f.txid)).resolves.toBe("unknown");
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+    await expect(releaseBroadcast(f.txid)).resolves.toBe("unknown");
+    expect(unresolvedBroadcasts()).toHaveLength(1);
+    expect(pendingOutpoints().has(`${C2}:0`)).toBe(true);
+  });
+
   it("offline record without addresses: each input's address comes from its verified funding tx", async () => {
     const funding = signedFixture(61); // output 0 pays DEST
     seedRecords([rec({ txid: T, inputs: [`${funding.txid}:0`], kind: "offline" })]);

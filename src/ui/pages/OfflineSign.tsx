@@ -53,6 +53,15 @@ function grainsToPrl(grains: string | bigint): string {
   return `${whole}.${frac.toString().padStart(8, "0")}`.replace(/0+$/, "").replace(/\.$/, ".0");
 }
 
+/** Two address lists of the same wallet differ only in length (the
+ *  watcher discovered more addresses than a seed-restored signer derives):
+ *  they disagree only when an index both have holds different addresses. */
+export function poolsDisagree(a: readonly string[], b: readonly string[]): boolean {
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) if (a[i] !== b[i]) return true;
+  return false;
+}
+
 export default function OfflineSign() {
   const navigate = useNavigate();
   const status = useWallet((s) => s.status);
@@ -515,14 +524,10 @@ function SignTab({ network, pool }: SignTabProps) {
 
   // Soft-warn if the payload's pool snapshot differs from the signer's
   // — a clear signal the user pasted into the wrong wallet.
-  const poolMismatch = useMemo(() => {
-    if (!decoded?.meta?.pool || !pool) return false;
-    if (decoded.meta.pool.length !== pool.length) return true;
-    for (let i = 0; i < pool.length; i++) {
-      if (decoded.meta.pool[i] !== pool[i]) return true;
-    }
-    return false;
-  }, [decoded, pool]);
+  const poolMismatch = useMemo(
+    () => !!decoded?.meta?.pool && !!pool && poolsDisagree(decoded.meta.pool, pool),
+    [decoded, pool],
+  );
 
   return (
     <section className="space-y-4">

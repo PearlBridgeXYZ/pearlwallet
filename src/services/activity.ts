@@ -266,6 +266,14 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
     }
   }
 
+  // prevOut evidence (vinextra=1) merged across every copy of a txid: a
+  // copy reused from the balance walk's history carries none, so keeping
+  // only the first copy could turn a payment into "Received".
+  const spendsPoolPrevOut = new Set<string>();
+  for (const tx of collected) {
+    if (tx.vin.some((vin) => vin.prevOut?.addresses?.some((a) => poolSet.has(a)))) spendsPoolPrevOut.add(tx.txid);
+  }
+
   // Pass 2: classify each unique txid.
   const byTxid = new Map<string, RawTx>();
   for (const tx of collected) {
@@ -274,8 +282,8 @@ async function scanPearlActivity(pool: string[], limit: number): Promise<PearlWa
 
   const items: ActivityItem[] = [];
   for (const tx of byTxid.values()) {
-    let spendsOurs = false;
-    for (const vin of tx.vin) {
+    let spendsOurs = spendsPoolPrevOut.has(tx.txid);
+    for (const vin of spendsOurs ? [] : tx.vin) {
       // Preferred: prevOut data (vinextra=1) names the spent output's
       // owner directly, even when the funding tx is outside the window.
       if (vin.prevOut?.addresses?.some((a) => poolSet.has(a))) {

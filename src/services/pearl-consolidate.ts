@@ -323,12 +323,13 @@ export interface ConsolidationAddressBook {
  * the time the last of those reads finished — the batch's new review
  * clock. Throws E_CONSOLIDATION_RECHECK_INCOMPLETE when an address can't
  * be read completely (RPC failure or page cap): an incomplete history
- * can't prove a coin unspent.
+ * can't prove a coin unspent. `opts.maxPages` = the depth the plan's own
+ * walk used (a plan read deeper is re-checked at that depth).
  */
 export async function recheckConsolidationBatch(
   b: ConsolidationBatch,
   book: ConsolidationAddressBook,
-  opts: { signal?: AbortSignal; now?: () => number } = {},
+  opts: { signal?: AbortSignal; now?: () => number; maxPages?: number } = {},
 ): Promise<number> {
   const refs: WalletAddressRef[] = [];
   const seen = new Set<string>();
@@ -342,7 +343,7 @@ export async function recheckConsolidationBatch(
     if (!address) throw new Error("E_CONSOLIDATION_RECHECK_INCOMPLETE");
     refs.push({ address, branch: u.branch, index: u.index });
   }
-  const results = await walkPoolAddresses(refs, { signal: opts.signal, priority: "high" });
+  const results = await walkPoolAddresses(refs, { signal: opts.signal, priority: "high", maxPages: opts.maxPages });
   const fresh: PoolUtxo[] = [];
   results.forEach((r, i) => {
     if (r.status !== "ok" || r.capped) throw new Error("E_CONSOLIDATION_RECHECK_INCOMPLETE");

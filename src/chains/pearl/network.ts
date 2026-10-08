@@ -48,7 +48,7 @@ export const PEARL_MAINNET: PearlNetworkParams = {
 // only converted a busy primary into "Pearl RPC unreachable". A busy
 // primary is now handled by backoff-and-retry in services/pearl-rpc.ts.
 // Re-add hosts here once they resolve and serve the sentry allowlist.
-// (They remain in the CSP and override allowlist, which is harmless.)
+// (Also removed from the CSP and the override allowlist in v0.7.)
 export const PEARL_RPC_POOL: readonly string[] = [
   "https://rpc.pearlbridge.xyz/",
 ];

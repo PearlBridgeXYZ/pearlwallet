@@ -14,11 +14,13 @@ import { pearlAddressSetFromAccount, pearlBranchAddressRange, validateDeriveRang
 import type { KeystoreRecord } from "../src/storage/db";
 
 // In-memory keystore table.
-const mem: { rec: KeystoreRecord | undefined; saves: number } = { rec: undefined, saves: 0 };
+const mem: { rec: KeystoreRecord | undefined; saves: number; gate: Promise<void> | null } = { rec: undefined, saves: 0, gate: null };
 vi.mock("../src/storage/db", () => ({
   db: { keystore: { put: async (r: KeystoreRecord) => { mem.rec = structuredClone(r); } } },
   loadKeystore: async () => (mem.rec ? structuredClone(mem.rec) : undefined),
   saveKeystore: async (r: KeystoreRecord) => {
+    // A test can hold the write open (a slow IndexedDB commit).
+    if (mem.gate) await mem.gate;
     mem.saves++;
     mem.rec = structuredClone(r);
   },
@@ -93,6 +95,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   mem.rec = undefined;
   mem.saves = 0;
+  mem.gate = null;
   unlockCounts.length = 0;
   useWallet.setState({ status: "locked", addresses: null, blob: BLOB, pearlNetwork: "mainnet" });
   mockWorker();
@@ -190,5 +193,53 @@ describe("extendPearlAddresses — persisting discovery", () => {
     expect(isPrefixExtension(["a", "b"], ["a", "b"])).toBe(true);
     expect(isPrefixExtension(["a", "b"], ["a"])).toBe(false);
     expect(isPrefixExtension(["a", "b"], ["a", "x", "c"])).toBe(false);
+  });
+});
+
+// Final review round (S8): an address write awaiting the keystore must not
+// publish its lists after a lock.
+describe("lock during an in-flight address write", () => {
+  function hold() {
+    let open!: () => void;
+    mem.gate = new Promise<void>((r) => (open = r));
+    return () => {
+      mem.gate = null;
+      open();
+    };
+  }
+
+  it("extendPearlAddresses: a lock while the keystore is written leaves the store locked and empty", async () => {
+    mem.rec = legacyRecord(20, 20);
+    await useWallet.getState().unlock("pw");
+    const release = hold();
+    const p = useWallet.getState().extendPearlAddresses({ external: ext60.slice(0, 46), internal: int60.slice(0, 24) });
+    await new Promise((r) => setTimeout(r, 5));
+    await useWallet.getState().lock();
+    release();
+    expect(await p).toBe(false);
+    expect(useWallet.getState().status).toBe("locked");
+    expect(useWallet.getState().addresses).toBeNull();
+  });
+
+  it("resetPearlAddresses: same", async () => {
+    mem.rec = legacyRecord(46, 24);
+    await useWallet.getState().unlock("pw");
+    const release = hold();
+    const p = useWallet.getState().resetPearlAddresses();
+    await new Promise((r) => setTimeout(r, 5));
+    await useWallet.getState().lock();
+    release();
+    expect(await p).toBe(false);
+    expect(useWallet.getState().addresses).toBeNull();
+  });
+
+  it("lock bumps the address generation: a discovery handler bound before it is refused after a re-unlock", async () => {
+    mem.rec = legacyRecord(20, 20);
+    await useWallet.getState().unlock("pw");
+    const handler = useWallet.getState().pearlDiscoveryHandler();
+    await useWallet.getState().lock();
+    await useWallet.getState().unlock("pw");
+    expect(await handler({ external: ext60.slice(0, 30), internal: int60.slice(0, 20) })).toBe(false);
+    expect(useWallet.getState().addresses!.pearlPool).toHaveLength(20);
   });
 });

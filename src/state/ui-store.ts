@@ -11,12 +11,12 @@ export type Theme = "system" | "light" | "dark";
 // v0.2.5: extended to cover the sentry-fleet hostnames used by the
 // auto-rotating RPC pool (see chains/pearl/network.ts PEARL_RPC_POOL).
 // Must stay in sync with public/_headers CSP `connect-src`.
+// v0.7: the never-resolving pearl-sentry-{fsn1,nbg1,hel1}-1 names were
+// dropped here and from the CSP (a saved override naming one falls back to
+// the default on load).
 const PEARL_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "rpc.pearlbridge.xyz",
   "pearlbridge.xyz",
-  "pearl-sentry-fsn1-1.pearlbridge.xyz",
-  "pearl-sentry-nbg1-1.pearlbridge.xyz",
-  "pearl-sentry-hel1-1.pearlbridge.xyz",
 ];
 
 // Ethereum RPC override allowlist. Same model as Pearl side. Restricted
@@ -27,7 +27,8 @@ const ETH_RPC_OVERRIDE_ALLOWED_HOSTS: readonly string[] = [
   "ethereum-sepolia-rpc.publicnode.com",
   "eth.drpc.org",
   "sepolia.drpc.org",
-  "cloudflare-eth.com",
+  // cloudflare-eth.com dropped in v0.7 (it answers JSON-RPC errors; see
+  // chains/ethereum/network.ts); removed from the CSP too.
 ];
 
 // BTX RPC override allowlist. Separate chain, separate endpoints — must NOT

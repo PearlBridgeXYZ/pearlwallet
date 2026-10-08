@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import InstallPWA from "../components/InstallPWA";
+import { WipeBroadcastWarning } from "../components/PendingBroadcasts";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { BTX_UI_ENABLED } from "../../lib/features";
@@ -746,6 +747,7 @@ export default function Settings() {
           phrase first; you will need it to restore access. Enter your password
           and the confirmation below to remove this wallet.
         </p>
+        <WipeBroadcastWarning />
         <div className="mt-4 flex flex-col gap-4">
           <label className="block min-w-0 flex-1">
             <span className="label">Type “wipe my wallet” to confirm</span>

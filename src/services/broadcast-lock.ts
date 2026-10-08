@@ -97,7 +97,12 @@ function listTabs(ids: string[]): void {
 if (!lockManager() && typeof window !== "undefined" && typeof window.addEventListener === "function") {
   const others = () => (listedTabs() ?? []).filter((t) => t !== tabId);
   listTabs([...others(), tabId]);
-  window.addEventListener("pagehide", () => listTabs(others()));
+  // A page entering the back/forward cache (persisted) is still a live
+  // tab that can resume mid-broadcast: it stays listed. Only a real unload
+  // unlists it.
+  window.addEventListener("pagehide", (e: Event) => {
+    if ((e as { persisted?: boolean }).persisted !== true) listTabs(others());
+  });
   window.addEventListener("pageshow", () => listTabs([...others(), tabId]));
 }
 

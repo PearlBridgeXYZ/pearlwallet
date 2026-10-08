@@ -5,7 +5,7 @@ import Page from "../components/Page";
 import { useWallet } from "../../state/wallet-store";
 import { formatGrains } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
-import { loadSpendableUtxos, PEARL_PREVIEW_FRESHNESS_MS, type PoolUtxo } from "../../services/pearl-tx";
+import { HistoryIncompleteError, loadSpendableUtxos, PEARL_PREVIEW_FRESHNESS_MS, type PoolUtxo } from "../../services/pearl-tx";
 import {
   broadcastConsolidationBatch,
   composeConsolidation,
@@ -17,7 +17,7 @@ import { excludePendingSpends, PendingSpendConflictError, unresolvedBroadcasts }
 import { refusalMessage } from "../components/PendingBroadcasts";
 import { usePendingSpendsVersion } from "../hooks/usePendingSpends";
 import type { PrlPoolScan, WalletAddressRef } from "../../services/balances";
-import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
+import { BroadcastStatusUnknownError, MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
 
 type FeeTier = "low" | "normal" | "high";
@@ -37,6 +37,12 @@ interface CoinSnapshot {
   utxos: PoolUtxo[];
   pendingCount: number;
   degraded: boolean;
+  /** Addresses whose history was longer than the walk read (their coins
+   *  are left out). */
+  historyIncomplete: number;
+  /** Walk depth used (undefined = default); later batches are re-checked
+   *  at the same depth. */
+  maxPages: number | undefined;
   /** When the LAST coins were read (end of the walk) — the plan's review
    *  clock starts here. */
   fetchedAt: number;
@@ -145,6 +151,9 @@ export default function Consolidate() {
 
   const [tier, setTier] = useState<FeeTier>("low");
   const [forceLive, setForceLive] = useState(false);
+  // "Search deeper": walk each address up to the hard page cap (as Send
+  // and vault sends do). Wallets Send turns away for >500 inputs land here.
+  const [deep, setDeep] = useState(false);
   const [scanNonce, setScanNonce] = useState(0);
   const [running, setRunning] = useState(false);
   const [frozen, setFrozen] = useState<ConsolidationPlan | null>(null);
@@ -153,34 +162,41 @@ export default function Consolidate() {
 
   const cachedScan = queryClient.getQueryData<PrlPoolScan>(prlScanQueryKey(pool));
   const coinsQ = useQuery({
-    queryKey: ["consolidate-coins", pool.join(","), scanNonce],
+    queryKey: ["consolidate-coins", pool.join(","), scanNonce, deep],
     enabled: pool.length > 0 && !running,
     retry: false,
     staleTime: Infinity,
     queryFn: async ({ signal }): Promise<CoinSnapshot> => {
       const cache = cachedScan?.spendable;
-      if (!forceLive && cache && cache.utxos.length > 0 && Date.now() - cache.fetchedAt < UTXO_CACHE_FRESHNESS_MS) {
+      if (!forceLive && !deep && cache && cache.utxos.length > 0 && Date.now() - cache.fetchedAt < UTXO_CACHE_FRESHNESS_MS) {
         const { spendable, pending } = excludePendingSpends(cache.utxos);
         return {
           utxos: spendable,
           pendingCount: pending.length,
           degraded: false,
+          historyIncomplete: 0,
+          maxPages: undefined,
           fetchedAt: cache.fetchedAt,
           refs: cachedScan.refs,
         };
       }
       const onDiscovered = useWallet.getState().pearlDiscoveryHandler();
-      const live = await loadSpendableUtxos({ pool, changePool, deriveMore, onDiscovered, signal });
+      const maxPages = deep ? MAX_UTXO_WALK_PAGES_HARD : undefined;
+      const live = await loadSpendableUtxos({ pool, changePool, deriveMore, onDiscovered, maxPages, signal });
       return {
         utxos: live.utxos,
         pendingCount: live.pending.length,
         degraded: live.degraded,
+        historyIncomplete: live.historyIncomplete,
+        maxPages,
         fetchedAt: live.fetchedAt,
         refs: live.refs,
       };
     },
   });
   const coins = coinsQ.data;
+  const canSearchDeeper =
+    !deep && ((coins?.historyIncomplete ?? 0) > 0 || coinsQ.error instanceof HistoryIncompleteError);
 
   const planned = useMemo(() => {
     if (!coins || pool.length === 0) return null;
@@ -217,7 +233,8 @@ export default function Consolidate() {
   const fresh = !!coins && ageMs < PEARL_PREVIEW_FRESHNESS_MS;
   const secondsLeft = coins ? Math.max(0, Math.ceil((PEARL_PREVIEW_FRESHNESS_MS - ageMs) / 1000)) : 0;
 
-  function rescan() {
+  function rescan(deeper = false) {
+    if (deeper) setDeep(true);
     setForceLive(true);
     setFinished(false);
     setFrozen(null);
@@ -255,7 +272,7 @@ export default function Consolidate() {
             refs: coins.refs,
             external: book?.pearlPool ?? pool,
             internal: book?.pearlChange ?? changePool ?? [],
-          });
+          }, { maxPages: coins.maxPages });
         }
         st[i] = { state: "signing" };
         show();
@@ -290,9 +307,17 @@ export default function Consolidate() {
         {coinsQ.isError && (
           <div className="mt-4 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger break-words [overflow-wrap:anywhere]">
             Couldn't read your coins: {(coinsQ.error as Error).message}{" "}
-            <button className="inline-flex min-h-11 items-center underline underline-offset-4" onClick={rescan}>
+            <button className="inline-flex min-h-11 items-center underline underline-offset-4" onClick={() => rescan()}>
               Rescan
             </button>
+            {canSearchDeeper && (
+              <>
+                {" "}
+                <button className="inline-flex min-h-11 items-center underline underline-offset-4" onClick={() => rescan(true)}>
+                  Search deeper
+                </button>
+              </>
+            )}
           </div>
         )}
 
@@ -337,8 +362,24 @@ export default function Consolidate() {
 
             {coins.degraded && (
               <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
-                Some addresses couldn't be read completely. The plan covers the coins that were
-                found; rescan later to pick up the rest.
+                {coins.historyIncomplete > 0 ? (
+                  <>
+                    {coins.historyIncomplete} address{coins.historyIncomplete === 1 ? " has" : "es have"} more history
+                    than was read; {coins.historyIncomplete === 1 ? "its" : "their"} coins are not in this plan.{" "}
+                    {canSearchDeeper ? (
+                      <button className="inline-flex min-h-11 items-center underline underline-offset-4" onClick={() => rescan(true)} disabled={running || coinsQ.isFetching}>
+                        Search deeper
+                      </button>
+                    ) : (
+                      "This is the deepest search; waiting won't change it."
+                    )}
+                  </>
+                ) : (
+                  <>
+                    Some addresses couldn't be read completely. The plan covers the coins that were
+                    found; rescan later to pick up the rest.
+                  </>
+                )}
               </div>
             )}
 
@@ -432,7 +473,7 @@ export default function Consolidate() {
             )}
 
             <div className="mt-4 flex gap-2">
-              <button onClick={rescan} className="btn-secondary min-w-11" disabled={running || coinsQ.isFetching}>
+              <button onClick={() => rescan()} className="btn-secondary min-w-11" disabled={running || coinsQ.isFetching}>
                 Rescan
               </button>
               {!finished ? (

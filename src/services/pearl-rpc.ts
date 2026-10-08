@@ -212,10 +212,6 @@ export class PearlRpcHttpError extends Error {
   constructor(
     readonly status: number,
     readonly retryAfterMs: number | null,
-    /** True when the response is the reverse proxy's own rate-limit page
-     *  (nginx limit_req answers 503 with its stock error page): the
-     *  request was refused at the edge and never forwarded to the node. */
-    readonly edgeLimited: boolean = false,
   ) {
     super(`rpc http ${status}`);
     this.name = "PearlRpcHttpError";
@@ -232,20 +228,6 @@ export class PearlRpcMalformedResponseError extends Error {
     this.name = "PearlRpcMalformedResponseError";
   }
 }
-
-// nginx's stock 503 page ("503 Service Temporarily Unavailable" … "nginx"),
-// which is what limit_req returns. An upstream (node) 503 is proxied with
-// the node's own body and does not match.
-const NGINX_LIMIT_PAGE_TITLE_RE = /<title>\s*503 Service Temporarily Unavailable\s*<\/title>/i;
-const NGINX_SIGNATURE_RE = /<center>\s*nginx(\/[0-9.]+)?\s*<\/center>/i;
-
-/** True when `body` is nginx's own 503 error page (edge rate limit). */
-export function isEdgeRateLimitPage(body: string): boolean {
-  return NGINX_LIMIT_PAGE_TITLE_RE.test(body) && NGINX_SIGNATURE_RE.test(body);
-}
-
-/** Largest error body we read to classify a 503. */
-const MAX_ERROR_BODY_CHARS = 4_096;
 
 /** The client gave up waiting for a response. The request may still have
  *  reached the node — callers that are not idempotent must treat this as
@@ -314,15 +296,9 @@ async function fetchOnce<T>(
       throw err instanceof TypeError ? err : new TypeError(String((err as Error)?.message ?? err));
     }
     if (!res.ok) {
-      let edgeLimited = false;
-      if (res.status === 503) {
-        try {
-          edgeLimited = isEdgeRateLimitPage((await res.text()).slice(0, MAX_ERROR_BODY_CHARS));
-        } catch {
-          /* unreadable body: not identifiable, stay conservative */
-        }
-      }
-      throw new PearlRpcHttpError(res.status, parseRetryAfterMs(res.headers.get("retry-after")), edgeLimited);
+      // Every 5xx (including a proxy's own 503 page, which can't be told
+      // apart from an intercepted upstream 503) may have been forwarded.
+      throw new PearlRpcHttpError(res.status, parseRetryAfterMs(res.headers.get("retry-after")));
     }
     let text: string;
     try {
@@ -966,8 +942,8 @@ const TXID_HEX_RE = /^[0-9a-f]{64}$/i;
  *     BroadcastStatusUnknownError
  *   • every attempt failed transiently (and at least one may have been
  *     delivered)                                 → BroadcastStatusUnknownError
- *   • only edge refusals (429, nginx rate-limit 503 page; never
- *     forwarded)                                 → failure
+ *   • only 429 refusals (refused before forwarding) → failure; any 5xx
+ *     may have been forwarded (a proxy's 503 page is not trusted)
  * A client timeout is never reported as a plain failure.
  */
 export async function broadcastPearlTx(rawHex: string): Promise<string> {
@@ -980,10 +956,10 @@ export async function broadcastPearlTx(rawHex: string): Promise<string> {
       timeoutMs: tuning.broadcastTimeoutMs,
       retryBudgetMs: tuning.broadcastRetryBudgetMs,
       onAttemptError: (err) => {
-        // 429 and the edge's own rate-limit page mean the request was
-        // refused before forwarding. Everything else transient (timeout,
-        // network drop, other 5xx) may have been delivered.
-        if (err instanceof PearlRpcHttpError && (err.status === 429 || err.edgeLimited)) return;
+        // 429 means the request was refused before forwarding. Everything
+        // else transient (timeout, network drop, any 5xx) may have been
+        // delivered.
+        if (err instanceof PearlRpcHttpError && err.status === 429) return;
         if (isRetryableSameEndpoint(err) || err instanceof PearlRpcMalformedResponseError) maybeReachedNode = true;
       },
     });
@@ -1008,7 +984,7 @@ export async function broadcastPearlTx(rawHex: string): Promise<string> {
       throw new BroadcastStatusUnknownError(localTxid, err);
     }
     // Transport never produced a definitive answer. If no attempt can
-    // have been delivered (only edge refusals), it is a plain failure.
+    // have been delivered (only 429 refusals), it is a plain failure.
     if (!maybeReachedNode) throw err;
     throw new BroadcastStatusUnknownError(localTxid, err);
   }

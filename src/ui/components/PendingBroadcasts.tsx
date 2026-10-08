@@ -4,7 +4,9 @@
 // the screen that broadcast never hides one. Each entry has "Check status";
 // "Release" appears only after a check found the transaction absent and
 // every coin it spends unspent, and needs an explicit acknowledgement (the
-// release repeats that check inside the broadcast lock). It also says when
+// release repeats that check inside the broadcast lock). Accepted broadcasts
+// still unconfirmed after ACCEPTED_STALL_MS are listed the same way (the
+// node may have dropped them; their coins stay reserved). It also says when
 // the record itself can't be read or saved, and — in browsers without Web
 // Locks — when another wallet tab blocks sending.
 
@@ -18,6 +20,7 @@ import {
   claimOnlyWalletTab,
   otherWalletTabOpen,
   resetUnreadableBroadcastRecord,
+  stalledBroadcasts,
   unresolvedBroadcasts,
   type BroadcastRecord,
 } from "../../services/pending-spends";
@@ -51,8 +54,13 @@ function describe(r: BroadcastRecord): string {
   return `${what}${amount} to ${r.destination ? short(r.destination) : "an address that wasn't recorded"}`;
 }
 
-function resolvedNote(txid: string, r: BroadcastCheck): string | null {
-  if (r === "found") return `The network has ${short(txid)} (pending or confirmed). It's no longer unknown.`;
+function resolvedNote(rec: BroadcastRecord, r: BroadcastCheck): string | null {
+  const txid = rec.txid;
+  if (r === "found") {
+    // An accepted record the network still has stays listed: nothing new.
+    if (rec.state === "accepted") return null;
+    return `The network has ${short(txid)} (pending or confirmed). It's no longer unknown.`;
+  }
   if (r === "spent") {
     return `The network doesn't have ${short(txid)}, and a coin it spends was spent by another transaction, so it can never confirm. It was removed. Check the explorer if you're unsure which payment went through.`;
   }
@@ -71,11 +79,12 @@ function Row({ rec, onResolved }: { rec: BroadcastRecord; onResolved: (text: str
     setNote(null);
     try {
       const r = release ? await releaseBroadcast(rec.txid) : await checkBroadcast(rec.txid);
-      const done = release && r === "absent-unspent" ? `Released ${short(rec.txid)}: its coins can be spent again.` : resolvedNote(rec.txid, r);
+      const done = release && r === "absent-unspent" ? `Released ${short(rec.txid)}: its coins can be spent again.` : resolvedNote(rec, r);
       if (done) return onResolved(done);
       setResult(r);
       setAck(false);
       if (r === "unknown") setNote(release ? "Couldn't confirm that again, so nothing was released. Try again in a moment." : "Couldn't check right now. Try again in a moment.");
+      if (r === "found") setNote("The network still has it; it is waiting to be confirmed.");
     } catch (e) {
       setNote(
         e instanceof BroadcastRefusedError && e.reason === "busy"
@@ -120,16 +129,32 @@ function Row({ rec, onResolved }: { rec: BroadcastRecord; onResolved: (text: str
   );
 }
 
+/** Settings → wipe: wiping forgets the broadcast records, and with them
+ *  the hold that keeps an unknown payment from being paid twice. */
+export function WipeBroadcastWarning() {
+  usePendingSpendsVersion();
+  const n = unresolvedBroadcasts().length;
+  if (n === 0) return null;
+  return (
+    <p role="alert" className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-sm leading-7 text-warn">
+      {n === 1 ? "A broadcast from this wallet has" : `${n} broadcasts from this wallet have`} an unknown status. Wiping
+      forgets {n === 1 ? "it" : "them"}: after a restore the wallet can no longer stop you from paying again with the
+      same coins. Check {n === 1 ? "it" : "them"} in the banner at the top first.
+    </p>
+  );
+}
+
 export default function PendingBroadcasts({ className = "" }: { className?: string }) {
   usePendingSpendsVersion();
   const [notes, setNotes] = useState<string[]>([]);
   const open = unresolvedBroadcasts();
+  const stalled = stalledBroadcasts();
   const issue = broadcastRecordIssue();
   const otherTab = otherWalletTabOpen();
-  if (open.length === 0 && !issue && !otherTab && notes.length === 0) return null;
+  if (open.length === 0 && stalled.length === 0 && !issue && !otherTab && notes.length === 0) return null;
   return (
     <section
-      aria-label="Broadcasts with unknown status"
+      aria-label="Broadcasts that need checking"
       className={`mb-4 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn ${className}`}
     >
       {open.length > 0 && (
@@ -149,8 +174,25 @@ export default function PendingBroadcasts({ className = "" }: { className?: stri
           </ul>
         </>
       )}
+      {stalled.length > 0 && (
+        <div className={open.length > 0 ? "mt-3 border-t border-warn-line pt-2" : ""}>
+          <h2 className="text-base font-semibold">
+            {stalled.length === 1 ? "A transaction hasn't confirmed yet" : `${stalled.length} transactions haven't confirmed yet`}
+          </h2>
+          <p className="mt-1">
+            The network accepted {stalled.length === 1 ? "it" : "them"} earlier, but {stalled.length === 1 ? "it hasn't" : "they haven't"} confirmed
+            and {stalled.length === 1 ? "its" : "their"} coins stay reserved for up to 24 hours. If the network dropped{" "}
+            {stalled.length === 1 ? "it" : "one"}, a check lets you release the coins now.
+          </p>
+          <ul className="mt-2 space-y-3">
+            {stalled.map((r) => (
+              <Row key={r.txid} rec={r} onResolved={(t) => setNotes((n) => [...n, t])} />
+            ))}
+          </ul>
+        </div>
+      )}
       {notes.length > 0 && (
-        <div role="status" className={open.length > 0 ? "mt-2 border-t border-warn-line pt-2" : ""}>
+        <div role="status" className={open.length > 0 || stalled.length > 0 ? "mt-2 border-t border-warn-line pt-2" : ""}>
           {notes.map((t, i) => (
             <p key={i}>{t}</p>
           ))}

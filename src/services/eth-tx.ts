@@ -361,6 +361,65 @@ export interface ContractCallParams {
   network: EthNetwork;
   from: `0x${string}`;
   tier: FeeTier;
+  /** The gas ceiling the user reviewed (previewUnwrapGas). A call whose
+   *  fresh fees or total cost exceed it is refused unsigned. */
+  ceiling?: EthGasCeiling;
+}
+
+/** What the user saw before signing a bridge contract call. */
+export interface EthGasCeiling {
+  /** Highest price per gas unit the call may sign. */
+  maxFeePerGas: bigint;
+  /** Highest total (gas limit × max fee) in wei; null when the step
+   *  could not be estimated in advance (the burn after an approval). */
+  maxCostWei: bigint | null;
+}
+
+/** Headroom over the previewed max fee per gas (percent): the base fee
+ *  can move a few blocks between review and click. */
+export const GAS_CEILING_HEADROOM_PCT = 150n;
+
+export interface UnwrapGasPreview {
+  maxFeePerGas: bigint;
+  /** Ceiling for the approval; null when no approval is needed. */
+  approveWei: bigint | null;
+  /** Ceiling for the burn; null when it can only be estimated once the
+   *  approval has confirmed (the estimate reverts without allowance). */
+  burnWei: bigint | null;
+}
+
+function approveCalldata(network: EthNetwork, amount: bigint): Hex {
+  return encodeFunctionData({ abi: erc20Abi, functionName: "approve", args: [bridgeConfig(network).bridgeController, amount] });
+}
+
+function burnCalldata(amount: bigint, pearlAddress: string): Hex {
+  return encodeFunctionData({ abi: REQUEST_BURN_ABI, functionName: "requestBurn", args: [amount, pearlAddress] });
+}
+
+/** Estimated gas limit for a bridge contract call (estimate + 20 %). */
+async function contractGas(network: EthNetwork, from: `0x${string}`, to: `0x${string}`, data: Hex): Promise<bigint> {
+  const units = await ethClient(network).estimateGas({ account: from, to, data });
+  return (units * 120n) / 100n;
+}
+
+/** ETH gas ceilings for an unwrap, shown before anything is signed. */
+export async function previewUnwrapGas(p: {
+  network: EthNetwork;
+  from: `0x${string}`;
+  amount: bigint;
+  pearlAddress: string;
+  needsApprove: boolean;
+  tier: FeeTier;
+}): Promise<UnwrapGasPreview> {
+  const cfg = bridgeConfig(p.network);
+  const fees = await suggestGas(p.network, p.tier);
+  const maxFeePerGas = (fees.maxFeePerGas * GAS_CEILING_HEADROOM_PCT) / 100n;
+  if (p.needsApprove) {
+    const gas = await contractGas(p.network, p.from, cfg.wprl, approveCalldata(p.network, p.amount));
+    return { maxFeePerGas, approveWei: gas * maxFeePerGas, burnWei: null };
+  }
+  const gas = await contractGas(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress));
+  return { maxFeePerGas, approveWei: null, burnWei: gas * maxFeePerGas };
 }
 
 /** ERC-20 approve(bridgeController, amount) on WPRL, signed locally. */
@@ -368,12 +427,7 @@ export async function approveWprlForBridge(
   p: ContractCallParams & { amount: bigint },
 ): Promise<SendResult> {
   const cfg = bridgeConfig(p.network);
-  const data = encodeFunctionData({
-    abi: erc20Abi,
-    functionName: "approve",
-    args: [cfg.bridgeController, p.amount],
-  });
-  return await sendContractCall(p.network, p.from, cfg.wprl, data, p.tier);
+  return await sendContractCall(p.network, p.from, cfg.wprl, approveCalldata(p.network, p.amount), p.tier, p.ceiling);
 }
 
 /** BridgeController.requestBurn(grossAmount, pearlAddress), signed locally. */
@@ -381,12 +435,7 @@ export async function requestBurn(
   p: ContractCallParams & { amount: bigint; pearlAddress: string },
 ): Promise<SendResult> {
   const cfg = bridgeConfig(p.network);
-  const data = encodeFunctionData({
-    abi: REQUEST_BURN_ABI,
-    functionName: "requestBurn",
-    args: [p.amount, p.pearlAddress],
-  });
-  return await sendContractCall(p.network, p.from, cfg.bridgeController, data, p.tier);
+  return await sendContractCall(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress), p.tier, p.ceiling);
 }
 
 async function sendContractCall(
@@ -395,18 +444,22 @@ async function sendContractCall(
   to: `0x${string}`,
   data: Hex,
   tier: FeeTier,
+  ceiling?: EthGasCeiling,
 ): Promise<SendResult> {
   const chainId = await chainIdFor(network);
   const client = ethClient(network);
-  const [gasEstimate, fees] = await Promise.all([
-    client.estimateGas({ account: from, to, data }),
-    suggestGas(network, tier),
-  ]);
-  // 20% headroom: requestBurn's gas varies with daily-window storage
-  // writes (first burn of a window pays for slot init). An exact-estimate
-  // tx that lands second pays slightly less gas but never reverts; an
-  // exact-estimate tx that lands FIRST can run out.
-  const gas = (gasEstimate * 120n) / 100n;
+  // 20% headroom (contractGas): requestBurn's gas varies with daily-window
+  // storage writes (first burn of a window pays for slot init). An
+  // exact-estimate tx that lands second pays slightly less gas but never
+  // reverts; an exact-estimate tx that lands FIRST can run out.
+  const [gas, fees] = await Promise.all([contractGas(network, from, to, data), suggestGas(network, tier)]);
+  if (
+    ceiling &&
+    (fees.maxFeePerGas > ceiling.maxFeePerGas ||
+      (ceiling.maxCostWei !== null && gas * fees.maxFeePerGas > ceiling.maxCostWei))
+  ) {
+    throw new Error("E_ETH_GAS_ABOVE_REVIEW");
+  }
   const nonce = await client.getTransactionCount({ address: from, blockTag: "pending" });
   const composed: EthTxRequest = {
     chainId,

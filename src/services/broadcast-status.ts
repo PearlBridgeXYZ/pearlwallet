@@ -1,5 +1,6 @@
 // Resolving broadcast records (services/pending-spends.ts) from what the
-// node reports. Nothing here releases on a timer or on a single negative
+// node reports: "unknown" records, and "accepted" ones no scan settled
+// within ACCEPTED_STALL_MS (the node may have evicted them). Nothing here releases on a timer or on a single negative
 // answer:
 //   found           getrawtransaction returns bytes hashing to the txid
 //                   → the record becomes "accepted";
@@ -17,6 +18,7 @@ import type { PrlPoolScan } from "./balances";
 import { fetchPrlUtxos, fetchVerifiedRawTx, MAX_UTXO_WALK_PAGES_HARD, probePearlTx, rawTxOutputs } from "./pearl-rpc";
 import {
   broadcastRecords,
+  isStalledAccepted,
   outpointKey,
   resolveBroadcasts,
   withBroadcastLock,
@@ -26,7 +28,8 @@ import {
 export type BroadcastCheck = "found" | "spent" | "absent-unspent" | "unknown";
 
 /** "unspent" only when complete walks list every input; "spent" when a
- *  complete walk of an input's address misses it. */
+ *  complete walk of an input's address misses it. A walk that dropped an
+ *  output (no script in the RPC answer) is not complete. */
 async function inputsState(rec: BroadcastRecord): Promise<"unspent" | "spent" | "unknown"> {
   const addresses = new Set(rec.addresses);
   if (addresses.size === 0) {
@@ -42,14 +45,18 @@ async function inputsState(rec: BroadcastRecord): Promise<"unspent" | "spent" | 
   const listed = new Set<string>();
   for (const a of addresses) {
     const w = await fetchPrlUtxos(a, { maxPages: MAX_UTXO_WALK_PAGES_HARD, priority: "high" }).catch(() => null);
-    if (!w || w.degraded) return "unknown";
+    // An output the node returned without its script is unlisted, not
+    // spent: such a walk proves nothing either way.
+    if (!w || w.degraded || w.droppedNoScript > 0) return "unknown";
     for (const u of w.utxos) listed.add(outpointKey(u));
   }
   return rec.inputs.every((o) => listed.has(o)) ? "unspent" : "spent";
 }
 
 async function inspect(txid: string): Promise<BroadcastCheck> {
-  const rec = broadcastRecords().find((r) => r.txid === txid.toLowerCase() && r.state === "unknown");
+  const rec = broadcastRecords().find(
+    (r) => r.txid === txid.toLowerCase() && (r.state === "unknown" || isStalledAccepted(r)),
+  );
   if (!rec) return "unknown";
   const first = await probePearlTx(rec.txid);
   if (first !== "absent") return first;
@@ -65,7 +72,8 @@ function save(txid: string, r: BroadcastCheck): void {
   if (r === "spent") resolveBroadcasts([txid], "forget");
 }
 
-/** "Check status" of an "unknown" record; saves what is now certain. */
+/** "Check status" of an "unknown" record (or an accepted one unsettled
+ *  after ACCEPTED_STALL_MS); saves what is now certain. */
 export async function checkBroadcast(txid: string): Promise<BroadcastCheck> {
   const r = await inspect(txid);
   if (r === "found" || r === "spent") {

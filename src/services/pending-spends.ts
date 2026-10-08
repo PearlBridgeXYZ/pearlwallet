@@ -11,7 +11,8 @@
 //     tx (→ "accepted"), when its inputs are seen spent, or by the user's
 //     explicit release after a check, re-run inside the lock, found the tx
 //     absent AND every input unspent. "accepted" ends when a complete scan
-//     no longer lists its inputs, or after 24 h.
+//     no longer lists its inputs, or after 24 h; after 30 min it is listed
+//     with the same Check status / Release (the node may have dropped it).
 //  5. Every write holds one exclusive Web Locks lock, kept across sign →
 //     record → submit → outcome: a suspended sender still holds it, so no
 //     tab can release its coins or broadcast meanwhile. Without Web Locks a
@@ -33,6 +34,9 @@ import { BroadcastRefusedError, claimOnlyTab, WALLET_TABS_STORAGE_KEY, withBroad
 
 export const BROADCASTS_STORAGE_KEY = "pearl-wallet-broadcasts-v1";
 export const ACCEPTED_KEEP_MS = 24 * 60 * 60 * 1000;
+/** An "accepted" record still unsettled after this long is listed in the
+ *  banner with Check status / Release: the node may have dropped it. */
+export const ACCEPTED_STALL_MS = 30 * 60 * 1000;
 const FORMAT_VERSION = 1;
 const MAX_RECORDS = 500;
 
@@ -220,6 +224,18 @@ export const broadcastRecords = (now: number = Date.now()): BroadcastRecord[] =>
 /** Broadcasts whose fate is unknown, newest first. */
 export function unresolvedBroadcasts(now: number = Date.now()): BroadcastRecord[] {
   return broadcastRecords(now).filter((r) => r.state === "unknown").sort((a, b) => b.createdAt - a.createdAt);
+}
+
+/** True for an "accepted" record no scan has settled after
+ *  ACCEPTED_STALL_MS (the node may have evicted it). */
+export const isStalledAccepted = (r: BroadcastRecord, now: number = Date.now()): boolean =>
+  r.state === "accepted" && now - r.createdAt >= ACCEPTED_STALL_MS;
+
+/** Accepted broadcasts still holding their coins after ACCEPTED_STALL_MS,
+ *  newest first. They hold no other broadcast; they are listed so the user
+ *  can check them and, if the network dropped them, release their coins. */
+export function stalledBroadcasts(now: number = Date.now()): BroadcastRecord[] {
+  return broadcastRecords(now).filter((r) => isStalledAccepted(r, now)).sort((a, b) => b.createdAt - a.createdAt);
 }
 
 // ─── Broadcast lifecycle (callers hold the lock) ─────────────────────────

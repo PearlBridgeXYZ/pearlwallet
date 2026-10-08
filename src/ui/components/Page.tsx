@@ -8,10 +8,22 @@ interface PageProps {
   title?: string;
 }
 
+/** Moves focus to the page's main region without touching the URL. */
+export function focusMain(): void {
+  const main = document.getElementById("main-content");
+  main?.focus();
+  main?.scrollIntoView?.({ block: "start" });
+}
+
 export default function Page({ children, chrome = true, title }: PageProps) {
   return (
     <div className="min-h-full">
-      <a href="#main-content" className="skip-link">Skip to content</a>
+      {/* A button, not href="#main-content": under file:// the app runs on a
+          HashRouter, where changing the fragment navigates away (to the
+          dashboard) and would lose an offline signer's work. */}
+      <button type="button" className="skip-link" onClick={focusMain}>
+        Skip to content
+      </button>
       {chrome && <TopBar />}
       <main
         id="main-content"

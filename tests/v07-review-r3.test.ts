@@ -401,4 +401,3 @@ describe("R3-12 — vault compose: one bounded deeper walk", () => {
     expect(vaultHistoryCapMessage(true)).not.toContain("Search deeper");
   });
 });
-

@@ -157,6 +157,24 @@ export function planPrlScan(
 }
 
 /**
+ * Addresses the activity scan walks: every external address, and the
+ * change addresses a refresh-mode balance scan walks too. Change addresses
+ * the last full walk found unused past lastUsed + PRL_REFRESH_WINDOW are
+ * left out (change is assigned sequentially, so they can only gain history
+ * after the ones before them; the next full walk moves the window).
+ */
+export function activityPool(
+  external: readonly string[],
+  change: readonly string[],
+  baseline: ScanBaseline | undefined,
+): string[] {
+  const walked = baseline
+    ? change.filter((a, i) => !(baseline.knownUnused.has(a) && i > baseline.lastUsed[1] + PRL_REFRESH_WINDOW))
+    : change;
+  return [...external, ...walked];
+}
+
+/**
  * Baseline after a scan: replaced only by a full (nothing skipped) walk
  * with no read failures and complete discovery; otherwise the previous
  * one stands.

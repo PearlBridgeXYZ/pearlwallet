@@ -8,13 +8,21 @@ import { bridgeConfig } from "../../services/bridge";
 import {
   approveWprlForBridge,
   getEthReceiptStatus,
+  previewUnwrapGas,
   readWprlAllowance,
   readWprlBalanceOf,
   requestBurn,
   waitForEthSuccess,
 } from "../../services/eth-tx";
-import { sendPearl } from "../../services/pearl-tx";
+import {
+  broadcastPearlPrecomposed,
+  composePearlSend,
+  PEARL_PREVIEW_FRESHNESS_MS,
+  type FrozenPearlTx,
+} from "../../services/pearl-tx";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
+import { formatWei } from "../../lib/format";
+import type { UnwrapGasPreview } from "../../services/eth-tx";
 import {
   MINT_IN_FLIGHT,
   classifyBurn,
@@ -352,6 +360,9 @@ function WrapCard(props: {
   const [grains, setGrains] = useState<bigint | null>(null);
   const [quote, setQuote] = useState<MintQuote | null>(null);
   const [depositAddr, setDepositAddr] = useState<string | null>(null);
+  // The composed transaction the user reviewed (network fee included);
+  // only this exact transaction is signed.
+  const [review, setReview] = useState<{ frozen: FrozenPearlTx } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const quoteSeq = useRef(0);
@@ -360,6 +371,7 @@ function WrapCard(props: {
   useEffect(() => {
     setQuote(null);
     setGrains(null);
+    setReview(null);
     setErr(null);
     if (!amount || !ethAddress) return;
     let g: bigint;
@@ -395,40 +407,72 @@ function WrapCard(props: {
     return () => clearTimeout(t);
   }, [amount, ethAddress]);
 
-  const wrap = async () => {
+  // Confirm-time re-checks (audit C1/H2/M2): re-resolve the deposit
+  // address through TOFU (refuses if it ever changed) AND re-read the quote
+  // to catch a bridge that paused or now disagrees on amount. Run before
+  // the fee is shown and again right before signing.
+  const recheck = async (sendGrains: bigint, expectedDeposit: string) => {
+    const [dep, q2] = await Promise.all([
+      resolveDepositAddress(ethAddress!, depositTofu),
+      fetchMintQuote(sendGrains),
+    ]);
+    if (dep.address !== expectedDeposit) {
+      throw new Error("E_DEPOSIT_ADDRESS_CHANGED — refusing to send; retry the quote.");
+    }
+    if (q2.amount !== sendGrains) {
+      throw new Error("E_QUOTE_AMOUNT_MISMATCH — refusing to send; retry the quote.");
+    }
+    if (q2.paused) {
+      throw new Error("The bridge just paused — try again once it resumes.");
+    }
+    return q2;
+  };
+
+  // Step 1: compose the transaction and show its network fee. Nothing is
+  // signed here.
+  const prepare = async () => {
     if (!quote || !depositAddr || !ethAddress || grains === null || busy) return;
     setBusy(true);
     setErr(null);
     // Capture the trusted amount in a local so nothing async can swap it.
     const sendGrains = grains;
+    const dest = depositAddr;
     try {
-      // Confirm-time re-checks (audit C1/H2/M2): re-resolve the deposit
-      // address through TOFU (refuses if it ever changed) AND re-read the
-      // quote to catch a bridge that paused or now disagrees on amount.
-      const [dep, q2] = await Promise.all([
-        resolveDepositAddress(ethAddress, depositTofu),
-        fetchMintQuote(sendGrains),
-      ]);
-      if (dep.address !== depositAddr) {
-        throw new Error("E_DEPOSIT_ADDRESS_CHANGED — refusing to send; retry the quote.");
-      }
-      if (q2.amount !== sendGrains) {
-        throw new Error("E_QUOTE_AMOUNT_MISMATCH — refusing to send; retry the quote.");
-      }
-      if (q2.paused) {
-        throw new Error("The bridge just paused — try again once it resumes.");
-      }
-      const res = await sendPearl({
+      await recheck(sendGrains, dest);
+      const composed = await composePearlSend({
         network: pearlNetwork,
         pool,
         changePool,
         deriveMore,
         // Bound to the address generation when this walk starts.
         onDiscovered: useWallet.getState().pearlDiscoveryHandler(),
-        destination: depositAddr,
+        destination: dest,
         amountGrains: sendGrains, // user's amount, never the API echo
         includeTip: false,
       });
+      const out = composed.outputs[0];
+      if (!out || out.address !== dest || out.amountGrains !== sendGrains || composed.tipGrains !== 0n) {
+        throw new Error("E_COMPOSE_MISMATCH — refusing to sign; retry the quote.");
+      }
+      setReview({ frozen: { composed, composedAt: Date.now() } });
+    } catch (e) {
+      setErr(refusalMessage(e) ?? (e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Step 2: sign and broadcast exactly the reviewed transaction.
+  const wrap = async () => {
+    if (!review || !depositAddr || !ethAddress || grains === null || busy) return;
+    setBusy(true);
+    setErr(null);
+    const { frozen } = review;
+    const sendGrains = frozen.composed.amountGrains;
+    try {
+      const q2 = await recheck(sendGrains, depositAddr);
+      const res = await broadcastPearlPrecomposed(frozen, pearlNetwork);
+      setReview(null);
       const now = Date.now();
       try {
         await onStarted({
@@ -454,7 +498,15 @@ function WrapCard(props: {
         return;
       }
     } catch (e) {
-      setErr(refusalMessage(e) ?? (e as Error).message);
+      // Any failure (including a status-unknown broadcast) drops the
+      // reviewed transaction: it is never offered for a second click.
+      setReview(null);
+      const msg = (e as Error).message;
+      setErr(
+        msg === "E_PREVIEW_STALE"
+          ? "The review expired. Review the network fee again before signing."
+          : (refusalMessage(e) ?? msg),
+      );
     } finally {
       setBusy(false);
     }
@@ -495,10 +547,23 @@ function WrapCard(props: {
                 : `slow — queued ~${Math.round(quote.slowLaneDelaySeconds / 3600)}h (fast window is full)`
             }
           />
-          <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
-            Plus the Pearl network fee, which is set when the transaction is built and is not
-            shown here.
-          </p>
+          {review ? (
+            <>
+              <Row k="Pearl network fee" v={fmtPrl(review.frozen.composed.feeGrains)} />
+              <Row
+                k="Leaves this wallet"
+                v={fmtPrl(review.frozen.composed.amountGrains + review.frozen.composed.feeGrains)}
+              />
+              <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
+                This exact transaction is signed when you confirm; the review expires after{" "}
+                {Math.round(PEARL_PREVIEW_FRESHNESS_MS / 60_000)} minutes.
+              </p>
+            </>
+          ) : (
+            <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
+              Plus the Pearl network fee, shown in the next step before anything is signed.
+            </p>
+          )}
           {!quote.withinDailyCap && (
             <p className="mt-2 text-warn break-words">
               Amount exceeds today’s remaining bridge capacity — it will queue.
@@ -519,13 +584,23 @@ function WrapCard(props: {
 
       {err && <p className="text-sm text-danger leading-relaxed break-words">{err}</p>}
 
-      <button
-        onClick={() => void wrap()}
-        disabled={!quote || !depositAddr || busy || status?.paused === true}
-        className="btn-primary min-w-11"
-      >
-        {busy ? "Sending…" : quote ? `Wrap ${grainsToPrlString(quote.amount)} PRL` : "Wrap"}
-      </button>
+      {review ? (
+        <button
+          onClick={() => void wrap()}
+          disabled={!quote || !depositAddr || busy || status?.paused === true}
+          className="btn-primary min-w-11"
+        >
+          {busy ? "Sending…" : `Sign and wrap ${grainsToPrlString(review.frozen.composed.amountGrains)} PRL`}
+        </button>
+      ) : (
+        <button
+          onClick={() => void prepare()}
+          disabled={!quote || !depositAddr || busy || status?.paused === true}
+          className="btn-primary min-w-11"
+        >
+          {busy ? "Preparing…" : quote ? `Review network fee for ${grainsToPrlString(quote.amount)} PRL` : "Wrap"}
+        </button>
+      )}
     </div>
   );
 }
@@ -544,6 +619,9 @@ function UnwrapCard(props: {
   const [grains, setGrains] = useState<bigint | null>(null);
   const [quote, setQuote] = useState<BurnQuote | null>(null);
   const [needsApprove, setNeedsApprove] = useState<boolean | null>(null);
+  // ETH gas ceilings shown before signing; the signing calls refuse
+  // anything above them (E_ETH_GAS_ABOVE_REVIEW).
+  const [gas, setGas] = useState<UnwrapGasPreview | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<"idle" | "approving" | "burning">("idle");
   const quoteSeq = useRef(0);
@@ -552,6 +630,7 @@ function UnwrapCard(props: {
     setQuote(null);
     setGrains(null);
     setNeedsApprove(null);
+    setGas(null);
     setErr(null);
     if (!amount || !ethAddress || !pearlAddress) return;
     let g: bigint;
@@ -566,9 +645,10 @@ function UnwrapCard(props: {
     const seq = ++quoteSeq.current;
     const t = setTimeout(async () => {
       try {
-        const [q, allowance] = await Promise.all([
+        const [q, allowance, balance] = await Promise.all([
           fetchBurnQuote(g, pearlAddress),
           readWprlAllowance(ethNetwork, ethAddress),
+          readWprlBalanceOf(ethNetwork, ethAddress),
         ]);
         if (quoteSeq.current !== seq) return;
         // Pinned-address cross-check: refuse if the API's transaction plan
@@ -587,8 +667,23 @@ function UnwrapCard(props: {
         if (q.addressValid === false) {
           throw new Error("Bridge rejected this wallet’s Pearl address — update the app.");
         }
+        // A burn of more than is held reverts, so its gas can't be
+        // estimated: say what is actually wrong.
+        if (balance < g) throw new Error("You don't have that much WPRL.");
+        const g2 = await previewUnwrapGas({
+          network: ethNetwork,
+          from: ethAddress,
+          amount: g,
+          pearlAddress,
+          needsApprove: allowance < g,
+          tier: "normal",
+        }).catch((e: unknown) => {
+          throw new Error(`Couldn't estimate Ethereum gas: ${(e as Error).message}`);
+        });
+        if (quoteSeq.current !== seq) return;
         setQuote(q);
         setNeedsApprove(allowance < g);
+        setGas(g2);
       } catch (e) {
         if (quoteSeq.current === seq) setErr((e as Error).message);
       }
@@ -597,7 +692,7 @@ function UnwrapCard(props: {
   }, [amount, ethAddress, pearlAddress, ethNetwork]);
 
   const unwrap = async () => {
-    if (!quote || !ethAddress || !pearlAddress || grains === null || busy !== "idle") return;
+    if (!quote || !gas || !ethAddress || !pearlAddress || grains === null || busy !== "idle") return;
     setErr(null);
     const burnGrains = grains; // user's amount, never the API echo (audit H1)
     let approveTxHash: `0x${string}` | null = null;
@@ -634,6 +729,10 @@ function UnwrapCard(props: {
         throw new Error("Amount exceeds today's remaining burn capacity — try a smaller amount.");
       }
       if (allowance < burnGrains) {
+        // The reviewed gas covered no approval: review again.
+        if (gas.approveWei === null) {
+          throw new Error("Your WPRL approval changed since the review — enter the amount again to review the gas.");
+        }
         setBusy("approving");
         // Exact-amount approval (not infinite): allowance dies with this
         // burn, so a future contract compromise can't drain pre-approved
@@ -643,6 +742,7 @@ function UnwrapCard(props: {
           from: ethAddress,
           amount: burnGrains,
           tier: "normal",
+          ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: gas.approveWei },
         });
         approveTxHash = a.txHash;
         // C1: WAIT for the approve to MINE before burning. requestBurn's gas
@@ -662,6 +762,7 @@ function UnwrapCard(props: {
         amount: burnGrains,
         pearlAddress,
         tier: "normal",
+        ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: gas.burnWei },
       });
       const now = Date.now();
       try {
@@ -687,7 +788,11 @@ function UnwrapCard(props: {
       // Distinguish post-broadcast failures so the user knows funds moved
       // (audit M3): if the approve already landed and the burn threw, say
       // so explicitly.
-      const msg = (e as Error).message;
+      const raw = (e as Error).message;
+      const msg =
+        raw === "E_ETH_GAS_ABOVE_REVIEW"
+          ? "Ethereum gas rose above what you reviewed — nothing was signed for this step. Enter the amount again to review the new gas."
+          : raw;
       if (approveTxHash) {
         // The approve CONFIRMED (we waited on its receipt) before the burn
         // step ran, so a retry re-reads the now-set allowance and skips
@@ -728,13 +833,29 @@ function UnwrapCard(props: {
           <h3 className="mb-3 text-base font-semibold tracking-tight">Review before you sign</h3>
           <Row k="Bridge fee" v={`${fmtPrl(quote.fee)} (${quote.feeBps} bps)`} />
           <Row k="You receive" v={fmtPrl(quote.net)} />
-          <Row k="Payout to" v={pearlAddress ? `${pearlAddress.slice(0, 14)}…${pearlAddress.slice(-8)}` : "—"} />
+          <Row k="Payout to" v={pearlAddress ?? "—"} />
           {needsApprove && <Row k="Step 1" v="approve WPRL (exact amount)" />}
           <Row k={needsApprove ? "Step 2" : "Transaction"} v="requestBurn on PearlBridge" />
-          <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
-            Plus Ethereum gas, paid in ETH and set when each transaction is sent; it is not
-            shown here.
-          </p>
+          {gas && (
+            <>
+              {gas.approveWei !== null && <Row k="Approve gas (max)" v={`${formatWei(gas.approveWei)} ETH`} />}
+              <Row
+                k="Burn gas (max)"
+                v={
+                  gas.burnWei !== null
+                    ? `${formatWei(gas.burnWei)} ETH`
+                    : `${formatWei(gas.maxFeePerGas, 9)} gwei per gas unit`
+                }
+              />
+              <p className="mt-3 text-xs leading-relaxed text-text-3 break-words">
+                Ethereum gas is paid in ETH.{" "}
+                {gas.burnWei === null
+                  ? "The burn's gas units can only be estimated once the approval confirms; its price per unit is capped as shown. "
+                  : ""}
+                A step whose gas would exceed what is shown is refused before signing.
+              </p>
+            </>
+          )}
           {!quote.withinDailyCap && (
             <p className="mt-2 text-warn break-words">
               Amount exceeds today’s remaining burn capacity.
@@ -747,7 +868,7 @@ function UnwrapCard(props: {
 
       <button
         onClick={() => void unwrap()}
-        disabled={!quote || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false}
+        disabled={!quote || !gas || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false}
         className="btn-primary min-w-11"
       >
         {busy === "approving"

@@ -26,7 +26,6 @@ import * as pearlRpc from "../src/services/pearl-rpc";
 import {
   BroadcastStatusUnknownError,
   broadcastPearlTx,
-  isEdgeRateLimitPage,
   probePearlTx,
   rawTxId,
   rawTxInputs,
@@ -325,24 +324,28 @@ describe("S4 — a 2xx with an unusable body is 'status unknown', never a plain 
 });
 
 describe("S5 — edge 503s and definitive rejections after a maybe-delivered attempt", () => {
-  it("recognises nginx's own 503 page only", () => {
-    expect(isEdgeRateLimitPage(NGINX_503)).toBe(true);
-    expect(isEdgeRateLimitPage("Work queue depth exceeded")).toBe(false);
-    expect(isEdgeRateLimitPage("<title>503 Service Temporarily Unavailable</title>")).toBe(false);
-  });
-
-  it("nginx limit page then -26 → plain rejection; the reservation is released", async () => {
+  // Final round (S3): a proxy's stock 503 page is no longer trusted as
+  // "never forwarded" — a proxy that intercepts upstream errors serves the
+  // same page after the node accepted the tx. It is "maybe delivered".
+  it("nginx 503 page then -26 missingorspent, probe absent → status unknown, inputs stay reserved", async () => {
     const { raw, ins } = signedFixture();
     let n = 0;
     const calls = stubRpc((m) => {
-      if (m !== "sendrawtransaction") throw new Error("no probe expected");
-      return ++n === 1 ? new Response(NGINX_503, { status: 503 }) : rpcErr(-26, "min relay fee not met");
+      if (m === "getrawtransaction") return rpcErr(-5, "No information available about transaction");
+      return ++n === 1 ? new Response(NGINX_503, { status: 503 }) : rpcErr(-26, "bad-txns-inputs-missingorspent");
     });
     const err = await broadcastRecordingSpends(raw, ins).catch((e: unknown) => e);
-    expect(err).not.toBeInstanceOf(BroadcastStatusUnknownError);
-    expect((err as Error).message).toMatch(/^rpc -26:/);
-    expect(calls).not.toContain("getrawtransaction");
-    expect(pendingOutpoints().size).toBe(0);
+    expect(err).toBeInstanceOf(BroadcastStatusUnknownError);
+    expect(calls).toContain("getrawtransaction");
+    expect(pendingOutpoints().size).toBe(2);
+  });
+
+  it("only nginx 503 pages until the retry budget ends → status unknown, never a plain failure", async () => {
+    const { raw, ins } = signedFixture();
+    stubRpc((m) => (m === "getrawtransaction" ? rpcErr(-5, "No information available about transaction") : new Response(NGINX_503, { status: 503 })));
+    const err = await broadcastRecordingSpends(raw, ins).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BroadcastStatusUnknownError);
+    expect(pendingOutpoints().size).toBe(2);
   });
 
   // Round 2 (R2-1): a plain (non-nginx) 503 stays "maybe delivered". A
