@@ -150,8 +150,8 @@ export default function SendFromVault() {
   if (vault === null) {
     return (
       <Page title="Send from vault">
-        <p>Vault not found.</p>
-        <Link to="/vaults" className="text-pearl-700 underline dark:text-pearl-300">
+        <p className="break-words">Vault not found.</p>
+        <Link to="/vaults" className="text-accent underline underline-offset-4">
           ← Back to vaults
         </Link>
       </Page>
@@ -162,8 +162,8 @@ export default function SendFromVault() {
     return (
       <Page title="Draft saved">
         <div className="card">
-          <h2 className="text-lg font-semibold">PSBT saved as draft</h2>
-          <p className="mt-2 text-sm text-ink-500">
+          <h2 className="text-lg font-semibold tracking-tight">PSBT saved as draft</h2>
+          <p className="mt-2 text-sm text-text-3 leading-relaxed break-words">
             Open the draft to share the PSBT with your cosigners. Once{" "}
             {vault.threshold} of {vault.total} have signed, anyone can
             finalise and broadcast.
@@ -187,35 +187,38 @@ export default function SendFromVault() {
   if (stage === "preview" && composed) {
     return (
       <Page title="Confirm — send from vault">
-        <div className="card">
-          <dl className="space-y-2 text-sm">
+        <div className="card shadow-slabsm sm:shadow-slab">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Vault transaction preview</p>
+          <h2 className="text-xl font-semibold tracking-tight">Review before you sign</h2>
+          <p className="mb-4 mt-2 text-sm leading-relaxed text-text-2">Check both addresses, the amount and the fee before saving your draft.</p>
+          <dl className="space-y-2 text-sm leading-relaxed divide-y divide-line [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dt]:text-[11px] [&_dt]:uppercase [&_dt]:tracking-[.12em] [&_dd]:min-w-0 [&_dd]:break-all [&_dd]:font-mono [&_dd]:tabular-nums [&_dd]:text-left sm:[&_dd]:text-right">
             <div className="flex justify-between">
-              <dt className="text-ink-500">From</dt>
-              <dd className="break-all font-mono text-xs">{vault.pearlAddress}</dd>
+              <dt className="text-text-3">From</dt>
+              <dd className="break-all font-mono text-xs min-w-0 tabular-nums leading-relaxed">{vault.pearlAddress}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">To</dt>
-              <dd className="break-all font-mono text-xs">{composed.destination}</dd>
+              <dt className="text-text-3">To</dt>
+              <dd className="break-all font-mono text-xs min-w-0 tabular-nums leading-relaxed">{composed.destination}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Amount</dt>
+              <dt className="text-text-3">Amount</dt>
               <dd>{formatGrains(composed.amountGrains)} PRL</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Fee</dt>
+              <dt className="text-text-3">Fee</dt>
               <dd>{formatGrains(composed.feeGrains)} PRL</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Change back to vault</dt>
+              <dt className="text-text-3">Change back to vault</dt>
               <dd>{formatGrains(composed.changeGrains)} PRL</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Inputs</dt>
+              <dt className="text-text-3">Inputs</dt>
               <dd>
                 {composed.utxos.length} UTXO{composed.utxos.length === 1 ? "" : "s"}
               </dd>
             </div>
-            <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
+            <div className="flex justify-between border-t border-line pt-2">
               <dt className="font-medium">Total leaving vault</dt>
               <dd className="font-medium">
                 {formatGrains(composed.amountGrains + composed.feeGrains)} PRL
@@ -224,13 +227,13 @@ export default function SendFromVault() {
           </dl>
 
           {composed.degraded && (
-            <p className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+            <p className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed break-words">
               UTXO scan returned a partial set; consider retrying if the
               broadcast later fails for insufficient funds.
             </p>
           )}
 
-          <label className="mt-4 flex items-start gap-2 text-sm">
+          <label className="mt-4 flex items-start gap-2 text-sm leading-relaxed">
             <input
               type="checkbox"
               checked={signImmediately}
@@ -243,23 +246,23 @@ export default function SendFromVault() {
             </span>
           </label>
 
-          <p className="mt-4 text-xs text-ink-500">
+          <p className="mt-4 text-xs text-text-3 leading-relaxed break-words">
             Saving creates a draft. Threshold-met PSBTs can be broadcast
             from the draft page. Nothing goes on chain until you click
             broadcast there.
           </p>
 
-          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+          {error && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{error}</p>}
 
           <div className="mt-4 flex gap-2">
             <button
-              className="btn-secondary"
+              className="btn-secondary min-w-11"
               disabled={busy}
               onClick={() => setStage("compose")}
             >
               Back
             </button>
-            <button className="btn-primary flex-1" disabled={busy} onClick={saveDraft}>
+            <button className="btn-primary flex-1 min-w-11" disabled={busy} onClick={saveDraft}>
               {busy ? "Saving…" : "Save draft"}
             </button>
           </div>
@@ -270,18 +273,18 @@ export default function SendFromVault() {
 
   return (
     <Page title="Send from vault">
-      <div className="card flex flex-col gap-3">
-        <div className="text-sm">
-          <span className="text-ink-500">From vault:</span>{" "}
+      <div className="card flex flex-col gap-5">
+        <div className="text-sm leading-relaxed">
+          <span className="text-text-3">From vault:</span>{" "}
           <span className="font-medium">{vault.label}</span>{" "}
-          <span className="text-xs text-ink-500">
+          <span className="text-xs text-text-3 leading-relaxed">
             ({vault.threshold} of {vault.total})
           </span>
         </div>
         <label className="block">
           <span className="label">Destination address</span>
           <input
-            className="input mono"
+            className="input mono break-all min-w-0 tabular-nums"
             placeholder="prl1p…"
             value={destination}
             autoComplete="off"
@@ -293,20 +296,20 @@ export default function SendFromVault() {
         <label className="block">
           <span className="label">Amount (PRL)</span>
           <input
-            className="input mono"
+            className="input mono break-all min-w-0 tabular-nums"
             inputMode="decimal"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
         </label>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
 
         <div className="flex gap-2">
           <Link to={`/vaults/${vault.id}`} className="btn-secondary">
             Cancel
           </Link>
-          <button className="btn-primary flex-1" disabled={busy} onClick={compose}>
+          <button className="btn-primary flex-1 min-w-11" disabled={busy} onClick={compose}>
             {busy ? "Composing…" : "Review"}
           </button>
         </div>

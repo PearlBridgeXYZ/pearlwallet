@@ -390,11 +390,11 @@ export default function SignMultisigPsbt() {
     return (
       <Page title="Broadcast">
         <div className="card">
-          <h2 className="text-lg font-semibold">Broadcast.</h2>
-          <p className="mt-2 text-sm">
-            Txid: <span className="break-all font-mono">{broadcastTxid}</span>
+          <h2 className="text-lg font-semibold tracking-tight">Broadcast.</h2>
+          <p className="mt-2 text-sm leading-relaxed break-words">
+            Txid: <span className="break-all font-mono min-w-0 tabular-nums">{broadcastTxid}</span>
           </p>
-          <p className="mt-2 text-xs text-ink-500">
+          <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
             Confirming on chain — this can take a few minutes.
           </p>
           <div className="mt-4 flex gap-2">
@@ -409,8 +409,8 @@ export default function SignMultisigPsbt() {
 
   return (
     <Page title="Sign multisig PSBT">
-      <div className="card flex flex-col gap-3">
-        <p className="text-sm">
+      <div className="card flex flex-col gap-5">
+        <p className="text-sm leading-relaxed break-words">
           Paste a base64 PSBT from any cosigner. The wallet matches it to
           one of your local vaults by its witness script — if no match,
           the vault hasn't been imported on this device yet and signing
@@ -420,7 +420,7 @@ export default function SignMultisigPsbt() {
         <label className="block">
           <span className="label">PSBT (base64)</span>
           <textarea
-            className="input mono"
+            className="input mono break-all min-w-0 tabular-nums"
             rows={8}
             value={psbtCurrent ?? psbtIn}
             onChange={(e) => {
@@ -436,12 +436,12 @@ export default function SignMultisigPsbt() {
         </label>
 
         {analysis && analysis.error && (
-          <p className="text-sm text-red-600">Couldn't parse PSBT: {analysis.error}</p>
+          <p className="text-sm text-danger leading-relaxed break-words">Couldn't parse PSBT: {analysis.error}</p>
         )}
         {analysis && analysis.match.kind === "unknown" && !analysis.error && (
           <>
             {importFlow.kind === "checking" && (
-              <p className="text-sm text-ink-600 dark:text-ink-400">
+              <p className="text-sm text-text-2 leading-relaxed break-words">
                 Checking whether this proposal is for a vault you can sign…
               </p>
             )}
@@ -456,10 +456,10 @@ export default function SignMultisigPsbt() {
               />
             )}
             {importFlow.kind === "not-signer" && (
-              <div className="rounded-md border border-amber-500 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                <p>
+              <div className="rounded-pb border border-warn-line bg-warn-bg p-3 text-sm text-warn leading-relaxed">
+                <p className="break-words">
                   This proposal spends from a vault (
-                  <span className="break-all font-mono text-xs">
+                  <span className="break-all font-mono text-xs min-w-0 tabular-nums leading-relaxed">
                     {importFlow.address}
                   </span>
                   ) that isn't on this device — and{" "}
@@ -468,10 +468,10 @@ export default function SignMultisigPsbt() {
                   </span>
                   . Refusing to import a vault you can't sign for.
                 </p>
-                <p className="mt-2 text-xs">
+                <p className="mt-2 text-xs leading-relaxed break-words">
                   If you expected to be a signer, the key you enrolled may live
                   on a different wallet/seed.{" "}
-                  <Link to="/vaults/new" className="underline">
+                  <Link to="/vaults/new" className="underline underline-offset-4">
                     Create or join a vault
                   </Link>{" "}
                   manually instead.
@@ -479,11 +479,11 @@ export default function SignMultisigPsbt() {
               </div>
             )}
             {importFlow.kind === "not-vault" && (
-              <p className="text-sm text-amber-700 dark:text-amber-400">
+              <p className="text-sm text-warn leading-relaxed break-words">
                 This PSBT doesn't match any vault on this device and couldn't
                 be recognised as a Pearl vault spend ({importFlow.reason}).
                 Import the vault first ({" "}
-                <Link to="/vaults/new" className="underline">
+                <Link to="/vaults/new" className="underline underline-offset-4">
                   create or join
                 </Link>{" "}
                 ) — signing without a verified cosigner set is refused.
@@ -511,7 +511,7 @@ export default function SignMultisigPsbt() {
               totalInputGrains={analysis.info.totalInputGrains}
             />
             {analysis.info.foreignSignersHex.length > 0 && (
-              <p className="rounded-md border-2 border-red-600 bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+              <p className="rounded-pb border-2 border-danger-line bg-danger-bg p-2 text-sm text-danger leading-relaxed break-words">
                 ⚠ This PSBT contains {analysis.info.foreignSignersHex.length}{" "}
                 signature(s) from pubkeys outside the vault. Signing is blocked.
               </p>
@@ -520,7 +520,7 @@ export default function SignMultisigPsbt() {
               const reason = feeSuspiciousReason(analysis.info);
               if (!reason) return null;
               return (
-                <p className="rounded-md border-2 border-red-600 bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+                <p className="rounded-pb border-2 border-danger-line bg-danger-bg p-2 text-sm text-danger leading-relaxed break-words">
                   ⚠ {reason}
                 </p>
               );
@@ -528,12 +528,12 @@ export default function SignMultisigPsbt() {
           </>
         )}
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
 
         <div className="flex flex-wrap gap-2">
           {analysis?.match.kind === "matched" && analysis.info && (
             <button
-              className="btn-primary"
+              className="btn-primary min-w-11"
               disabled={
                 busy ||
                 analysis.info.signersHex.includes(
@@ -559,7 +559,7 @@ export default function SignMultisigPsbt() {
             analysis.info &&
             analysis.info.signerCount >= analysis.match.vault.threshold && (
               <button
-                className="btn-primary"
+                className="btn-primary min-w-11"
                 disabled={
                   busy ||
                   analysis.info.foreignSignersHex.length > 0 ||
@@ -572,7 +572,7 @@ export default function SignMultisigPsbt() {
             )}
           {psbtCurrent && proposalToken && analysis?.match.kind === "matched" && (
             <button
-              className="btn-primary"
+              className="btn-primary min-w-11"
               disabled={
                 busy ||
                 postState.kind === "posting" ||
@@ -586,7 +586,7 @@ export default function SignMultisigPsbt() {
           )}
           {psbtCurrent && (
             <button
-              className="btn-secondary"
+              className="btn-secondary min-w-11"
               onClick={() => {
                 void navigator.clipboard?.writeText(psbtCurrent);
               }}
@@ -597,12 +597,12 @@ export default function SignMultisigPsbt() {
         </div>
 
         {postState.kind === "error" && (
-          <p className="rounded-md border border-red-500 bg-red-50 p-2 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-300">
+          <p className="rounded-pb border border-danger-line bg-danger-bg p-2 text-sm text-danger leading-relaxed break-words">
             Post failed: {postState.message}
           </p>
         )}
         {postState.kind === "posted" && (
-          <p className="rounded-md border border-pearl-300 bg-pearl-50 p-2 text-sm text-pearl-800 dark:border-pearl-700 dark:bg-pearl-900/30 dark:text-pearl-200">
+          <p className="rounded-pb border border-accent bg-accent-soft p-2 text-sm text-accent leading-relaxed break-words">
             Posted. Relay now has {postState.sigsCollected} of {postState.threshold}{" "}
             sig{postState.threshold === 1 ? "" : "s"}.
             {postState.thresholdMet && " Threshold met — the relay can assemble + broadcast."}
@@ -618,7 +618,7 @@ export default function SignMultisigPsbt() {
           analysis?.match.kind === "matched" &&
           analysis.info &&
           analysis.info.signerCount < analysis.match.vault.threshold && (
-            <p className="text-xs text-ink-500">
+            <p className="text-xs text-text-3 leading-relaxed break-words">
               Send the signed PSBT back to the originator (or to the next
               cosigner) so the threshold can be reached.
             </p>
@@ -640,14 +640,14 @@ function RelayStatusPanel(props: {
   const { status, statusError } = props;
   if (!status && !statusError) {
     return (
-      <div className="rounded-xl border border-ink-200 bg-ink-50 p-3 text-xs text-ink-600 dark:border-ink-700 dark:bg-ink-900/30 dark:text-ink-400">
+      <div className="rounded-pb border border-line bg-bg p-3 text-xs text-text-2 leading-relaxed">
         Checking relay status…
       </div>
     );
   }
   if (!status && statusError) {
     return (
-      <div className="rounded-xl border border-amber-400 bg-amber-50 p-3 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+      <div className="rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
         Relay status unavailable: {statusError}
       </div>
     );
@@ -655,22 +655,22 @@ function RelayStatusPanel(props: {
   if (!status) return null;
   const signed = status.signers.filter((s) => s.signedAt !== null).length;
   return (
-    <div className="rounded-xl border border-pearl-300 bg-pearl-50 p-3 text-sm dark:border-pearl-700 dark:bg-pearl-900/30">
+    <div className="rounded-pb border border-accent bg-accent-soft p-3 text-sm leading-relaxed">
       <div className="flex items-baseline justify-between">
-        <div className="text-xs font-semibold uppercase text-ink-500">
+        <div className="text-xs font-semibold uppercase text-text-3 leading-relaxed">
           Relay status
         </div>
-        <div className="text-xs text-ink-500">
+        <div className="text-xs text-text-3 leading-relaxed">
           {signed} / {status.threshold} signed
         </div>
       </div>
-      <ul className="mt-2 space-y-1 text-xs">
+      <ul className="mt-2 space-y-1 text-xs leading-relaxed">
         {status.signers.map((s) => (
           <li key={s.pubkey} className="flex items-baseline justify-between gap-2">
-            <span className="break-all font-mono text-ink-700 dark:text-ink-300">
+            <span className="break-all font-mono text-text-2 min-w-0 tabular-nums">
               {s.pubkey.slice(0, 12)}…{s.pubkey.slice(-8)}
             </span>
-            <span className="shrink-0 text-ink-500">
+            <span className="shrink-0 text-text-3">
               {s.signedAt === null
                 ? "waiting"
                 : new Date(s.signedAt * 1000).toLocaleTimeString()}
@@ -678,14 +678,14 @@ function RelayStatusPanel(props: {
           </li>
         ))}
       </ul>
-      <p className="mt-2 text-xs">
+      <p className="mt-2 text-xs leading-relaxed break-words">
         {status.thresholdMet ? (
-          <span className="text-pearl-800 dark:text-pearl-200">
+          <span className="text-accent">
             Threshold met — the originating relay will assemble the witness
             and broadcast.
           </span>
         ) : (
-          <span className="text-ink-600 dark:text-ink-400">
+          <span className="text-text-2">
             Waiting for the remaining cosigner
             {status.threshold - signed === 1 ? "" : "s"} to post.
           </span>
@@ -710,56 +710,55 @@ function OutputsPreview(props: {
   const { outputs, vaultAddress, feeGrains, feeUnknown, totalInputGrains } = props;
   if (outputs.length === 0) {
     return (
-      <p className="rounded-md border border-amber-500 bg-amber-50 p-2 text-sm text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+      <p className="rounded-pb border border-warn-line bg-warn-bg p-2 text-sm text-warn leading-relaxed break-words">
         PSBT has no outputs — refuse to sign.
       </p>
     );
   }
   return (
-    <div className="rounded-xl border border-ink-300 bg-white p-3 text-sm dark:border-ink-700 dark:bg-ink-900">
-      <div className="text-xs font-semibold uppercase text-ink-500">
-        Outputs you are about to sign
-      </div>
-      <ul className="mt-2 space-y-2">
+    <div className="rounded-pb border border-line-strong bg-surface-2 p-4 text-sm leading-relaxed sm:p-5">
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Transaction outputs</p>
+      <h2 className="text-xl font-semibold tracking-tight">Review before you sign</h2>
+      <ul className="mt-4 divide-y divide-line [&>li]:py-3">
         {outputs.map((o, i) => {
           const isChange = o.address === vaultAddress;
           return (
             <li key={i} className="flex flex-col gap-1">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="text-xs text-ink-500">
+                <span className="text-xs text-text-3 leading-relaxed">
                   #{i}
                   {isChange && (
-                    <span className="ml-1 rounded bg-ink-100 px-1 text-[10px] uppercase dark:bg-ink-800">
+                    <span className="ml-1 rounded-pb bg-surface-2 px-1 text-[10px] uppercase">
                       change
                     </span>
                   )}
                 </span>
-                <span className="text-right font-medium">
+                <span className="min-w-0 break-all text-right font-mono font-medium tabular-nums">
                   {formatGrains(o.amountGrains)} PRL
                 </span>
               </div>
-              <div className="break-all font-mono text-xs text-ink-700 dark:text-ink-300">
+              <div className="break-all font-mono text-xs text-text-2 min-w-0 tabular-nums leading-relaxed">
                 {o.address ?? `<non-Pearl script: ${o.scriptHex.slice(0, 24)}…>`}
               </div>
             </li>
           );
         })}
       </ul>
-      <div className="mt-3 flex flex-col gap-1 border-t border-ink-200 pt-2 text-xs dark:border-ink-700">
-        <div className="flex justify-between">
-          <span className="text-ink-500">Total inputs</span>
-          <span className="font-medium">
+      <div className="mt-3 flex flex-col gap-1 border-t border-line pt-2 text-xs leading-relaxed">
+        <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:gap-4">
+          <span className="text-text-3">Total inputs</span>
+          <span className="min-w-0 break-all font-mono font-medium tabular-nums sm:text-right">
             {feeUnknown ? "—" : `${formatGrains(totalInputGrains)} PRL`}
           </span>
         </div>
-        <div className="flex justify-between">
-          <span className="text-ink-500">Fee (paid to miner)</span>
-          <span className="font-medium">
+        <div className="flex flex-col gap-1 sm:flex-row sm:justify-between sm:gap-4">
+          <span className="text-text-3">Fee (paid to miner)</span>
+          <span className="min-w-0 break-all font-mono font-medium tabular-nums sm:text-right">
             {feeUnknown ? "unknown — refuse" : `${formatGrains(feeGrains)} PRL`}
           </span>
         </div>
       </div>
-      <p className="mt-2 text-xs text-ink-500">
+      <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
         Confirm each destination AND the fee are correct before signing. Once
         signed, you cannot un-sign.
       </p>
@@ -777,23 +776,23 @@ function SignSummary(props: {
   const { vault, signerCount, signersHex, inputCount, thresholdMet } = props;
   const meSigned = signersHex.includes(vault.myPubkeyHex);
   return (
-    <div className="rounded-xl border border-pearl-300 bg-pearl-50 p-3 text-sm dark:border-pearl-700 dark:bg-pearl-900/30">
+    <div className="rounded-pb border border-accent bg-accent-soft p-3 text-sm leading-relaxed">
       <div className="font-medium">Matched: {vault.label}</div>
-      <div className="text-xs text-ink-500">
+      <div className="text-xs text-text-3 leading-relaxed">
         {vault.threshold} of {vault.total} · {inputCount} input
         {inputCount === 1 ? "" : "s"}
       </div>
-      <div className="mt-2 text-xs">
+      <div className="mt-2 text-xs leading-relaxed">
         Signatures: <span className="font-medium">{signerCount}</span> /{" "}
         {vault.threshold}
         {thresholdMet && (
-          <span className="ml-2 rounded bg-blue-100 px-2 py-0.5 text-[10px] uppercase text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+          <span className="ml-2 rounded-pb bg-accent-soft px-2 py-0.5 text-[10px] uppercase text-accent">
             threshold met
           </span>
         )}
       </div>
       {meSigned && (
-        <p className="mt-1 text-xs text-pearl-700 dark:text-pearl-300">
+        <p className="mt-1 text-xs text-accent leading-relaxed break-words">
           Your signature is already on this PSBT.
         </p>
       )}

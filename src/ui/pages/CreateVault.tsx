@@ -208,7 +208,7 @@ export default function CreateVault() {
   if (stage === "setup") {
     return (
       <Page title="Create vault">
-        <div className="card flex flex-col gap-3">
+        <div className="card flex flex-col gap-5">
           <label className="block">
             <span className="label">Vault label</span>
             <input
@@ -218,7 +218,7 @@ export default function CreateVault() {
               maxLength={64}
               onChange={(e) => setLabel(e.target.value)}
             />
-            <span className="mt-1 block text-xs text-ink-500">
+            <span className="mt-1 block text-xs text-text-3 leading-relaxed">
               Local-only label. Stays on this device.
             </span>
           </label>
@@ -249,12 +249,12 @@ export default function CreateVault() {
               />
             </label>
           </div>
-          <p className="text-xs text-ink-500">
+          <p className="text-xs text-text-3 leading-relaxed break-words">
             Any {threshold || "?"} of {total || "?"} cosigners can spend.
           </p>
 
-          <details className="rounded-xl border border-ink-200 p-3 text-xs dark:border-ink-700">
-            <summary className="cursor-pointer font-medium">
+          <details className="rounded-pb border border-line p-3 text-xs leading-relaxed">
+            <summary className="cursor-pointer font-medium min-h-11 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2">
               Advanced — derivation path
             </summary>
             <div className="mt-3 grid grid-cols-2 gap-3">
@@ -281,9 +281,9 @@ export default function CreateVault() {
                 />
               </label>
             </div>
-            <p className="mt-2 text-xs text-ink-500">
+            <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
               Your pubkey is derived under{" "}
-              <span className="font-mono">
+              <span className="font-mono break-all min-w-0 tabular-nums">
                 m/86'/808276'/100'/{vaultAccount}'/{keyIndex}
               </span>
               . Different vaults SHOULD use different (account, index)
@@ -291,14 +291,14 @@ export default function CreateVault() {
             </p>
           </details>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
 
           <div className="mt-2 flex gap-2">
             <Link to="/vaults" className="btn-secondary">
               Cancel
             </Link>
             <button
-              className="btn-primary flex-1"
+              className="btn-primary flex-1 min-w-11"
               onClick={() => {
                 const v = setupValid();
                 if (v !== true) {
@@ -320,15 +320,15 @@ export default function CreateVault() {
   if (stage === "mine") {
     return (
       <Page title="Create vault — your cosigner key">
-        <div className="card flex flex-col gap-3">
-          <p className="text-sm">
+        <div className="card flex flex-col gap-5">
+          <p className="text-sm leading-relaxed break-words">
             Step 2 of 4 — derive your cosigner pubkey and share the
             descriptor with every other cosigner.
           </p>
 
           {!mine && (
             <button
-              className="btn-primary"
+              className="btn-primary min-w-11"
               onClick={deriveMine}
               disabled={deriving}
             >
@@ -340,22 +340,24 @@ export default function CreateVault() {
             <>
               <div>
                 <span className="label">Your x-only pubkey</span>
-                <div className="break-all font-mono text-xs">{mine.pubkeyHex}</div>
+                <div className="break-all font-mono text-xs min-w-0 tabular-nums leading-relaxed">{mine.pubkeyHex}</div>
               </div>
               <div>
                 <span className="label">Origin path</span>
-                <div className="font-mono text-xs">{mine.originPath}</div>
+                <div className="font-mono text-xs break-all min-w-0 tabular-nums leading-relaxed">{mine.originPath}</div>
               </div>
               <div>
-                <span className="label">Descriptor (share with cosigners)</span>
-                <textarea
-                  className="input mono"
-                  rows={9}
-                  readOnly
-                  value={mine.json}
-                />
+                <label className="block">
+                  <span className="label">Descriptor (share with cosigners)</span>
+                  <textarea
+                    className="input mono break-all min-w-0 tabular-nums"
+                    rows={9}
+                    readOnly
+                    value={mine.json}
+                  />
+                </label>
                 <button
-                  className="btn-secondary mt-2 text-xs"
+                  className="btn-secondary mt-2 text-xs leading-relaxed min-w-11"
                   onClick={() => {
                     void navigator.clipboard?.writeText(mine.json);
                   }}
@@ -363,7 +365,7 @@ export default function CreateVault() {
                   Copy descriptor
                 </button>
               </div>
-              <p className="text-xs text-ink-500">
+              <p className="text-xs text-text-3 leading-relaxed break-words">
                 Send this to your cosigners over any channel you trust.
                 The descriptor contains a public key — it never leaks
                 your seed.
@@ -371,14 +373,14 @@ export default function CreateVault() {
             </>
           )}
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
 
           <div className="mt-2 flex gap-2">
-            <button className="btn-secondary" onClick={() => setStage("setup")}>
+            <button className="btn-secondary min-w-11" onClick={() => setStage("setup")}>
               Back
             </button>
             <button
-              className="btn-primary flex-1"
+              className="btn-primary flex-1 min-w-11"
               disabled={!mine}
               onClick={() => setStage("peers")}
             >
@@ -394,8 +396,8 @@ export default function CreateVault() {
     const needed = Math.max(0, total - 1 - peers.length);
     return (
       <Page title="Create vault — add cosigners">
-        <div className="card flex flex-col gap-3">
-          <p className="text-sm">
+        <div className="card flex flex-col gap-5">
+          <p className="text-sm leading-relaxed break-words">
             Step 3 of 4 — paste one cosigner descriptor at a time. You
             need <span className="font-medium">{total - 1}</span>{" "}
             descriptors from your peers (plus your own = {total} total).
@@ -404,7 +406,7 @@ export default function CreateVault() {
           <label className="block">
             <span className="label">Paste cosigner descriptor JSON</span>
             <textarea
-              className="input mono"
+              className="input mono break-all min-w-0 tabular-nums"
               rows={8}
               value={peerPaste}
               onChange={(e) => setPeerPaste(e.target.value)}
@@ -412,7 +414,7 @@ export default function CreateVault() {
             />
           </label>
           <button
-            className="btn-secondary"
+            className="btn-secondary min-w-11"
             onClick={addPeerFromPaste}
             disabled={peerPaste.trim().length === 0}
           >
@@ -424,25 +426,25 @@ export default function CreateVault() {
               Cosigners added ({peers.length}/{total - 1})
             </span>
             {peers.length === 0 ? (
-              <p className="text-xs text-ink-500">None yet.</p>
+              <p className="text-xs text-text-3 leading-relaxed break-words">None yet.</p>
             ) : (
               <ul className="mt-1 flex flex-col gap-1">
                 {peers.map((p) => (
                   <li
                     key={p.pubkeyHex}
-                    className="flex items-start justify-between gap-2 rounded-xl border border-ink-200 p-2 text-xs dark:border-ink-700"
+                    className="flex items-start justify-between gap-2 rounded-pb border border-line p-2 text-xs leading-relaxed"
                   >
                     <div className="min-w-0">
                       <div className="truncate font-medium">{p.label}</div>
-                      <div className="break-all font-mono text-[10px] text-ink-500">
+                      <div className="break-all font-mono text-[10px] text-text-3 min-w-0 tabular-nums">
                         {p.pubkeyHex}
                       </div>
-                      <div className="font-mono text-[10px] text-ink-500">
+                      <div className="font-mono text-[10px] text-text-3 break-all min-w-0 tabular-nums">
                         {p.originPath}
                       </div>
                     </div>
                     <button
-                      className="shrink-0 text-red-600 underline"
+                      className="shrink-0 text-danger underline underline-offset-4 min-w-11"
                       onClick={() => removePeer(p.pubkeyHex)}
                     >
                       remove
@@ -453,14 +455,14 @@ export default function CreateVault() {
             )}
           </div>
 
-          {error && <p className="text-sm text-red-600">{error}</p>}
+          {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
 
           <div className="mt-2 flex gap-2">
-            <button className="btn-secondary" onClick={() => setStage("mine")}>
+            <button className="btn-secondary min-w-11" onClick={() => setStage("mine")}>
               Back
             </button>
             <button
-              className="btn-primary flex-1"
+              className="btn-primary flex-1 min-w-11"
               disabled={needed > 0}
               onClick={() => setStage("confirm")}
             >
@@ -477,8 +479,9 @@ export default function CreateVault() {
   // stage === "confirm"
   return (
     <Page title="Create vault — confirm">
-      <div className="card flex flex-col gap-3">
-        <p className="text-sm">
+      <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
+        <h2 className="text-xl font-semibold tracking-tight">Review before you save</h2>
+        <p className="text-sm leading-relaxed break-words">
           Step 4 of 4 — verify the vault address with every cosigner BEFORE
           funding. Identical inputs land on the same address; anyone with a
           different address is seeing a different (potentially hostile)
@@ -491,12 +494,12 @@ export default function CreateVault() {
           myPubkeyHex={mine?.pubkeyHex ?? ""}
           peers={peers}
         />
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
         <div className="mt-2 flex gap-2">
-          <button className="btn-secondary" onClick={() => setStage("peers")}>
+          <button className="btn-secondary min-w-11" onClick={() => setStage("peers")}>
             Back
           </button>
-          <button className="btn-primary flex-1" disabled={saving} onClick={save}>
+          <button className="btn-primary flex-1 min-w-11" disabled={saving} onClick={save}>
             {saving ? "Saving…" : "Save vault"}
           </button>
         </div>
@@ -537,21 +540,21 @@ function ConfirmPanel(props: {
   }, [props.threshold, props.myPubkeyHex, props.peers]);
 
   return (
-    <dl className="space-y-2 text-sm">
+    <dl className="space-y-2 text-sm leading-relaxed divide-y divide-line [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dt]:text-[11px] [&_dt]:uppercase [&_dt]:tracking-[.12em] [&_dd]:min-w-0 [&_dd]:break-all [&_dd]:font-mono [&_dd]:tabular-nums [&_dd]:text-left sm:[&_dd]:text-right">
       <div>
-        <dt className="text-ink-500">Label</dt>
+        <dt className="text-text-3">Label</dt>
         <dd className="font-medium">{props.label}</dd>
       </div>
       <div>
-        <dt className="text-ink-500">Policy</dt>
+        <dt className="text-text-3">Policy</dt>
         <dd>
           {props.threshold} of {props.total}
         </dd>
       </div>
       <div>
-        <dt className="text-ink-500">Cosigners (you first, then peers in entry order)</dt>
-        <dd className="mt-1 flex flex-col gap-1 break-all font-mono text-[10px]">
-          <span className="text-pearl-700 dark:text-pearl-300">{props.myPubkeyHex} (me)</span>
+        <dt className="text-text-3">Cosigners (you first, then peers in entry order)</dt>
+        <dd className="mt-1 flex flex-col gap-1 break-all font-mono text-[10px] min-w-0 tabular-nums">
+          <span className="text-accent">{props.myPubkeyHex} (me)</span>
           {props.peers.map((p) => (
             <span key={p.pubkeyHex}>
               {p.pubkeyHex} ({p.label})
@@ -560,15 +563,15 @@ function ConfirmPanel(props: {
         </dd>
       </div>
       <div>
-        <dt className="text-ink-500">Vault address (verify with every cosigner)</dt>
+        <dt className="text-text-3">Vault address (verify with every cosigner)</dt>
         {address ? (
-          <dd className="mt-1 break-all rounded-xl border border-pearl-300 bg-pearl-50 p-3 font-mono text-xs dark:border-pearl-700 dark:bg-pearl-900/30">
+          <dd className="mt-1 break-all rounded-pb border border-accent bg-accent-soft p-3 font-mono text-xs min-w-0 tabular-nums leading-relaxed">
             {address}
           </dd>
         ) : err ? (
-          <dd className="text-sm text-red-600">{err}</dd>
+          <dd className="text-sm text-danger leading-relaxed">{err}</dd>
         ) : (
-          <dd className="text-xs text-ink-500">Computing…</dd>
+          <dd className="text-xs text-text-3 leading-relaxed">Computing…</dd>
         )}
       </div>
     </dl>

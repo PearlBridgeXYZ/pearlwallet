@@ -162,11 +162,11 @@ export default function SendETH() {
     return (
       <Page title="Send ETH">
         <div className="card">
-          <h2 className="text-lg font-semibold">Broadcast.</h2>
-          <p className="mt-2 text-sm">
-            Tx hash: <span className="break-all font-mono">{txHash}</span>
+          <h2 className="text-lg font-semibold tracking-tight">Transaction broadcast</h2>
+          <p className="mt-2 text-sm leading-relaxed break-words">
+            Tx hash: <span className="break-all font-mono min-w-0 tabular-nums">{txHash}</span>
           </p>
-          <p className="mt-2 text-xs text-ink-500">
+          <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
             Confirming on Ethereum — this can take a few minutes.
           </p>
           {txHash && (
@@ -174,12 +174,12 @@ export default function SendETH() {
               href={ethTxExplorerUrl(ethNetwork, txHash)}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-3 inline-block text-sm text-pearl-700 underline dark:text-pearl-300"
+              className="mt-3 inline-block text-sm text-accent underline underline-offset-4 leading-relaxed"
             >
               View on Etherscan →
             </a>
           )}
-          <button onClick={() => navigate("/dashboard")} className="btn-primary mt-4 w-full">
+          <button onClick={() => navigate("/dashboard")} className="btn-primary mt-4 w-full min-w-11">
             Back to dashboard
           </button>
         </div>
@@ -193,38 +193,40 @@ export default function SendETH() {
     const covered = q?.covered ?? false;
     return (
       <Page title="Send ETH">
-        <div className="card">
-          <h2 className="text-lg font-semibold">Confirm</h2>
-          <dl className="mt-3 space-y-2 text-sm">
+        <div className="card shadow-slabsm sm:shadow-slab">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Transaction preview</p>
+          <h2 className="text-xl font-semibold tracking-tight">Review before you sign</h2>
+          <p className="mt-2 text-sm leading-relaxed text-text-2">Check the destination, amount and fees. A transfer cannot be undone.</p>
+          <dl className="mt-3 space-y-2 text-sm leading-relaxed divide-y divide-line [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dt]:text-[11px] [&_dt]:uppercase [&_dt]:tracking-[.12em] [&_dd]:min-w-0 [&_dd]:break-all [&_dd]:font-mono [&_dd]:tabular-nums [&_dd]:text-left sm:[&_dd]:text-right">
             <div className="flex justify-between">
-              <dt className="text-ink-500">To</dt>
+              <dt className="text-text-3">To</dt>
               <dd className="break-all text-right">
                 {resolvedEns && (
-                  <div className="font-medium text-pearl-700 dark:text-pearl-300">{resolvedEns}</div>
+                  <div className="font-medium text-accent">{resolvedEns}</div>
                 )}
-                <div className="font-mono text-xs">{v?.dest}</div>
+                <div className="font-mono text-xs break-all min-w-0 tabular-nums leading-relaxed">{v?.dest}</div>
               </dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Amount</dt>
+              <dt className="text-text-3">Amount</dt>
               <dd>{v ? formatWei(v.wei) : "—"} ETH</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Gas tier</dt>
+              <dt className="text-text-3">Gas tier</dt>
               <dd>{tier} ({GAS_BY_TIER[tier]} priority)</dd>
             </div>
             {q && (
               <>
                 <div className="flex justify-between">
-                  <dt className="text-ink-500">Worst-case gas</dt>
+                  <dt className="text-text-3">Worst-case gas</dt>
                   <dd>{formatWei(q.worstCaseWei)} ETH</dd>
                 </div>
-                <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
+                <div className="flex justify-between border-t border-line pt-2">
                   <dt className="font-medium">Total (max)</dt>
                   <dd className="font-medium">{formatWei(q.required)} ETH</dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-ink-500">Your ETH</dt>
+                  <dt className="text-text-3">Your ETH</dt>
                   <dd>{formatWei(q.ethBal)} ETH</dd>
                 </div>
               </>
@@ -232,29 +234,29 @@ export default function SendETH() {
           </dl>
 
           {previewQ.isLoading && (
-            <p className="mt-3 text-xs text-ink-500">Estimating gas…</p>
+            <p className="mt-3 text-xs text-text-3 leading-relaxed break-words">Estimating gas…</p>
           )}
           {previewQ.isError && (
-            <p className="mt-3 text-sm text-red-600">
+            <p className="mt-3 text-sm text-danger leading-relaxed break-words">
               Couldn't estimate gas: {(previewQ.error as Error).message}
             </p>
           )}
           {q && !covered && (
-            <div className="mt-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-900 dark:border-red-700 dark:bg-red-900/20 dark:text-red-200">
+            <div className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-3 text-xs text-danger leading-relaxed">
               Insufficient ETH — amount + gas exceeds your balance. Reduce
               the amount or top up first.
             </div>
           )}
 
-          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+          {error && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{error}</p>}
           <div className="mt-4 flex gap-2">
-            <button onClick={() => setStage("compose")} className="btn-secondary" disabled={sending}>
+            <button onClick={() => setStage("compose")} className="btn-secondary min-w-11" disabled={sending}>
               Back
             </button>
             <button
               disabled={!q || !covered || sending}
               onClick={broadcast}
-              className="btn-primary flex-1"
+              className="btn-primary flex-1 min-w-11"
             >
               {sending ? "Sending…" : "Send"}
             </button>
@@ -266,15 +268,15 @@ export default function SendETH() {
 
   return (
     <Page title="Send ETH">
-      <div className="card flex flex-col gap-3">
-        <p className="text-xs text-ink-500">
+      <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
+        <p className="text-xs text-text-3 leading-relaxed break-words">
           Send native ETH from your wallet's Ethereum address. Useful for
           funding gas before a WPRL transfer or moving ETH out.
         </p>
         <label className="block">
           <span className="label">Destination address or ENS name</span>
           <input
-            className="input mono"
+            className="input mono break-all min-w-0 tabular-nums"
             placeholder="0x… or name.eth"
             value={destination}
             autoComplete="off"
@@ -286,7 +288,7 @@ export default function SendETH() {
         <label className="block">
           <span className="label">Amount (ETH)</span>
           <input
-            className="input mono"
+            className="input mono break-all min-w-0 tabular-nums"
             inputMode="decimal"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
@@ -300,8 +302,8 @@ export default function SendETH() {
                 key={t}
                 className={
                   tier === t
-                    ? "cursor-pointer rounded-xl border-2 border-pearl-700 bg-pearl-50 p-3 text-center text-sm dark:bg-pearl-900/30"
-                    : "cursor-pointer rounded-xl border border-ink-300 p-3 text-center text-sm dark:border-ink-700"
+                    ? "cursor-pointer rounded-pb border-2 border-accent bg-accent-soft p-3 text-center text-sm min-h-11 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2 leading-relaxed"
+                    : "cursor-pointer rounded-pb border border-line p-3 text-center text-sm min-h-11 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2 leading-relaxed"
                 }
               >
                 <input
@@ -311,16 +313,16 @@ export default function SendETH() {
                   onChange={() => setTier(t)}
                 />
                 <div className="font-medium capitalize">{t}</div>
-                <div className="text-xs text-ink-500">{GAS_BY_TIER[t]}</div>
+                <div className="text-xs text-text-3 leading-relaxed">{GAS_BY_TIER[t]}</div>
               </label>
             ))}
           </div>
         </fieldset>
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
         <button
           onClick={() => void reviewSend()}
           disabled={resolving}
-          className="btn-primary disabled:opacity-50"
+          className="btn-primary disabled:opacity-50 min-w-11"
         >
           {resolving ? "Resolving ENS…" : "Review"}
         </button>

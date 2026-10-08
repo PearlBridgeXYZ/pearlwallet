@@ -64,8 +64,8 @@ function ComposingHint({ usingCache }: { usingCache: boolean }) {
     return () => clearInterval(t);
   }, [messages.length]);
   return (
-    <div className="mt-3 flex items-center gap-2 text-xs text-ink-500">
-      <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-pearl-600" />
+    <div className="mt-3 flex items-center gap-2 text-xs text-text-3 leading-relaxed">
+      <span className="inline-flex h-2 w-2 animate-pulse rounded-full bg-accent-bg" />
       <span>{messages[idx]}</span>
     </div>
   );
@@ -246,11 +246,11 @@ export default function SendPRL() {
     return (
       <Page title="Send PRL">
         <div className="card">
-          <h2 className="text-lg font-semibold">Broadcast.</h2>
-          <p className="mt-2 text-sm text-ink-500">
-            Txid: <span className="break-all font-mono">{txid}</span>
+          <h2 className="text-lg font-semibold tracking-tight">Transaction broadcast</h2>
+          <p className="mt-2 text-sm text-text-3 leading-relaxed break-words">
+            Txid: <span className="break-all font-mono min-w-0 tabular-nums">{txid}</span>
           </p>
-          <p className="mt-2 text-xs text-ink-500">
+          <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
             Confirming on chain — this can take a few minutes.
           </p>
           {txid && (
@@ -258,13 +258,13 @@ export default function SendPRL() {
               href={pearlTxExplorerUrl(pearlNetwork, txid)}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-3 inline-block text-sm text-pearl-700 underline dark:text-pearl-300"
+              className="mt-3 inline-block text-sm text-accent underline underline-offset-4 leading-relaxed"
             >
               View on explorer →
             </a>
           )}
           <div className="mt-4 flex gap-2">
-            <button onClick={() => navigate("/dashboard")} className="btn-primary flex-1">
+            <button onClick={() => navigate("/dashboard")} className="btn-primary flex-1 min-w-11">
               Back to dashboard
             </button>
           </div>
@@ -277,48 +277,50 @@ export default function SendPRL() {
     const v = validated;
     return (
       <Page title="Send PRL">
-        <div className="card">
-          <h2 className="text-lg font-semibold">Confirm</h2>
-          <dl className="mt-3 space-y-2 text-sm">
+        <div className="card shadow-slabsm sm:shadow-slab">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Transaction preview</p>
+          <h2 className="text-xl font-semibold tracking-tight">Review before you sign</h2>
+          <p className="mt-2 text-sm leading-relaxed text-text-2">Check the destination, amount and fees. A transfer cannot be undone.</p>
+          <dl className="mt-3 space-y-2 text-sm leading-relaxed divide-y divide-line [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dt]:text-[11px] [&_dt]:uppercase [&_dt]:tracking-[.12em] [&_dd]:min-w-0 [&_dd]:break-all [&_dd]:font-mono [&_dd]:tabular-nums [&_dd]:text-left sm:[&_dd]:text-right">
             <div className="flex justify-between">
-              <dt className="text-ink-500">To</dt>
-              <dd className="break-all font-mono">{v?.dest}</dd>
+              <dt className="text-text-3">To</dt>
+              <dd className="break-all font-mono min-w-0 tabular-nums">{v?.dest}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-ink-500">Amount</dt>
+              <dt className="text-text-3">Amount</dt>
               <dd>{v ? formatGrains(v.grains) : "—"} PRL</dd>
             </div>
             {composed && (
               <>
                 <div className="flex justify-between">
-                  <dt className="text-ink-500">Fee ({tier})</dt>
+                  <dt className="text-text-3">Fee ({tier})</dt>
                   <dd>{formatGrains(composed.feeGrains)} PRL</dd>
                 </div>
                 {composed.tipGrains > 0n && (
                   <div className="flex justify-between">
-                    <dt className="text-ink-500">
+                    <dt className="text-text-3">
                       Tip to PearlWallet Devs (10 bps, min 1 PRL)
                     </dt>
                     <dd>{formatGrains(composed.tipGrains)} PRL</dd>
                   </div>
                 )}
                 <div className="flex justify-between">
-                  <dt className="text-ink-500">Change back to you</dt>
+                  <dt className="text-text-3">Change back to you</dt>
                   <dd>{formatGrains(composed.changeGrains)} PRL</dd>
                 </div>
                 <div className="flex justify-between">
-                  <dt className="text-ink-500">Inputs</dt>
+                  <dt className="text-text-3">Inputs</dt>
                   <dd>
                     {composed.utxos.length} UTXO
                     {composed.utxos.length === 1 ? "" : "s"}
                     {composed.utxos.length > 50 && (
-                      <span className="ml-1 text-xs text-amber-700 dark:text-amber-400">
+                      <span className="ml-1 text-xs text-warn leading-relaxed">
                         (large tx — signing may take a moment)
                       </span>
                     )}
                   </dd>
                 </div>
-                <div className="flex justify-between border-t border-ink-200 pt-2 dark:border-ink-700">
+                <div className="flex justify-between border-t border-line pt-2">
                   <dt className="font-medium">Total leaving wallet</dt>
                   <dd className="font-medium">
                     {formatGrains(v!.grains + composed.feeGrains + composed.tipGrains)} PRL
@@ -330,14 +332,14 @@ export default function SendPRL() {
 
           {previewQ.isLoading && <ComposingHint usingCache={!!cachedUtxos && !deepWalk} />}
           {previewQ.isFetching && !!composed && (
-            <p className="mt-2 text-xs text-ink-500">Refreshing UTXO selection…</p>
+            <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">Refreshing UTXO selection…</p>
           )}
 
           {/* Structured insufficient-funds diagnostic + deep-retry CTA. */}
           {insufficient && (
-            <div className="mt-3 rounded-xl border border-red-300 bg-red-50 p-3 text-xs text-red-900 dark:border-red-700 dark:bg-red-900/20 dark:text-red-200">
+            <div className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-3 text-xs text-danger leading-relaxed">
               <div className="font-medium">Not enough spendable PRL for this send.</div>
-              <ul className="mt-1 list-disc pl-4">
+              <ul className="mt-2 list-disc space-y-1 break-all pl-4 font-mono tabular-nums">
                 <li>Need: {formatGrains(insufficient.need)} PRL (amount + fee + tip)</li>
                 <li>
                   Found: {formatGrains(insufficient.have)} PRL across{" "}
@@ -353,7 +355,7 @@ export default function SendPRL() {
                   The UTXO walk hit its page cap before scanning everything —
                   the chain may hold more coins than shown.
                   <button
-                    className="ml-2 underline"
+                    className="ml-2 underline underline-offset-4 min-w-11"
                     onClick={() => {
                       setDeepWalk(true);
                       setInsufficient(null);
@@ -368,12 +370,12 @@ export default function SendPRL() {
           )}
 
           {previewQ.isError && !insufficient && (
-            <p className="mt-3 text-sm text-red-600">
+            <p className="mt-3 text-sm text-danger leading-relaxed break-words">
               Couldn't compose: {(previewQ.error as Error).message}
             </p>
           )}
           {composed?.degraded && !insufficient && (
-            <div className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200">
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
               Some receive addresses returned partial UTXO sets. The send
               composed successfully but the visible balance may under-report
               your actual chain balance.
@@ -381,7 +383,7 @@ export default function SendPRL() {
           )}
 
           {composed && composeFresh && (
-            <p className="mt-2 text-xs text-ink-500">
+            <p className="mt-3 break-all font-mono text-xs leading-relaxed text-text-3 tabular-nums">
               Preview fresh for {secondsToStale}s
               {composed.spendableGrains > 0n && (
                 <>
@@ -394,7 +396,7 @@ export default function SendPRL() {
             </p>
           )}
 
-          <label className="mt-4 flex items-start gap-2 rounded-xl border border-ink-200 p-3 text-sm dark:border-ink-700">
+          <label className="mt-4 flex items-start gap-2 rounded-pb border border-line p-3 text-sm leading-relaxed">
             <input
               type="checkbox"
               checked={tipThisTx}
@@ -405,30 +407,30 @@ export default function SendPRL() {
               Tip the PearlWallet devs{" "}
               <span className="font-medium">10 bps</span> (min{" "}
               <span className="font-medium">1 PRL</span>) on this transaction.
-              <span className="ml-1 text-xs text-ink-500">
+              <span className="ml-1 text-xs text-text-3 leading-relaxed">
                 You can turn this off permanently in{" "}
-                <Link to="/settings" className="underline">Settings</Link>
+                <Link to="/settings" className="underline underline-offset-4">Settings</Link>
                 {" "}— the wallet is free to use.
               </span>
             </span>
           </label>
-          <p className="mt-2 break-all text-xs text-ink-500">
-            Tip goes to <span className="font-mono">{tipAddressFor(pearlNetwork)}</span>.
+          <p className="mt-2 break-all text-xs text-text-3 leading-relaxed break-words">
+            Tip goes to <span className="font-mono break-all min-w-0 tabular-nums">{tipAddressFor(pearlNetwork)}</span>.
           </p>
-          <p className="mt-4 text-sm text-amber-700 dark:text-amber-400">
+          <p className="mt-4 text-sm text-warn leading-relaxed break-words">
             This cannot be undone.
           </p>
 
-          {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+          {error && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{error}</p>}
 
           <div className="mt-4 flex gap-2">
-            <button onClick={() => setStage("compose")} className="btn-secondary" disabled={sending}>
+            <button onClick={() => setStage("compose")} className="btn-secondary min-w-11" disabled={sending}>
               Back
             </button>
             <button
               disabled={!composed || sending || !!insufficient}
               onClick={broadcast}
-              className="btn-primary flex-1"
+              className="btn-primary flex-1 min-w-11"
             >
               {sending ? "Sending…" : "Send"}
             </button>
@@ -440,11 +442,11 @@ export default function SendPRL() {
 
   return (
     <Page title="Send PRL">
-      <div className="card flex flex-col gap-3">
+      <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
         <label className="block">
           <span className="label">Destination address</span>
           <input
-            className="input mono"
+            className="input mono break-all min-w-0 tabular-nums"
             placeholder="prl1p..."
             value={destination}
             autoComplete="off"
@@ -456,7 +458,7 @@ export default function SendPRL() {
         <label className="block">
           <span className="label">Amount (PRL)</span>
           <input
-            className="input mono"
+            className="input mono break-all min-w-0 tabular-nums"
             inputMode="decimal"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
@@ -470,8 +472,8 @@ export default function SendPRL() {
                 key={t}
                 className={
                   tier === t
-                    ? "cursor-pointer rounded-xl border-2 border-pearl-700 bg-pearl-50 p-3 text-center text-sm dark:bg-pearl-900/30"
-                    : "cursor-pointer rounded-xl border border-ink-300 p-3 text-center text-sm dark:border-ink-700"
+                    ? "cursor-pointer rounded-pb border-2 border-accent bg-accent-soft p-3 text-center text-sm min-h-11 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2 leading-relaxed"
+                    : "cursor-pointer rounded-pb border border-line p-3 text-center text-sm min-h-11 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2 leading-relaxed"
                 }
               >
                 <input
@@ -481,7 +483,7 @@ export default function SendPRL() {
                   onChange={() => setTier(t)}
                 />
                 <div className="font-medium capitalize">{t}</div>
-                <div className="text-xs text-ink-500">
+                <div className="text-xs text-text-3 leading-relaxed">
                   {FEERATE_BY_TIER[t].toString()} sat/vB
                 </div>
               </label>
@@ -489,7 +491,7 @@ export default function SendPRL() {
           </div>
         </fieldset>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
 
         <button
           onClick={() => {
@@ -504,7 +506,7 @@ export default function SendPRL() {
             setValidated(result.v);
             setStage("preview");
           }}
-          className="btn-primary"
+          className="btn-primary min-w-11"
         >
           Review
         </button>

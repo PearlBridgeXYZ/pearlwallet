@@ -153,8 +153,8 @@ export default function VaultProposal() {
   if (!token) {
     return (
       <Page title="Proposal">
-        <p className="text-sm text-ink-700">Missing token in URL.</p>
-        <Link to="/dashboard" className="mt-3 inline-block text-sm text-pearl-700 hover:underline">
+        <p className="card break-all text-sm leading-relaxed text-text-2">Missing token in URL.</p>
+        <Link to="/dashboard" className="mt-3 inline-block text-sm text-accent hover:underline leading-relaxed">
           Back to dashboard
         </Link>
       </Page>
@@ -167,7 +167,7 @@ export default function VaultProposal() {
   if (!multisigEnabled) {
     return (
       <Page title="Vault proposal">
-        <p className="text-sm text-ink-700">
+        <p className="card break-all text-sm leading-relaxed text-text-2">
           This is a multisig cosign request, but the Vaults surface is turned
           off on this wallet. Enable it in Settings, then open the link again
           — it hasn't been used.
@@ -187,7 +187,7 @@ export default function VaultProposal() {
   if (status !== "unlocked") {
     return (
       <Page title="Vault proposal">
-        <p className="text-sm text-ink-700">
+        <p className="card break-all text-sm leading-relaxed text-text-2">
           Unlock the wallet first to load this proposal. The link can only be
           opened once, so we wait until you're ready.
         </p>
@@ -203,15 +203,15 @@ export default function VaultProposal() {
 
   return (
     <Page title="Vault proposal">
-      <p className="text-sm text-ink-700">{ui.message}</p>
+      <p className="card break-all text-sm leading-relaxed text-text-2">{ui.message}</p>
       {ui.stage === "error" && (
         <div className="mt-4 flex flex-col gap-2">
           {ui.errorCode === "already_consumed" && ui.consumedAt && (
-            <p className="text-xs text-ink-500">
+            <p className="text-xs text-text-3 leading-relaxed break-words">
               Consumed at: {new Date(ui.consumedAt * 1000).toISOString()}
             </p>
           )}
-          <div className="flex gap-2">
+          <div className="flex flex-col gap-2 sm:flex-row">
             <Link to="/dashboard" className="btn-secondary">
               Back to dashboard
             </Link>

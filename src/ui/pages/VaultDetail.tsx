@@ -70,8 +70,8 @@ export default function VaultDetail() {
   if (vault === null) {
     return (
       <Page title="Vault">
-        <p>Vault not found.</p>
-        <Link to="/vaults" className="text-pearl-700 underline dark:text-pearl-300">
+        <p className="break-words">Vault not found.</p>
+        <Link to="/vaults" className="text-accent underline underline-offset-4">
           ← Back to vaults
         </Link>
       </Page>
@@ -80,34 +80,34 @@ export default function VaultDetail() {
 
   return (
     <Page title={vault.label}>
-      <section className="card mb-4">
-        <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-medium">
+      <section className="card mb-6">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="text-sm font-medium leading-relaxed tracking-tight">
             {vault.threshold} of {vault.total} multisig
           </h2>
           <a
             href={pearlAddressExplorerUrl(pearlNetwork, vault.pearlAddress)}
             target="_blank"
             rel="noreferrer noopener"
-            className="text-xs text-pearl-700 underline dark:text-pearl-300"
+            className="text-xs text-accent underline underline-offset-4 leading-relaxed"
           >
             Explorer →
           </a>
         </div>
-        <div className="mt-2 break-all font-mono text-xs">{vault.pearlAddress}</div>
-        <div className="mt-3 text-sm">
+        <div className="mt-2 break-all font-mono text-xs min-w-0 tabular-nums leading-relaxed">{vault.pearlAddress}</div>
+        <div className="mt-3 text-sm leading-relaxed">
           Balance:{" "}
           {balanceQ.data ? (
-            <span className="font-medium">
+            <span className="min-w-0 break-all font-mono text-xl font-semibold tabular-nums">
               {formatGrains(balanceQ.data.grains)} PRL
               {balanceQ.data.degraded && (
-                <span className="ml-2 text-xs text-amber-600">(partial)</span>
+                <span className="ml-2 text-xs text-warn leading-relaxed">(partial)</span>
               )}
             </span>
           ) : balanceQ.isLoading ? (
-            <span className="text-ink-500">…</span>
+            <span className="text-text-3">…</span>
           ) : (
-            <span className="text-red-600">unavailable</span>
+            <span className="text-danger">unavailable</span>
           )}
         </div>
 
@@ -121,10 +121,10 @@ export default function VaultDetail() {
         </div>
       </section>
 
-      <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Pending transactions</h2>
+      <section className="card mb-6">
+        <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Pending transactions</h2>
         {pending.length === 0 ? (
-          <p className="mt-2 text-xs text-ink-500">None yet.</p>
+          <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">None yet.</p>
         ) : (
           <ul className="mt-2 flex flex-col gap-2">
             {pending.map((p) => (
@@ -139,27 +139,27 @@ export default function VaultDetail() {
         )}
       </section>
 
-      <section className="card mb-4 text-xs">
-        <h2 className="text-sm font-semibold">Cosigners</h2>
+      <section className="card mb-4 text-xs leading-relaxed">
+        <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Cosigners</h2>
         <ul className="mt-2 flex flex-col gap-1">
           {vault.sortedPubkeysHex.map((h) => (
-            <li key={h} className="break-all font-mono">
+            <li key={h} className="break-all font-mono min-w-0 tabular-nums">
               {h === vault.myPubkeyHex ? (
-                <span className="text-pearl-700 dark:text-pearl-300">{h} (you)</span>
+                <span className="text-accent">{h} (you)</span>
               ) : (
                 h
               )}
             </li>
           ))}
         </ul>
-        <p className="mt-2 text-ink-500">
-          Your path: <span className="font-mono">{vault.myOriginPath}</span>
+        <p className="mt-2 text-text-3 break-words">
+          Your path: <span className="font-mono break-all min-w-0 tabular-nums">{vault.myOriginPath}</span>
         </p>
       </section>
 
-      <section className="card text-xs">
-        <h2 className="text-sm font-semibold text-red-600">Danger zone</h2>
-        <p className="mt-1 text-ink-500">
+      <section className="card border-danger-line bg-danger-bg text-sm leading-relaxed">
+        <h2 className="text-sm font-semibold text-danger leading-relaxed tracking-tight">Danger zone</h2>
+        <p className="mt-1 text-text-3 break-words">
           Deleting removes the local vault record. Funds at the on-chain
           address remain spendable from any wallet that still holds the
           cosigner pubkey set — but you'll need to re-import to spend
@@ -168,16 +168,16 @@ export default function VaultDetail() {
         {!confirmDelete ? (
           <button
             onClick={() => setConfirmDelete(true)}
-            className="btn-secondary mt-2 text-red-600"
+            className="btn-secondary mt-2 text-danger min-w-11"
           >
             Delete vault
           </button>
         ) : (
           <div className="mt-2 flex gap-2">
-            <button onClick={() => setConfirmDelete(false)} className="btn-secondary">
+            <button onClick={() => setConfirmDelete(false)} className="btn-secondary min-w-11">
               Cancel
             </button>
-            <button onClick={doDelete} className="btn-primary bg-red-600">
+            <button onClick={doDelete} className="btn-danger min-w-11">
               Confirm delete
             </button>
           </div>
@@ -206,47 +206,47 @@ function PendingRow(props: {
   })();
 
   return (
-    <li className="rounded-xl border border-ink-200 p-3 dark:border-ink-700">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
-        <div className="font-medium">
+    <li className="rounded-pb border border-line p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm leading-relaxed">
+        <div className="min-w-0 break-all font-mono font-medium tabular-nums">
           → {formatGrains(BigInt(pending.preview.amountGrains))} PRL
         </div>
-        <div className="text-xs">
+        <div className="text-xs leading-relaxed">
           <StatusBadge status={pending.status} />
           {live && (
-            <span className="ml-2 text-ink-500">
+            <span className="ml-2 text-text-3">
               {live.signerCount}/{vault.threshold} signed
             </span>
           )}
         </div>
       </div>
-      <div className="mt-1 break-all font-mono text-[10px] text-ink-500">
+      <div className="mt-1 break-all font-mono text-[10px] text-text-3 min-w-0 tabular-nums">
         to {pending.preview.destination.slice(0, 14)}…{pending.preview.destination.slice(-10)}
       </div>
-      <div className="mt-1 text-[10px] text-ink-500">
+      <div className="mt-2 break-all font-mono text-xs leading-relaxed text-text-3 tabular-nums">
         Fee {formatGrains(BigInt(pending.preview.feeGrains))} PRL · Change{" "}
         {formatGrains(BigInt(pending.preview.changeGrains))} PRL · {pending.preview.inputCount}{" "}
         UTXO{pending.preview.inputCount === 1 ? "" : "s"}
       </div>
       {pending.txid && (
-        <div className="mt-1 break-all font-mono text-[10px] text-ink-500">
+        <div className="mt-1 break-all font-mono text-[10px] text-text-3 min-w-0 tabular-nums">
           txid {pending.txid}
         </div>
       )}
       <div className="mt-2 flex flex-wrap gap-2">
-        <Link to={`/vaults/${vault.id}/tx/${pending.id}`} className="btn-secondary text-xs">
+        <Link to={`/vaults/${vault.id}/tx/${pending.id}`} className="btn-secondary text-xs leading-relaxed">
           Open
         </Link>
         {!confirmRemove ? (
           <button
             onClick={() => setConfirmRemove(true)}
-            className="text-xs text-red-600 underline"
+            className="text-xs text-danger underline underline-offset-4 leading-relaxed min-w-11"
           >
             Remove
           </button>
         ) : (
-          <div className="flex gap-1 text-xs">
-            <button onClick={() => setConfirmRemove(false)} className="underline">
+          <div className="flex gap-1 text-xs leading-relaxed">
+            <button onClick={() => setConfirmRemove(false)} className="underline underline-offset-4 min-w-11">
               Cancel
             </button>
             <button
@@ -254,7 +254,7 @@ function PendingRow(props: {
                 await deletePendingTx(pending.id);
                 props.onChange();
               }}
-              className="text-red-600 underline"
+              className="text-danger underline underline-offset-4 min-w-11"
             >
               Confirm
             </button>
@@ -268,13 +268,13 @@ function PendingRow(props: {
 function StatusBadge({ status }: { status: VaultPendingTxRecord["status"] }) {
   const cls =
     status === "broadcast"
-      ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+      ? "bg-surface-2 text-ok"
       : status === "ready"
-        ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+        ? "bg-accent-soft text-accent"
         : status === "failed"
-          ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
-          : "bg-ink-100 text-ink-700 dark:bg-ink-800 dark:text-ink-200";
+          ? "bg-danger-bg text-danger"
+          : "bg-surface-2 text-text-2";
   return (
-    <span className={`rounded px-2 py-0.5 text-[10px] uppercase ${cls}`}>{status}</span>
+    <span className={`rounded-pb px-2 py-0.5 text-[10px] uppercase ${cls}`}>{status}</span>
   );
 }

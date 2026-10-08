@@ -189,19 +189,19 @@ export default function Bridge() {
   return (
     <Page title="Bridge">
       {status?.paused ? (
-        <div className="card mb-4 border border-amber-400 bg-amber-50 text-sm dark:bg-amber-950">
+        <div className="card mb-4 border border-warn-line bg-warn-bg text-sm leading-relaxed">
           The bridge is currently <span className="font-semibold">paused</span>. Quotes are
           shown but new crossings are disabled until it resumes.
         </div>
       ) : null}
       {statusErr ? (
-        <div className="card mb-4 border border-amber-400 text-sm">
+        <div className="card mb-4 border border-warn-line text-sm leading-relaxed">
           Could not reach the bridge API ({statusErr}). Balances and sends still work;
           bridging needs the API.
         </div>
       ) : null}
 
-      <div className="mb-4 flex gap-2">
+      <div className="mb-6 grid grid-cols-1 gap-1 rounded-pb bg-surface-2 p-1 sm:grid-cols-3">
         {(["wrap", "unwrap", "activity"] as Tab[]).map((t) => (
           <button
             key={t}
@@ -243,7 +243,7 @@ export default function Bridge() {
         <ActivityCard crossings={crossings} requiredConfs={status?.pearlMinConfirmations ?? 6} ethNetwork={ethNetwork} />
       )}
 
-      <button onClick={() => navigate("/dashboard")} className="btn-secondary mt-4 w-full">
+      <button onClick={() => navigate("/dashboard")} className="btn-secondary mt-4 w-full min-w-11">
         Back to dashboard
       </button>
     </Page>
@@ -453,20 +453,20 @@ function WrapCard(props: {
   };
 
   return (
-    <div className="card flex flex-col gap-4">
+    <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
       <div>
-        <h2 className="text-lg font-semibold">Wrap PRL into WPRL</h2>
-        <p className="mt-1 text-sm text-ink-600 dark:text-ink-400">
+        <h2 className="text-lg font-semibold tracking-tight">Wrap PRL into WPRL</h2>
+        <p className="mt-1 text-sm text-text-2 leading-relaxed break-words">
           Sends PRL from this wallet to your personal bridge deposit address. WPRL mints
-          to <span className="font-mono text-xs">{ethAddress ?? "—"}</span> after{" "}
+          to <span className="font-mono text-xs break-all min-w-0 tabular-nums leading-relaxed">{ethAddress ?? "—"}</span> after{" "}
           {status?.pearlMinConfirmations ?? 6} confirmations.
         </p>
       </div>
 
-      <label className="text-sm">
+      <label className="text-sm leading-relaxed">
         Amount (PRL)
         <input
-          className="input mt-1 w-full"
+          className="input mt-2 w-full font-mono tabular-nums"
           inputMode="decimal"
           placeholder="0.0"
           value={amount}
@@ -475,7 +475,8 @@ function WrapCard(props: {
       </label>
 
       {quote && (
-        <div className="rounded-xl border border-ink-200 p-3 text-sm dark:border-ink-700">
+        <div className="rounded-pb border border-line-strong bg-surface-2 p-4 text-sm leading-relaxed">
+          <h3 className="mb-3 text-base font-semibold tracking-tight">Review before you sign</h3>
           <Row k="Bridge fee" v={`${fmtPrl(quote.fee)} (${quote.feeBps} bps)`} />
           <Row k="You receive" v={`${grainsToPrlString(quote.net)} WPRL`} />
           <Row
@@ -487,7 +488,7 @@ function WrapCard(props: {
             }
           />
           {!quote.withinDailyCap && (
-            <p className="mt-2 text-amber-600">
+            <p className="mt-2 text-warn break-words">
               Amount exceeds today’s remaining bridge capacity — it will queue.
             </p>
           )}
@@ -495,21 +496,21 @@ function WrapCard(props: {
       )}
 
       {depositAddr && (
-        <div className="rounded-xl border border-ink-200 p-3 text-xs dark:border-ink-700">
-          <div className="mb-1 text-ink-500">PRL will be sent to your bridge deposit address:</div>
-          <div className="break-all font-mono">{depositAddr}</div>
-          <div className="mt-1 text-ink-500">
+        <div className="rounded-pb border border-line p-3 text-xs leading-relaxed">
+          <div className="mb-1 text-text-3">PRL will be sent to your bridge deposit address:</div>
+          <div className="break-all font-mono min-w-0 tabular-nums">{depositAddr}</div>
+          <div className="mt-1 text-text-3">
             Verify this matches the address shown for your wallet on pearlbridge.xyz before sending.
           </div>
         </div>
       )}
 
-      {err && <p className="text-sm text-red-600">{err}</p>}
+      {err && <p className="text-sm text-danger leading-relaxed break-words">{err}</p>}
 
       <button
         onClick={() => void wrap()}
         disabled={!quote || !depositAddr || busy || status?.paused === true}
-        className="btn-primary disabled:opacity-50"
+        className="btn-primary disabled:opacity-50 min-w-11"
       >
         {busy ? "Sending…" : quote ? `Wrap ${grainsToPrlString(quote.amount)} PRL` : "Wrap"}
       </button>
@@ -689,20 +690,20 @@ function UnwrapCard(props: {
   };
 
   return (
-    <div className="card flex flex-col gap-4">
+    <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
       <div>
-        <h2 className="text-lg font-semibold">Unwrap WPRL back to PRL</h2>
-        <p className="mt-1 text-sm text-ink-600 dark:text-ink-400">
-          Burns WPRL from <span className="font-mono text-xs">{ethAddress ?? "—"}</span>;
+        <h2 className="text-lg font-semibold tracking-tight">Unwrap WPRL back to PRL</h2>
+        <p className="mt-1 text-sm text-text-2 leading-relaxed break-words">
+          Burns WPRL from <span className="font-mono text-xs break-all min-w-0 tabular-nums leading-relaxed">{ethAddress ?? "—"}</span>;
           the bridge pays native PRL to this wallet’s Pearl address. Needs a little ETH
           for gas{needsApprove ? " (two transactions: approve, then burn)" : ""}.
         </p>
       </div>
 
-      <label className="text-sm">
+      <label className="text-sm leading-relaxed">
         Amount (WPRL)
         <input
-          className="input mt-1 w-full"
+          className="input mt-2 w-full font-mono tabular-nums"
           inputMode="decimal"
           placeholder="0.0"
           value={amount}
@@ -711,26 +712,27 @@ function UnwrapCard(props: {
       </label>
 
       {quote && (
-        <div className="rounded-xl border border-ink-200 p-3 text-sm dark:border-ink-700">
+        <div className="rounded-pb border border-line-strong bg-surface-2 p-4 text-sm leading-relaxed">
+          <h3 className="mb-3 text-base font-semibold tracking-tight">Review before you sign</h3>
           <Row k="Bridge fee" v={`${fmtPrl(quote.fee)} (${quote.feeBps} bps)`} />
           <Row k="You receive" v={fmtPrl(quote.net)} />
           <Row k="Payout to" v={pearlAddress ? `${pearlAddress.slice(0, 14)}…${pearlAddress.slice(-8)}` : "—"} />
           {needsApprove && <Row k="Step 1" v="approve WPRL (exact amount)" />}
           <Row k={needsApprove ? "Step 2" : "Transaction"} v="requestBurn on PearlBridge" />
           {!quote.withinDailyCap && (
-            <p className="mt-2 text-amber-600">
+            <p className="mt-2 text-warn break-words">
               Amount exceeds today’s remaining burn capacity.
             </p>
           )}
         </div>
       )}
 
-      {err && <p className="text-sm text-red-600">{err}</p>}
+      {err && <p className="text-sm text-danger leading-relaxed break-words">{err}</p>}
 
       <button
         onClick={() => void unwrap()}
         disabled={!quote || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false}
-        className="btn-primary disabled:opacity-50"
+        className="btn-primary disabled:opacity-50 min-w-11"
       >
         {busy === "approving"
           ? "Approving…"
@@ -754,7 +756,7 @@ function ActivityCard(props: {
   const { crossings, requiredConfs, ethNetwork } = props;
   if (!crossings.length) {
     return (
-      <div className="card text-sm text-ink-600 dark:text-ink-400">
+      <div className="card text-sm text-text-2 leading-relaxed">
         No bridge activity yet. Wraps and unwraps you start here keep tracking even if
         you close the app — the bridge finishes them on-chain.
       </div>
@@ -763,15 +765,15 @@ function ActivityCard(props: {
   return (
     <div className="flex flex-col gap-3">
       {crossings.map((c) => (
-        <div key={c.id} className="card text-sm">
-          <div className="flex items-center justify-between">
-            <span className="font-semibold">
+        <div key={c.id} className="card text-sm leading-relaxed">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="min-w-0 break-all font-mono font-semibold tabular-nums">
               {c.direction === "wrap" ? "PRL → WPRL" : "WPRL → PRL"}{" "}
               {grainsToPrlString(BigInt(c.amountGrains))}
             </span>
             <PhaseBadge phase={c.phase} />
           </div>
-          <div className="mt-2 space-y-1 text-xs text-ink-600 dark:text-ink-400">
+          <div className="mt-2 space-y-1 text-xs text-text-2 leading-relaxed">
             {c.direction === "wrap" && c.phase === "confirming" && (
               <div>
                 Confirming on Pearl: {c.confirmations}/{requiredConfs}
@@ -781,31 +783,31 @@ function ActivityCard(props: {
               <div>Bridge processing{c.relayState ? ` — ${c.relayState}` : "…"}</div>
             )}
             {c.phase === "review" && (
-              <div className="text-amber-600">
+              <div className="text-warn">
                 Under review by the bridge{c.relayState ? ` — ${c.relayState}` : ""}. This
                 resolves automatically (mint) or is refunded to your Pearl address.
               </div>
             )}
             {c.phase === "refunded" && (
-              <div className="text-amber-700">
+              <div className="text-warn">
                 Refunded on Pearl{c.settledRef ? "" : " — payout pending"}.
               </div>
             )}
             {c.phase === "failed" && (
-              <div className="text-red-600">
+              <div className="text-danger">
                 {c.relayState ?? "failed"} — funds are recoverable; contact the bridge
                 via pearlbridge.xyz support if this persists.
               </div>
             )}
             <div className="break-all">
               {c.direction === "wrap" ? "Pearl tx: " : "Burn tx: "}
-              <span className="font-mono">{c.id}</span>
+              <span className="font-mono break-all min-w-0 tabular-nums">{c.id}</span>
             </div>
             {c.settledRef && (
               <div className="break-all">
                 {c.direction === "wrap" ? (
                   <a
-                    className="text-pearl-700 underline dark:text-pearl-300"
+                    className="text-accent underline underline-offset-4"
                     href={ethTxExplorerUrl(ethNetwork, c.settledRef)}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -813,7 +815,7 @@ function ActivityCard(props: {
                     WPRL mint tx ↗
                   </a>
                 ) : (
-                  <>Pearl payout: <span className="font-mono">{c.settledRef}</span></>
+                  <>Pearl payout: <span className="font-mono break-all min-w-0 tabular-nums">{c.settledRef}</span></>
                 )}
               </div>
             )}
@@ -827,10 +829,10 @@ function ActivityCard(props: {
 function PhaseBadge({ phase }: { phase: BridgeCrossingRecord["phase"] }) {
   const cls =
     phase === "done"
-      ? "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
+      ? "bg-surface-2 text-ok"
       : phase === "failed"
-      ? "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200"
-      : "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200";
+      ? "bg-danger-bg text-danger"
+      : "bg-warn-bg text-warn";
   const label =
     phase === "confirming"
       ? "confirming"
@@ -839,14 +841,14 @@ function PhaseBadge({ phase }: { phase: BridgeCrossingRecord["phase"] }) {
       : phase === "review"
       ? "under review"
       : phase;
-  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${cls}`}>{label}</span>;
+  return <span className={`rounded-full px-2 py-0.5 text-xs font-medium leading-relaxed ${cls}`}>{label}</span>;
 }
 
 function Row({ k, v }: { k: string; v: string }) {
   return (
-    <div className="flex justify-between gap-3 py-0.5">
-      <span className="text-ink-500">{k}</span>
-      <span className="text-right">{v}</span>
+    <div className="grid grid-cols-1 gap-1 border-b border-line py-3 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] sm:gap-4">
+      <span className="text-text-3">{k}</span>
+      <span className="min-w-0 break-all font-mono tabular-nums sm:text-right">{v}</span>
     </div>
   );
 }

@@ -68,20 +68,20 @@ export default function OfflineSign() {
 
   return (
     <Page title="Offline signing">
-      <p className="mb-4 text-xs text-amber-700 dark:text-amber-400">
+      <p className="mb-6 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-relaxed text-warn">
         Experimental. The wire format is v1 and may evolve — keep all
         machines in your offline-signing flow on matching wallet versions.
       </p>
-      <div className="mb-4 grid grid-cols-3 gap-2">
+      <div className="mb-6 grid grid-cols-3 gap-1 rounded-pb bg-surface-2 p-1">
         {(["compose", "sign", "broadcast"] as const).map((t) => (
           <button
             key={t}
             type="button"
             onClick={() => setTab(t)}
-            className={`tap rounded-md px-3 py-2 text-sm capitalize ${
+            className={`tap rounded-pb px-3 py-2 text-sm capitalize leading-relaxed ${
               tab === t
-                ? "bg-pearl-700 text-white"
-                : "border bg-transparent hover:bg-ink-100 dark:hover:bg-ink-800"
+                ? "bg-accent-bg text-on-accent"
+                : "border border-transparent bg-transparent text-text-2 hover:border-line-strong"
             }`}
           >
             {t}
@@ -278,9 +278,9 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
   return (
     <section className="space-y-4">
       <div className="card">
-        <h2 className="text-sm font-semibold">Source of UTXOs</h2>
-        <div className="mt-3 flex gap-3 text-sm">
-          <label className="flex items-center gap-1">
+        <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Source of UTXOs</h2>
+        <div className="mt-3 flex gap-3 text-sm leading-relaxed">
+          <label className="flex min-h-11 cursor-pointer items-center gap-2">
             <input
               type="radio"
               checked={mode === "live"}
@@ -288,7 +288,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
             />
             Live UTXOs (online watcher)
           </label>
-          <label className="flex items-center gap-1">
+          <label className="flex min-h-11 cursor-pointer items-center gap-2">
             <input
               type="radio"
               checked={mode === "manual"}
@@ -299,27 +299,30 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         </div>
         {mode === "manual" && (
           <>
-            <p className="mt-2 text-xs text-ink-500">
+            <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
               One UTXO per line as{" "}
-              <span className="font-mono">txid:vout:amountGrains:poolIndex:scriptHex</span>.
-              Lines starting with <span className="font-mono">#</span> are comments.
+              <span className="font-mono break-all min-w-0 tabular-nums">txid:vout:amountGrains:poolIndex:scriptHex</span>.
+              Lines starting with <span className="font-mono break-all min-w-0 tabular-nums">#</span> are comments.
               scriptHex is the P2TR scriptPubKey (66 hex chars starting{" "}
-              <span className="font-mono">5120</span>).
+              <span className="font-mono break-all min-w-0 tabular-nums">5120</span>).
             </p>
-            <textarea
-              className="input mono mt-2 h-32 w-full text-xs"
-              placeholder={`# example\n${"a".repeat(64)}:0:50000000:0:5120${"a".repeat(64)}`}
-              value={manualUtxoText}
-              onChange={(e) => setManualUtxoText(e.target.value)}
-            />
+            <label className="block">
+              <span className="label">Manual UTXOs</span>
+              <textarea
+                className="input mono mt-2 h-32 w-full sm:text-xs break-all min-w-0 tabular-nums leading-relaxed"
+                placeholder={`# example\n${"a".repeat(64)}:0:50000000:0:5120${"a".repeat(64)}`}
+                value={manualUtxoText}
+                onChange={(e) => setManualUtxoText(e.target.value)}
+              />
+            </label>
             {manualParsed && (
-              <div className="mt-2 text-xs">
-                <span className="text-ink-500">
+              <div className="mt-2 text-xs leading-relaxed">
+                <span className="break-all font-mono text-text-3 tabular-nums">
                   {manualParsed.utxos.length} UTXO(s) parsed,{" "}
                   total {grainsToPrl(sumManualUtxoValue(manualParsed.utxos))} PRL
                 </span>
                 {manualParsed.errors.length > 0 && (
-                  <ul className="mt-1 list-disc pl-5 text-red-600">
+                  <ul className="mt-1 list-disc pl-5 text-danger">
                     {manualParsed.errors.map((e, i) => (
                       <li key={i}>
                         Line {e.line}: {e.message}
@@ -329,10 +332,10 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
                 )}
               </div>
             )}
-            <label className="mt-3 block text-xs text-ink-500">
+            <label className="mt-3 block text-xs text-text-3 leading-relaxed">
               Fee (grains, manual)
               <input
-                className="input mt-1 w-40"
+                className="input mt-2 w-full font-mono tabular-nums sm:w-48"
                 value={feeGrainsInput}
                 onChange={(e) => setFeeGrainsInput(e.target.value)}
               />
@@ -342,20 +345,20 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
       </div>
 
       <div className="card">
-        <h2 className="text-sm font-semibold">Destination</h2>
-        <label className="mt-3 block text-xs text-ink-500">
+        <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Destination</h2>
+        <label className="mt-3 block text-xs text-text-3 leading-relaxed">
           Address
           <input
-            className="input mono mt-1 w-full"
+            className="input mono mt-1 w-full break-all min-w-0 tabular-nums"
             placeholder="prl1q…"
             value={destination}
             onChange={(e) => setDestination(e.target.value)}
           />
         </label>
-        <label className="mt-3 block text-xs text-ink-500">
+        <label className="mt-3 block text-xs text-text-3 leading-relaxed">
           Amount (PRL)
           <input
-            className="input mt-1 w-40"
+            className="input mt-2 w-full font-mono tabular-nums sm:w-48"
             placeholder="0.0"
             value={amountPrl}
             onChange={(e) => setAmountPrl(e.target.value)}
@@ -363,32 +366,35 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         </label>
         <button
           type="button"
-          className="btn-primary mt-4"
+          className="btn-primary mt-4 min-w-11"
           disabled={busy}
           onClick={mode === "live" ? generateLive : generateManual}
         >
           {busy ? "Composing…" : "Generate unsigned payload"}
         </button>
-        {error && <p className="mt-2 text-sm text-red-600">{error}</p>}
+        {error && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{error}</p>}
       </div>
 
       {payload && (
         <div className="card">
-          <h2 className="text-sm font-semibold">Unsigned payload</h2>
-          <p className="mt-2 text-xs text-ink-500">
+          <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Unsigned payload</h2>
+          <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
             Show this QR to the signer, or copy the text below into the
             signer's "Sign" tab.
           </p>
           <div className="mt-3">
             <AnimatedPayloadQR payload={encoded} />
           </div>
-          <textarea
-            className="input mono mt-3 h-24 w-full text-xs"
-            readOnly
-            value={encoded}
-            onClick={(e) => (e.target as HTMLTextAreaElement).select()}
-          />
-          <div className="mt-2 text-xs text-ink-500">
+          <label className="block">
+            <span className="label">Unsigned payload to copy</span>
+            <textarea
+              className="input mono mt-3 h-24 w-full sm:text-xs break-all min-w-0 tabular-nums leading-relaxed"
+              readOnly
+              value={encoded}
+              onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+            />
+          </label>
+          <div className="mt-2 break-all font-mono text-xs leading-relaxed text-text-3">
             {encoded.length.toLocaleString()} chars · {payload.utxos.length} input(s) ·{" "}
             {payload.outputs.length} output(s)
             {payload.meta?.summary && <> · {payload.meta.summary}</>}
@@ -480,47 +486,51 @@ function SignTab({ network, pool }: SignTabProps) {
   return (
     <section className="space-y-4">
       <div className="card">
-        <h2 className="text-sm font-semibold">Paste unsigned payload</h2>
-        <p className="mt-2 text-xs text-ink-500">
+        <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Paste unsigned payload</h2>
+        <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
           Paste the text from the watcher's screen, or every frame's text
           concatenated. (Camera scanning ships in a later release; for
           now copy-paste the text the watcher displays beneath the QR.)
         </p>
-        <textarea
-          className="input mono mt-3 h-32 w-full text-xs"
-          placeholder="Paste base64url-encoded payload…"
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-        />
-        <button type="button" className="btn-secondary mt-3" onClick={doDecode}>
+        <label className="block">
+          <span className="label">Transaction payload</span>
+          <textarea
+            className="input mono mt-3 h-32 w-full sm:text-xs break-all min-w-0 tabular-nums leading-relaxed"
+            placeholder="Paste base64url-encoded payload…"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+          />
+        </label>
+        <button type="button" className="btn-secondary mt-3 min-w-11" onClick={doDecode}>
           Decode payload
         </button>
-        {decodeError && <p className="mt-2 text-sm text-red-600">{decodeError}</p>}
+        {decodeError && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{decodeError}</p>}
       </div>
 
       {decoded && (
-        <div className="card">
-          <h2 className="text-sm font-semibold">Review transaction</h2>
-          <p className="mt-1 text-xs text-ink-500">
+        <div className="card shadow-slabsm sm:shadow-slab">
+          <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Offline transaction preview</p>
+          <h2 className="text-xl font-semibold tracking-tight">Review before you sign</h2>
+          <p className="mt-1 text-xs text-text-3 leading-relaxed break-words">
             Verify EVERY line below matches what the watcher showed you
             before signing. The signer trusts what you paste — a swap
             here can redirect funds.
           </p>
           {poolMismatch && (
-            <p className="mt-2 text-sm text-amber-700 dark:text-amber-400">
+            <p className="mt-2 text-sm text-warn leading-relaxed break-words">
               ⚠ Payload's pool snapshot doesn't match this wallet's pool.
               Are you signing for the correct wallet?
             </p>
           )}
-          <div className="mt-3 space-y-3 text-xs">
+          <div className="mt-4 space-y-4 rounded-pb border border-line bg-surface-2 p-4 text-sm leading-relaxed">
             <div>
               <span className="font-semibold">Network:</span> {decoded.network}
             </div>
             <div>
               <span className="font-semibold">Inputs ({decoded.utxos.length}):</span>
-              <ul className="ml-4 list-disc">
+              <ul className="mt-2 space-y-2 border-l border-line pl-3">
                 {decoded.utxos.map((u, i) => (
-                  <li key={i} className="font-mono">
+                  <li key={i} className="font-mono break-all min-w-0 tabular-nums">
                     {u.txid.slice(0, 12)}…:{u.vout} · {grainsToPrl(u.valueGrains)} PRL · pool[{u.poolIndex}]
                   </li>
                 ))}
@@ -528,54 +538,57 @@ function SignTab({ network, pool }: SignTabProps) {
             </div>
             <div>
               <span className="font-semibold">Outputs ({decoded.outputs.length}):</span>
-              <ul className="ml-4 list-disc">
+              <ul className="mt-2 space-y-2 border-l border-line pl-3">
                 {decoded.outputs.map((o, i) => (
-                  <li key={i} className="font-mono">
+                  <li key={i} className="font-mono break-all min-w-0 tabular-nums">
                     {grainsToPrl(o.amountGrains)} PRL → {o.address}
                   </li>
                 ))}
               </ul>
             </div>
             {decoded.meta?.feeGrains && (
-              <div>
-                <span className="font-semibold">Fee:</span>{" "}
+              <div className="break-all font-mono tabular-nums">
+                <span className="font-sans font-semibold">Fee:</span>{" "}
                 {grainsToPrl(decoded.meta.feeGrains)} PRL
               </div>
             )}
             {decoded.meta?.summary && (
-              <div>
-                <span className="font-semibold">Summary:</span> {decoded.meta.summary}
+              <div className="break-all font-mono tabular-nums">
+                <span className="font-sans font-semibold">Summary:</span> {decoded.meta.summary}
               </div>
             )}
           </div>
           <button
             type="button"
-            className="btn-primary mt-4"
+            className="btn-primary mt-4 min-w-11"
             disabled={busy}
             onClick={doSign}
           >
             {busy ? "Signing…" : "Sign this transaction"}
           </button>
-          {signError && <p className="mt-2 text-sm text-red-600">{signError}</p>}
+          {signError && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{signError}</p>}
         </div>
       )}
 
       {signed && (
         <div className="card">
-          <h2 className="text-sm font-semibold">Signed payload</h2>
-          <p className="mt-2 text-xs text-ink-500">
+          <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Signed payload</h2>
+          <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
             Carry this back to an online machine and paste into the
             Broadcast tab. The signer can now be wiped or shut down.
           </p>
           <div className="mt-3">
             <AnimatedPayloadQR payload={encodePayload(signed)} />
           </div>
-          <textarea
-            className="input mono mt-3 h-24 w-full text-xs"
-            readOnly
-            value={encodePayload(signed)}
-            onClick={(e) => (e.target as HTMLTextAreaElement).select()}
-          />
+          <label className="block">
+            <span className="label">Signed payload to copy</span>
+            <textarea
+              className="input mono mt-3 h-24 w-full sm:text-xs break-all min-w-0 tabular-nums leading-relaxed"
+              readOnly
+              value={encodePayload(signed)}
+              onClick={(e) => (e.target as HTMLTextAreaElement).select()}
+            />
+          </label>
         </div>
       )}
     </section>
@@ -627,32 +640,35 @@ function BroadcastTab() {
   return (
     <section className="space-y-4">
       <div className="card">
-        <h2 className="text-sm font-semibold">Paste signed payload</h2>
-        <textarea
-          className="input mono mt-3 h-32 w-full text-xs"
-          placeholder="Paste base64url-encoded signed payload…"
-          value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
-        />
-        <button type="button" className="btn-secondary mt-3" onClick={doDecode}>
+        <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Paste signed payload</h2>
+        <label className="block">
+          <span className="label">Transaction payload</span>
+          <textarea
+            className="input mono mt-3 h-32 w-full sm:text-xs break-all min-w-0 tabular-nums leading-relaxed"
+            placeholder="Paste base64url-encoded signed payload…"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+          />
+        </label>
+        <button type="button" className="btn-secondary mt-3 min-w-11" onClick={doDecode}>
           Decode payload
         </button>
-        {decodeError && <p className="mt-2 text-sm text-red-600">{decodeError}</p>}
+        {decodeError && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{decodeError}</p>}
       </div>
 
       {decoded && (
         <div className="card">
-          <h2 className="text-sm font-semibold">Ready to broadcast</h2>
-          <div className="mt-3 space-y-2 text-xs">
+          <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Ready to broadcast</h2>
+          <div className="mt-3 space-y-2 text-xs leading-relaxed">
             <div>
               <span className="font-semibold">Network:</span> {decoded.network}
             </div>
             <div>
               <span className="font-semibold">Raw hex:</span>{" "}
-              <span className="font-mono break-all">
+              <span className="font-mono break-all min-w-0 tabular-nums">
                 {decoded.raw.slice(0, 48)}…{decoded.raw.slice(-32)}
               </span>
-              <span className="text-ink-500">
+              <span className="text-text-3">
                 {" "}
                 ({(decoded.raw.length / 2).toLocaleString()} bytes)
               </span>
@@ -660,21 +676,21 @@ function BroadcastTab() {
           </div>
           <button
             type="button"
-            className="btn-primary mt-4"
+            className="btn-primary mt-4 min-w-11"
             disabled={busy}
             onClick={doBroadcast}
           >
             {busy ? "Broadcasting…" : "Broadcast"}
           </button>
           {broadcastError && (
-            <p className="mt-2 text-sm text-red-600">{broadcastError}</p>
+            <p className="mt-2 text-sm text-danger leading-relaxed break-words">{broadcastError}</p>
           )}
           {txid && (
-            <div className="mt-3 rounded bg-emerald-50 p-3 text-xs dark:bg-emerald-950/30">
-              <div className="font-semibold text-emerald-800 dark:text-emerald-300">
+            <div className="mt-3 rounded-pb bg-surface-2 p-3 text-xs leading-relaxed">
+              <div className="font-semibold text-ok">
                 Sent.
               </div>
-              <div className="mt-1 font-mono break-all">{txid}</div>
+              <div className="mt-1 font-mono break-all min-w-0 tabular-nums">{txid}</div>
             </div>
           )}
         </div>

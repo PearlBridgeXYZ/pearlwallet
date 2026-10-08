@@ -204,8 +204,8 @@ export default function VaultPendingTxDetail() {
   if (vault === null) {
     return (
       <Page title="Pending transaction">
-        <p>Vault not found.</p>
-        <Link to="/vaults" className="text-pearl-700 underline dark:text-pearl-300">
+        <p className="break-words">Vault not found.</p>
+        <Link to="/vaults" className="text-accent underline underline-offset-4">
           ← Back to vaults
         </Link>
       </Page>
@@ -214,10 +214,10 @@ export default function VaultPendingTxDetail() {
   if (pending === null) {
     return (
       <Page title="Pending transaction">
-        <p>Draft not found — it may have been deleted or finalised on this device.</p>
+        <p className="break-words">Draft not found — it may have been deleted or finalised on this device.</p>
         <Link
           to={`/vaults/${vault.id}`}
-          className="text-pearl-700 underline dark:text-pearl-300"
+          className="text-accent underline underline-offset-4"
         >
           ← Back to vault
         </Link>
@@ -253,34 +253,36 @@ export default function VaultPendingTxDetail() {
 
   return (
     <Page title="Pending transaction">
-      <section className="card mb-4">
-        <div className="mb-2 flex items-baseline justify-between gap-2">
-          <h2 className="text-sm font-medium">{vault.label}</h2>
+      <section className="card mb-6 shadow-slabsm sm:shadow-slab">
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Transaction preview</p>
+        <h2 className="mb-3 text-xl font-semibold tracking-tight">Review before you sign</h2>
+        <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-medium leading-relaxed tracking-tight">{vault.label}</h2>
           <StatusBadge status={pending.status} />
         </div>
-        <dl className="space-y-1 text-sm">
+        <dl className="space-y-1 text-sm leading-relaxed divide-y divide-line [&>div]:grid [&>div]:grid-cols-1 [&>div]:gap-2 [&>div]:py-3 sm:[&>div]:grid-cols-[minmax(0,1fr)_minmax(0,2fr)] [&_dt]:text-[11px] [&_dt]:uppercase [&_dt]:tracking-[.12em] [&_dd]:min-w-0 [&_dd]:break-all [&_dd]:font-mono [&_dd]:tabular-nums [&_dd]:text-left sm:[&_dd]:text-right">
           <div className="flex justify-between gap-2">
-            <dt className="text-ink-500">To</dt>
-            <dd className="break-all text-right font-mono text-xs">
+            <dt className="text-text-3">To</dt>
+            <dd className="break-all text-right font-mono text-xs min-w-0 tabular-nums leading-relaxed">
               {pending.preview.destination}
             </dd>
           </div>
           <div className="flex justify-between">
-            <dt className="text-ink-500">Amount</dt>
+            <dt className="text-text-3">Amount</dt>
             <dd>{formatGrains(BigInt(pending.preview.amountGrains))} PRL</dd>
           </div>
           <div className="flex justify-between">
-            <dt className="text-ink-500">Fee (preview)</dt>
+            <dt className="text-text-3">Fee (preview)</dt>
             <dd>{formatGrains(BigInt(pending.preview.feeGrains))} PRL</dd>
           </div>
           {liveInfo && !liveInfo.feeUnknown && (
             <div className="flex justify-between">
-              <dt className="text-ink-500">Fee (live)</dt>
+              <dt className="text-text-3">Fee (live)</dt>
               <dd
                 className={
                   liveInfo.feeGrains === BigInt(pending.preview.feeGrains)
                     ? ""
-                    : "font-semibold text-red-600"
+                    : "font-semibold text-danger"
                 }
               >
                 {formatGrains(liveInfo.feeGrains)} PRL
@@ -288,58 +290,58 @@ export default function VaultPendingTxDetail() {
             </div>
           )}
           <div className="flex justify-between">
-            <dt className="text-ink-500">Change back to vault</dt>
+            <dt className="text-text-3">Change back to vault</dt>
             <dd>{formatGrains(BigInt(pending.preview.changeGrains))} PRL</dd>
           </div>
           <div className="flex justify-between">
-            <dt className="text-ink-500">Inputs</dt>
+            <dt className="text-text-3">Inputs</dt>
             <dd>
               {pending.preview.inputCount} UTXO
               {pending.preview.inputCount === 1 ? "" : "s"}
             </dd>
           </div>
           {pending.txid && (
-            <div className="flex justify-between gap-2 border-t border-ink-200 pt-1 dark:border-ink-700">
-              <dt className="text-ink-500">Broadcast txid</dt>
-              <dd className="break-all text-right font-mono text-xs">{pending.txid}</dd>
+            <div className="flex justify-between gap-2 border-t border-line pt-1">
+              <dt className="text-text-3">Broadcast txid</dt>
+              <dd className="break-all text-right font-mono text-xs min-w-0 tabular-nums leading-relaxed">{pending.txid}</dd>
             </div>
           )}
         </dl>
       </section>
 
       <section className="card mb-4">
-        <h2 className="text-sm font-semibold">Signatures</h2>
+        <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Signatures</h2>
         {liveError && (
-          <p className="mt-2 text-sm text-red-600">Couldn't parse PSBT: {liveError}</p>
+          <p className="mt-2 text-sm text-danger leading-relaxed break-words">Couldn't parse PSBT: {liveError}</p>
         )}
         {liveInfo && (
           <>
-            <p className="mt-2 text-sm">
+            <p className="mt-2 text-sm leading-relaxed break-words">
               <span className="font-medium">{liveInfo.signerCount}</span> of{" "}
               {vault.threshold} required
               {thresholdMet && (
-                <span className="ml-2 rounded bg-blue-100 px-2 py-0.5 text-[10px] uppercase text-blue-800 dark:bg-blue-900/30 dark:text-blue-300">
+                <span className="ml-2 rounded-pb bg-accent-soft px-2 py-0.5 text-[10px] uppercase text-accent">
                   threshold met
                 </span>
               )}
             </p>
-            <ul className="mt-2 flex flex-col gap-1 text-xs">
+            <ul className="mt-2 flex flex-col gap-1 text-xs leading-relaxed">
               {vault.sortedPubkeysHex.map((h) => {
                 const signed = liveInfo.signersHex.includes(h);
                 const isMe = h === vault.myPubkeyHex;
                 return (
-                  <li key={h} className="flex items-baseline gap-2 break-all font-mono">
+                  <li key={h} className="flex items-baseline gap-2 break-all font-mono min-w-0 tabular-nums">
                     <span
                       className={
                         signed
-                          ? "text-green-700 dark:text-green-400"
-                          : "text-ink-400 dark:text-ink-500"
+                          ? "text-ok"
+                          : "text-text-3"
                       }
                       aria-hidden
                     >
                       {signed ? "✓" : "·"}
                     </span>
-                    <span className={isMe ? "text-pearl-700 dark:text-pearl-300" : ""}>
+                    <span className={isMe ? "text-accent" : ""}>
                       {h}
                       {isMe ? " (you)" : ""}
                     </span>
@@ -352,30 +354,30 @@ export default function VaultPendingTxDetail() {
       </section>
 
       {outputMismatch && (
-        <section className="card mb-4 border-2 border-red-600 bg-red-50 dark:bg-red-900/20">
-          <h2 className="text-sm font-semibold text-red-700 dark:text-red-300">
+        <section className="card mb-4 border-2 border-danger-line bg-danger-bg">
+          <h2 className="text-sm font-semibold text-danger leading-relaxed tracking-tight">
             ⚠ Output mismatch — do not sign
           </h2>
-          <p className="mt-1 text-sm text-red-700 dark:text-red-300">
+          <p className="mt-1 text-sm text-danger leading-relaxed break-words">
             {outputMismatch}
           </p>
-          <p className="mt-2 text-xs text-red-700 dark:text-red-300">
+          <p className="mt-2 text-xs text-danger leading-relaxed break-words">
             Signing or broadcasting is disabled. Delete this draft and start over.
           </p>
         </section>
       )}
 
       {error && (
-        <p className="card mb-4 text-sm text-red-600">{error}</p>
+        <p className="card mb-4 text-sm text-danger leading-relaxed break-words">{error}</p>
       )}
 
       {!isBroadcast && (
         <section className="card mb-4 flex flex-col gap-2">
-          <h2 className="text-sm font-semibold">Actions</h2>
+          <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Actions</h2>
           <div className="flex flex-wrap gap-2">
             {!meSigned && !isFailed && liveInfo && (
               <button
-                className="btn-primary"
+                className="btn-primary min-w-11"
                 disabled={busy || outputMismatch !== null}
                 onClick={doSign}
                 title={
@@ -389,7 +391,7 @@ export default function VaultPendingTxDetail() {
             )}
             {thresholdMet && !isFailed && (
               <button
-                className="btn-primary"
+                className="btn-primary min-w-11"
                 disabled={busy || outputMismatch !== null}
                 onClick={doBroadcast}
                 title={
@@ -401,12 +403,12 @@ export default function VaultPendingTxDetail() {
                 {busy ? "Broadcasting…" : "Broadcast"}
               </button>
             )}
-            <button className="btn-secondary" disabled={busy} onClick={copyPsbt}>
+            <button className="btn-secondary min-w-11" disabled={busy} onClick={copyPsbt}>
               {copied ? "Copied!" : "Copy PSBT"}
             </button>
           </div>
           {!thresholdMet && liveInfo && !outputMismatch && (
-            <p className="text-xs text-ink-500">
+            <p className="text-xs text-text-3 leading-relaxed break-words">
               Share the PSBT with the next cosigner — they sign and paste
               the result back below.
             </p>
@@ -416,22 +418,25 @@ export default function VaultPendingTxDetail() {
 
       {!isBroadcast && (
         <section className="card mb-4">
-          <h2 className="text-sm font-semibold">Paste a signed version back</h2>
-          <p className="mt-1 text-xs text-ink-500">
+          <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Paste a signed version back</h2>
+          <p className="mt-1 text-xs text-text-3 leading-relaxed break-words">
             When a cosigner returns the PSBT after signing, paste it here
             to replace the draft. We verify it binds to the same vault
             output before replacing.
           </p>
-          <textarea
-            className="input mono mt-2"
-            rows={6}
-            value={pasteIn}
-            onChange={(e) => setPasteIn(e.target.value)}
-            placeholder="cHNidP8B..."
-          />
+          <label className="mt-3 block">
+            <span className="label">Signed PSBT (base64)</span>
+            <textarea
+              className="input mono mt-2 break-all min-w-0 tabular-nums"
+              rows={6}
+              value={pasteIn}
+              onChange={(e) => setPasteIn(e.target.value)}
+              placeholder="cHNidP8B..."
+            />
+          </label>
           <div className="mt-2 flex gap-2">
             <button
-              className="btn-secondary"
+              className="btn-secondary min-w-11"
               disabled={busy || pasteIn.trim().length === 0}
               onClick={applyPaste}
             >
@@ -439,7 +444,7 @@ export default function VaultPendingTxDetail() {
             </button>
             {pasteIn && (
               <button
-                className="btn-secondary"
+                className="btn-secondary min-w-11"
                 disabled={busy}
                 onClick={() => setPasteIn("")}
               >
@@ -450,9 +455,9 @@ export default function VaultPendingTxDetail() {
         </section>
       )}
 
-      <section className="card text-xs">
-        <h2 className="text-sm font-semibold text-red-600">Remove draft</h2>
-        <p className="mt-1 text-ink-500">
+      <section className="card text-xs leading-relaxed">
+        <h2 className="text-sm font-semibold text-danger leading-relaxed tracking-tight">Remove draft</h2>
+        <p className="mt-1 text-text-3 break-words">
           Deleting only removes this draft from your device. Other
           cosigners' copies are unaffected, and the on-chain state is
           unchanged.
@@ -460,17 +465,17 @@ export default function VaultPendingTxDetail() {
         {!confirmDelete ? (
           <button
             onClick={() => setConfirmDelete(true)}
-            className="btn-secondary mt-2 text-red-600"
+            className="btn-secondary mt-2 text-danger min-w-11"
             disabled={busy}
           >
             Delete draft
           </button>
         ) : (
           <div className="mt-2 flex gap-2">
-            <button onClick={() => setConfirmDelete(false)} className="btn-secondary">
+            <button onClick={() => setConfirmDelete(false)} className="btn-secondary min-w-11">
               Cancel
             </button>
-            <button onClick={doDelete} className="btn-primary bg-red-600" disabled={busy}>
+            <button onClick={doDelete} className="btn-danger min-w-11" disabled={busy}>
               Confirm delete
             </button>
           </div>
@@ -480,7 +485,7 @@ export default function VaultPendingTxDetail() {
       <div className="mt-4">
         <Link
           to={`/vaults/${vault.id}`}
-          className="text-pearl-700 underline dark:text-pearl-300"
+          className="text-accent underline underline-offset-4"
         >
           ← Back to vault
         </Link>
@@ -492,13 +497,13 @@ export default function VaultPendingTxDetail() {
 function StatusBadge({ status }: { status: VaultPendingTxRecord["status"] }) {
   const cls =
     status === "broadcast"
-      ? "bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300"
+      ? "bg-surface-2 text-ok"
       : status === "ready"
-        ? "bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300"
+        ? "bg-accent-soft text-accent"
         : status === "failed"
-          ? "bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300"
-          : "bg-ink-100 text-ink-700 dark:bg-ink-800 dark:text-ink-200";
+          ? "bg-danger-bg text-danger"
+          : "bg-surface-2 text-text-2";
   return (
-    <span className={`rounded px-2 py-0.5 text-[10px] uppercase ${cls}`}>{status}</span>
+    <span className={`rounded-pb px-2 py-0.5 text-[10px] uppercase ${cls}`}>{status}</span>
   );
 }

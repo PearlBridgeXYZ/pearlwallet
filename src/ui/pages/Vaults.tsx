@@ -38,11 +38,11 @@ export default function Vaults() {
 
   return (
     <Page title="Vaults">
-      <section className="card mb-4 border-ink-200 bg-ink-50 dark:border-ink-800 dark:bg-ink-900/30">
-        <h2 className="text-sm font-semibold text-ink-700 dark:text-ink-200">
+      <section className="card mb-6 border-warn-line bg-warn-bg">
+        <h2 className="text-sm font-semibold text-text-2 leading-relaxed tracking-tight">
           Before you fund a vault
         </h2>
-        <p className="mt-2 text-xs text-ink-600 dark:text-ink-400">
+        <p className="mt-2 text-xs text-text-2 leading-relaxed break-words">
           Always verify the vault address out-of-band with every cosigner
           before sending funds to it — a malicious enroller can hand
           different cosigners different pubkey sets. A vault imported from a
@@ -51,16 +51,16 @@ export default function Vaults() {
         </p>
       </section>
 
-      <section className="card mb-4 flex flex-col gap-3">
-        <h2 className="text-base font-semibold">Your vaults</h2>
+      <section className="card mb-4 flex flex-col gap-5">
+        <h2 className="text-base font-semibold tracking-tight">Your vaults</h2>
         {loadError && (
-          <p className="text-sm text-red-600">Couldn't load vaults: {loadError}</p>
+          <p className="text-sm text-danger leading-relaxed break-words">Couldn't load vaults: {loadError}</p>
         )}
         {vaults === null && !loadError && (
-          <p className="text-xs text-ink-500">Loading…</p>
+          <p className="text-xs text-text-3 leading-relaxed break-words">Loading…</p>
         )}
         {vaults && vaults.length === 0 && (
-          <p className="text-sm text-ink-500">
+          <p className="text-sm text-text-3 leading-relaxed break-words">
             No vaults yet. Create one or import an existing cosigner set.
           </p>
         )}
@@ -70,15 +70,15 @@ export default function Vaults() {
               <li key={v.id}>
                 <Link
                   to={`/vaults/${v.id}`}
-                  className="block rounded-xl border border-ink-200 p-3 hover:bg-ink-50 dark:border-ink-700 dark:hover:bg-ink-800"
+                  className="block rounded-pb border border-line bg-surface p-4 transition-colors hover:border-line-strong hover:bg-surface-2"
                 >
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="truncate text-sm font-medium">{v.label}</span>
-                    <span className="text-xs text-ink-500">
+                  <div className="flex flex-wrap items-baseline justify-between gap-3">
+                    <span className="truncate text-sm font-medium leading-relaxed">{v.label}</span>
+                    <span className="text-xs text-text-3 leading-relaxed">
                       {v.threshold} of {v.total}
                     </span>
                   </div>
-                  <div className="mt-1 break-all font-mono text-xs text-ink-500">
+                  <div className="mt-1 break-all font-mono text-xs text-text-3 min-w-0 tabular-nums leading-relaxed">
                     {v.pearlAddress.slice(0, 12)}…{v.pearlAddress.slice(-10)}
                   </div>
                 </Link>
@@ -96,8 +96,8 @@ export default function Vaults() {
         </div>
       </section>
 
-      <section className="card text-xs text-ink-500">
-        <p className="mb-1 font-medium text-ink-600 dark:text-ink-300">
+      <section className="card text-xs text-text-3 leading-relaxed">
+        <p className="mb-1 font-medium text-text-2 break-words">
           How co-signing works
         </p>
         <ol className="list-decimal space-y-1 pl-5">
