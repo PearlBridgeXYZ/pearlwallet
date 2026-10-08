@@ -10,6 +10,7 @@ import Unlock from "./ui/pages/Unlock";
 import Dashboard from "./ui/pages/Dashboard";
 import Receive from "./ui/pages/Receive";
 import SendPRL from "./ui/pages/SendPRL";
+import Consolidate from "./ui/pages/Consolidate";
 import SendWPRL from "./ui/pages/SendWPRL";
 import SendETH from "./ui/pages/SendETH";
 import SendBTX from "./ui/pages/SendBTX";
@@ -260,6 +261,7 @@ export default function App() {
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/receive" element={<Receive />} />
           <Route path="/send/prl" element={<SendPRL />} />
+          <Route path="/consolidate" element={<Consolidate />} />
           <Route path="/send/wprl" element={<SendWPRL />} />
           <Route path="/send/eth" element={<SendETH />} />
           <Route path="/send/btx" element={<SendBTX />} />

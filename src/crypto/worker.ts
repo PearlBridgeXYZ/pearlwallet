@@ -22,7 +22,13 @@ import {
   validateDeriveRange,
   type PearlBranchCounts,
 } from "./pearl-addresses";
-import { signPearlTxWithSeed, type PearlTxRequest, type PearlTxOutput } from "./pearl-sign";
+import {
+  signPearlTxWithSeed,
+  signPearlConsolidationWithSeed,
+  type PearlTxRequest,
+  type PearlTxOutput,
+  type PearlConsolidationRequest,
+} from "./pearl-sign";
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm, clearBtxAccountSecrets } from "../chains/btx/derive";
 import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
@@ -35,7 +41,7 @@ import { signTransaction as ethSignTransaction } from "viem/accounts";
 import * as btc from "@scure/btc-signer";
 import { base64 } from "@scure/base";
 
-export type { PearlUtxoSpec, PearlTxOutput, PearlTxRequest } from "./pearl-sign";
+export type { PearlUtxoSpec, PearlTxOutput, PearlTxRequest, PearlConsolidationRequest } from "./pearl-sign";
 
 // WorkerSession deliberately does NOT carry the mnemonic past derivation.
 // The mnemonic is in scope only inside the createWallet/restoreWallet/
@@ -313,6 +319,7 @@ export type WorkerCmd =
   | { id: string; cmd: "changePassword"; oldPassword: string; newPassword: string; blob: BlobJSON }
   | { id: string; cmd: "signEthTx"; tx: EthTxRequest }
   | { id: string; cmd: "signPearlTx"; req: PearlTxRequest }
+  | { id: string; cmd: "signPearlConsolidation"; req: PearlConsolidationRequest }
   | { id: string; cmd: "derivePearlMultisigPubkey"; vaultAccount: number; keyIndex: number }
   | {
       id: string;
@@ -549,6 +556,16 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // prevout script, else E_PEARL_FOREIGN_INPUT (see ./pearl-sign).
       if (!session) throw new Error("E_LOCKED");
       return signPearlTxWithSeed(session.seed, msg.req as PearlTxRequest);
+    }
+
+    case "signPearlConsolidation": {
+      // Consolidation = self-transfer. Beyond signPearlTx's input binding,
+      // the worker itself checks there is exactly one output, that it pays
+      // this wallet's own address at the named (branch, index), and that
+      // the fee is positive and at most 2 % of the inputs — the main
+      // thread cannot turn a "combine coins" click into a payment.
+      if (!session) throw new Error("E_LOCKED");
+      return signPearlConsolidationWithSeed(session.seed, msg.req as PearlConsolidationRequest);
     }
 
     case "derivePearlMultisigPubkey": {

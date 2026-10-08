@@ -135,6 +135,11 @@ export default function Dashboard() {
             <Link to="/receive" className="btn-secondary tap">Receive</Link>
           </div>
         )}
+        <div className="mt-2 text-center">
+          <Link to="/consolidate" className="text-xs text-pearl-700 hover:underline">
+            Combine small coins
+          </Link>
+        </div>
         {multisigEnabled && (
           <div className="mt-2">
             <Link to="/vaults" className="btn-secondary block w-full text-center">

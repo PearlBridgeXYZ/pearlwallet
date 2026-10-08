@@ -15,9 +15,9 @@
 
 import * as btc from "@scure/btc-signer";
 import { HDKey } from "@scure/bip32";
-import { bip86Tweak } from "../chains/pearl/address";
+import { bip86Tweak, decodeTaprootAddress } from "../chains/pearl/address";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
-import { isHdBranch, pearlAccountPath, type HdBranch } from "./hd";
+import { isHdBranch, pearlAccountPath, pearlBranchPath, type HdBranch } from "./hd";
 
 // One UTXO to spend. `scriptHex` is the prevout's scriptPubKey (P2TR:
 // OP_1 <32-byte output key>, 34 bytes). (branch, index) names the key
@@ -176,4 +176,88 @@ export function signPearlTxWithSeed(seed: Uint8Array, r: PearlTxRequest): { raw:
   } finally {
     for (const k of toWipe) k.wipePrivateData();
   }
+}
+
+// ── Consolidation (self-transfer) ─────────────────────────────────────────
+
+/** Most a consolidation may pay in fees, as a fraction of its inputs
+ *  (numerator / denominator): 2 %. Mirrors services/pearl-consolidate. */
+export const CONSOLIDATION_MAX_FEE_NUM = 2n;
+export const CONSOLIDATION_MAX_FEE_DEN = 100n;
+
+/** A consolidation: many of this wallet's coins into ONE output paying
+ *  this wallet's own address at (branch, index). */
+export interface PearlConsolidationRequest {
+  utxos: PearlUtxoSpec[];
+  outputs: PearlTxOutput[];
+  /** HD position of the destination; the signer derives that address
+   *  itself and refuses unless outputs[0] pays exactly it. */
+  destination: { branch: HdBranch; index: number };
+  network: PearlNetwork;
+}
+
+/**
+ * Signs a consolidation after checking, independently of the caller,
+ * that it really is one: exactly one output (so no tip and no third
+ * party), paying the P2TR address of this seed's key at the given
+ * (branch, index) (E_CONSOLIDATION_FOREIGN_OUTPUT), with a positive fee
+ * no larger than 2 % of the inputs (E_CONSOLIDATION_FEE). Input binding
+ * and all other checks are signPearlTxWithSeed's.
+ */
+export function signPearlConsolidationWithSeed(seed: Uint8Array, r: PearlConsolidationRequest): { raw: string } {
+  if (!r || !Array.isArray(r.outputs) || r.outputs.length !== 1) {
+    throw new Error("E_CONSOLIDATION_OUTPUTS");
+  }
+  const d = r.destination;
+  if (
+    !d ||
+    !isHdBranch(d.branch) ||
+    typeof d.index !== "number" ||
+    !Number.isInteger(d.index) ||
+    d.index < 0 ||
+    d.index > 0x7fffffff
+  ) {
+    throw new Error("E_CONSOLIDATION_DESTINATION");
+  }
+  const out = r.outputs[0]!;
+  if (!out || typeof out.address !== "string" || typeof out.amountGrains !== "string" || !/^[0-9]+$/.test(out.amountGrains)) {
+    throw new Error("E_PEARL_OUTPUT_SHAPE");
+  }
+  if (!Array.isArray(r.utxos) || r.utxos.length === 0) throw new Error("E_PEARL_NO_INPUTS");
+
+  // Destination binding: the one output must pay our own key.
+  let program: Uint8Array;
+  try {
+    program = decodeTaprootAddress(out.address, pearlParams(r.network));
+  } catch {
+    throw new Error("E_CONSOLIDATION_FOREIGN_OUTPUT");
+  }
+  const master = HDKey.fromMasterSeed(seed);
+  let expected: Uint8Array;
+  try {
+    const k = master.derive(pearlBranchPath(d.branch, d.index));
+    try {
+      if (!k.publicKey) throw new Error("E_HD_DERIVE_FAILED");
+      expected = bip86Tweak(k.publicKey.slice(1));
+    } finally {
+      k.wipePrivateData();
+    }
+  } finally {
+    master.wipePrivateData();
+  }
+  if (toHex(expected) !== toHex(program)) throw new Error("E_CONSOLIDATION_FOREIGN_OUTPUT");
+
+  // Fee bounds: inputs = output + fee, 0 < fee ≤ 2 % of inputs.
+  let inSum = 0n;
+  for (const u of r.utxos) {
+    if (!u || typeof u.valueGrains !== "string" || !/^[0-9]+$/.test(u.valueGrains)) {
+      throw new Error("E_PEARL_UTXO_SHAPE");
+    }
+    inSum += BigInt(u.valueGrains);
+  }
+  const fee = inSum - BigInt(out.amountGrains);
+  if (fee <= 0n || fee * CONSOLIDATION_MAX_FEE_DEN > inSum * CONSOLIDATION_MAX_FEE_NUM) {
+    throw new Error("E_CONSOLIDATION_FEE");
+  }
+  return signPearlTxWithSeed(seed, { utxos: r.utxos, outputs: [out], network: r.network });
 }

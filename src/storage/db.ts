@@ -230,6 +230,9 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   "pearl-wallet-ui-v4",
   "pearl-wallet-ui-v5",
   "pearl-wallet-ui-v6", // current (v0.2.8 — see ui-store STORAGE_KEY)
+  // Outpoints of recent broadcasts (services/pending-spends.ts) — public
+  // chain data, but it reveals which coins this wallet holds.
+  "pearl-wallet-pending-spends-v1",
 ];
 const UI_STORAGE_KEY_RE = /^pearl-wallet-ui-v\d+$/;
 
