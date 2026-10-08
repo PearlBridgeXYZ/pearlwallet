@@ -308,6 +308,11 @@ export function verifyBatchStillSpendable(
 export interface ConsolidationAddressBook {
   external: readonly string[];
   internal: readonly string[];
+  /** The addresses the plan's own walk read, with their (branch, index).
+   *  Primary source: a coin found on an address discovered by that walk
+   *  can be re-checked even if persisting the discovery failed. The
+   *  branch lists above are the fallback. */
+  refs?: readonly { address: string; branch: HdBranch; index: number }[];
 }
 
 /**
@@ -325,11 +330,13 @@ export async function recheckConsolidationBatch(
 ): Promise<number> {
   const refs: WalletAddressRef[] = [];
   const seen = new Set<string>();
+  const fromPlan = new Map<string, string>();
+  for (const r of book.refs ?? []) fromPlan.set(`${r.branch}/${r.index}`, r.address);
   for (const u of b.utxos) {
     const id = `${u.branch}/${u.index}`;
     if (seen.has(id)) continue;
     seen.add(id);
-    const address = (u.branch === 1 ? book.internal : book.external)[u.index];
+    const address = fromPlan.get(id) ?? (u.branch === 1 ? book.internal : book.external)[u.index];
     if (!address) throw new Error("E_CONSOLIDATION_RECHECK_INCOMPLETE");
     refs.push({ address, branch: u.branch, index: u.index });
   }

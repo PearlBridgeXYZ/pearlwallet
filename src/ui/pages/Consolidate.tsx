@@ -15,7 +15,7 @@ import {
 } from "../../services/pearl-consolidate";
 import { excludePendingSpends, pendingTransactions, PendingSpendConflictError } from "../../services/pending-spends";
 import PendingTxCheck from "../components/PendingTxCheck";
-import type { PrlPoolScan } from "../../services/balances";
+import type { PrlPoolScan, WalletAddressRef } from "../../services/balances";
 import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
 
@@ -39,6 +39,9 @@ interface CoinSnapshot {
   /** When the LAST coins were read (end of the walk) — the plan's review
    *  clock starts here. */
   fetchedAt: number;
+  /** Addresses that walk read, with (branch, index): the primary address
+   *  book for re-checking later batches. */
+  refs: WalletAddressRef[];
 }
 
 type BatchStatus =
@@ -136,7 +139,6 @@ export default function Consolidate() {
   const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
   const changePool = useWallet((s) => s.addresses?.pearlChange);
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
-  const onDiscovered = useWallet((s) => s.extendPearlAddresses);
 
   const [tier, setTier] = useState<FeeTier>("low");
   const [forceLive, setForceLive] = useState(false);
@@ -156,10 +158,23 @@ export default function Consolidate() {
       const cache = cachedScan?.spendable;
       if (!forceLive && cache && cache.utxos.length > 0 && Date.now() - cache.fetchedAt < UTXO_CACHE_FRESHNESS_MS) {
         const { spendable, pending } = excludePendingSpends(cache.utxos);
-        return { utxos: spendable, pendingCount: pending.length, degraded: false, fetchedAt: cache.fetchedAt };
+        return {
+          utxos: spendable,
+          pendingCount: pending.length,
+          degraded: false,
+          fetchedAt: cache.fetchedAt,
+          refs: cachedScan.refs,
+        };
       }
+      const onDiscovered = useWallet.getState().pearlDiscoveryHandler();
       const live = await loadSpendableUtxos({ pool, changePool, deriveMore, onDiscovered });
-      return { utxos: live.utxos, pendingCount: live.pending.length, degraded: live.degraded, fetchedAt: live.fetchedAt };
+      return {
+        utxos: live.utxos,
+        pendingCount: live.pending.length,
+        degraded: live.degraded,
+        fetchedAt: live.fetchedAt,
+        refs: live.refs,
+      };
     },
   });
   const coins = coinsQ.data;
@@ -228,6 +243,9 @@ export default function Consolidate() {
           show();
           const book = useWallet.getState().addresses;
           verifiedAt = await recheckConsolidationBatch(batch, {
+            // The plan's own walk first: a coin on an address discovered by
+            // that walk stays checkable even if persisting it failed.
+            refs: coins.refs,
             external: book?.pearlPool ?? pool,
             internal: book?.pearlChange ?? changePool ?? [],
           });

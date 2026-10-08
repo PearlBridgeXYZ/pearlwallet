@@ -120,10 +120,12 @@ export const PRL_FULL_RESCAN_MS = 10 * 60_000;
 /** Change-branch addresses within this many indexes past the last used one
  *  are walked on every refresh (change is assigned sequentially). */
 export const PRL_REFRESH_WINDOW = 5;
-/** External-branch window: the whole gap limit. Discovery keeps the
- *  external list at last used + DISCOVERY_GAP_LIMIT, and Receive offers
- *  every address on it, so every address a payer may have been given is
- *  walked on every refresh. */
+/** External-branch window: at least the whole gap limit. Discovery keeps
+ *  the external list at last used + DISCOVERY_GAP_LIMIT, and Receive
+ *  offers every address on it, so every address a payer may have been
+ *  given is walked on every refresh. A persisted list that grew past that
+ *  (an earlier extension by a faulty RPC) widens the window to its end
+ *  (planPrlScan's externalLength). */
 export const PRL_REFRESH_WINDOW_EXTERNAL = DISCOVERY_GAP_LIMIT;
 export const ETH_REFETCH_MS = 30_000;
 export const PRICE_REFETCH_MS = 60_000;
@@ -139,13 +141,17 @@ export function planPrlScan(
   baseline: ScanBaseline | undefined,
   now: number,
   forceFull: boolean,
+  /** Length of the persisted external list (every address Receive may
+   *  have offered). The external window reaches its last index. */
+  externalLength: number = 0,
 ): ScanRefresh | undefined {
   if (forceFull || !baseline) return undefined;
   if (now - baseline.fullAt >= PRL_FULL_RESCAN_MS) return undefined;
+  const toEnd = Number.isInteger(externalLength) ? externalLength - baseline.lastUsed[0] - 1 : 0;
   return {
     lastUsed: baseline.lastUsed,
     knownUnused: baseline.knownUnused,
-    window: [PRL_REFRESH_WINDOW_EXTERNAL, PRL_REFRESH_WINDOW],
+    window: [Math.max(PRL_REFRESH_WINDOW_EXTERNAL, toEnd), PRL_REFRESH_WINDOW],
   };
 }
 
@@ -300,6 +306,10 @@ export interface UseWalletBalancesArgs {
   deriveMore?: DeriveMoreAddresses;
   /** Persists a discovered (extended) address set. */
   onDiscovered?: (set: { external: string[]; internal: string[] }) => unknown;
+  /** Preferred over onDiscovered: called when a scan STARTS and returns
+   *  the persist callback for that scan (bound to the wallet's address
+   *  generation, so a scan that raced an address reset persists nothing). */
+  bindOnDiscovered?: () => (set: { external: string[]; internal: string[] }) => unknown;
   ethAddr?: string;
   ethEnabled: boolean;
 }
@@ -309,6 +319,7 @@ export function useWalletBalances({
   changePool,
   deriveMore,
   onDiscovered,
+  bindOnDiscovered,
   ethAddr,
   ethEnabled,
 }: UseWalletBalancesArgs): WalletBalancesView {
@@ -317,8 +328,8 @@ export function useWalletBalances({
   // The query is keyed by wallet identity; the scan reads the CURRENT
   // address lists and callbacks at run time so a list extended by
   // discovery is picked up by the next refetch without restarting this one.
-  const latest = useRef({ pool, changePool, deriveMore, onDiscovered });
-  latest.current = { pool, changePool, deriveMore, onDiscovered };
+  const latest = useRef({ pool, changePool, deriveMore, onDiscovered, bindOnDiscovered });
+  latest.current = { pool, changePool, deriveMore, onDiscovered, bindOnDiscovered };
   // Set by the returned `refetch` (user-initiated): the next scan walks
   // every address instead of running in refresh mode.
   const forceFull = useRef(false);
@@ -327,6 +338,7 @@ export function useWalletBalances({
     queryKey: key,
     queryFn: async ({ signal }) => {
       const cur = latest.current;
+      const persistDiscovered = cur.bindOnDiscovered ? cur.bindOnDiscovered() : cur.onDiscovered;
       const ext = [...cur.pool];
       const int = cur.changePool ? [...cur.changePool] : null;
       // A lock / wipe / wallet switch during this scan bumps the epoch;
@@ -343,7 +355,7 @@ export function useWalletBalances({
       };
       try {
         if (!int) return await scanPrlPool(ext, { signal, onProgress });
-        const refresh = planPrlScan(getScanBaseline(poolKey), Date.now(), forceFull.current);
+        const refresh = planPrlScan(getScanBaseline(poolKey), Date.now(), forceFull.current, ext.length);
         forceFull.current = false;
         const scan = await scanPrlWallet(
           { external: ext, internal: int },
@@ -352,11 +364,11 @@ export function useWalletBalances({
         const baseline = nextScanBaseline(getScanBaseline(poolKey), scan);
         if (baseline && current()) setScanBaseline(poolKey, baseline);
         if (
-          cur.onDiscovered &&
+          persistDiscovered &&
           (scan.discovered.external.length > ext.length || scan.discovered.internal.length > int.length)
         ) {
           try {
-            await cur.onDiscovered(scan.discovered);
+            await persistDiscovered(scan.discovered);
           } catch {
             /* best-effort persistence; the scan result stands */
           }

@@ -112,7 +112,6 @@ interface ComposeTabProps {
 function ComposeTab({ pool, network }: ComposeTabProps) {
   const changePool = useWallet((s) => s.addresses?.pearlChange);
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
-  const onDiscovered = useWallet((s) => s.extendPearlAddresses);
   const [mode, setMode] = useState<"live" | "manual">("live");
   const [destination, setDestination] = useState("");
   const [amountPrl, setAmountPrl] = useState("");
@@ -157,7 +156,8 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         pool,
         changePool,
         deriveMore,
-        onDiscovered,
+        // Bound to the address generation when this walk starts.
+        onDiscovered: useWallet.getState().pearlDiscoveryHandler(),
         destination: destination.trim(),
         amountGrains,
         includeTip: false,
@@ -704,11 +704,12 @@ function BroadcastTab() {
         setBroadcastError(
           "Broadcast status unknown — the network didn't confirm receipt. " +
             (e.txid ? `Check the explorer for txid ${e.txid} ` : "Check the explorer ") +
-            "before trying again. Broadcasting this same payload again is safe.",
+            "before trying again. Broadcasting this same payload again is safe. It stays listed on the Dashboard and the Send screen until checked.",
         );
       } else if (e instanceof PendingSpendConflictError) {
         setBroadcastError(
-          "A coin in this transaction is already being spent by another transaction this wallet broadcast recently. Not broadcast.",
+          "A coin in this transaction is already being spent by another transaction this wallet broadcast recently. Not broadcast. " +
+            "If that transaction's status is unknown, check it in the panel on the Dashboard or the Send screen — its coins can be released there only if the network doesn't have it.",
         );
       } else {
         setBroadcastError(e instanceof Error ? e.message : String(e));

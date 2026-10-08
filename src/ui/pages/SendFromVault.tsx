@@ -109,7 +109,13 @@ export default function SendFromVault() {
       setStage("preview");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("E_NO_UTXOS")) setError("Vault has no spendable UTXOs.");
+      if (msg.includes("E_HISTORY_INCOMPLETE"))
+        setError(
+          "The vault has more history than could be read, so its coins can't be proven unspent. Nothing was composed — try again later.",
+        );
+      else if (msg.includes("E_NO_UTXOS: every vault coin"))
+        setError("Every vault coin is already being spent by a transaction broadcast recently. Wait for it to confirm.");
+      else if (msg.includes("E_NO_UTXOS")) setError("Vault has no spendable UTXOs.");
       else if (msg.includes("E_INSUFFICIENT_FUNDS"))
         setError("Insufficient funds in the vault to cover amount + fee.");
       else setError(`Compose failed: ${msg}`);
@@ -228,8 +234,15 @@ export default function SendFromVault() {
 
           {composed.degraded && (
             <p className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed break-words">
-              UTXO scan returned a partial set; consider retrying if the
-              broadcast later fails for insufficient funds.
+              Some vault coins came back without the data needed to spend
+              them and were left out; the vault may hold more than this
+              transaction can use.
+            </p>
+          )}
+          {composed.pendingExcluded > 0 && (
+            <p className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed break-words">
+              {composed.pendingExcluded} vault coin{composed.pendingExcluded === 1 ? " was" : "s were"} left out —
+              already being spent by a transaction broadcast recently.
             </p>
           )}
 

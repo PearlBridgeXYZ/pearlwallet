@@ -27,8 +27,10 @@ import {
 import type { PrlPoolScan } from "../../services/balances";
 import { BroadcastStatusUnknownError, MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
-import { PendingSpendConflictError } from "../../services/pending-spends";
+import { PendingSpendConflictError, unresolvedIntentsTo } from "../../services/pending-spends";
 import PendingTxCheck from "../components/PendingTxCheck";
+import PendingBroadcasts from "../components/PendingBroadcasts";
+import { usePendingSpendsVersion } from "../hooks/usePendingSpends";
 
 type FeeTier = "low" | "normal" | "high";
 
@@ -94,9 +96,13 @@ export default function SendPRL() {
   const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
   const changePool = useWallet((s) => s.addresses?.pearlChange);
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
-  const onDiscovered = useWallet((s) => s.extendPearlAddresses);
 
   const [destination, setDestination] = useState("");
+  // An earlier payment to this destination ended "status unknown" and is
+  // unresolved: paying again needs this explicit acknowledgement.
+  const [payTwiceAck, setPayTwiceAck] = useState(false);
+  usePendingSpendsVersion();
+  const sameDestUnresolved = unresolvedIntentsTo(destination);
   const [amount, setAmount] = useState("");
   const [sendMax, setSendMax] = useState(false);
   const [tier, setTier] = useState<FeeTier>("normal");
@@ -150,6 +156,9 @@ export default function SendPRL() {
     ],
     enabled: stage === "preview" && !!validated && pool.length > 0,
     queryFn: async () => {
+      // Bound to the address generation at walk START: a walk that raced
+      // an address reset can't persist its (longer) list afterwards.
+      const onDiscovered = useWallet.getState().pearlDiscoveryHandler();
       if (validated!.max) {
         // Send max: price the largest amount these coins can send at this
         // fee tier and tip choice, then compose exactly that amount over
@@ -288,6 +297,13 @@ export default function SendPRL() {
     if (!validPearl(destination, pearlNetwork)) {
       return { ok: false, reason: "That doesn't look like a valid Pearl address." };
     }
+    if (unresolvedIntentsTo(destination).length > 0 && !payTwiceAck) {
+      return {
+        ok: false,
+        reason:
+          "An earlier payment to this address has an unknown status. Check it above, or confirm that you accept paying twice.",
+      };
+    }
     if (sendMax) {
       return { ok: true, v: { dest: destination.trim(), grains: 0n, max: true } };
     }
@@ -307,6 +323,14 @@ export default function SendPRL() {
     if (!validated) return;
     const q = previewQ.data;
     if (!q) return;
+    // Re-checked at click time: a payment to this address may have ended
+    // "status unknown" (another tab) since the review.
+    if (unresolvedIntentsTo(validated.dest).length > 0 && !payTwiceAck) {
+      setError(
+        "An earlier payment to this address has an unknown status. Go back and check it, or confirm that you accept paying twice.",
+      );
+      return;
+    }
     setSending(true);
     setError(null);
     try {
@@ -675,6 +699,7 @@ export default function SendPRL() {
 
   return (
     <Page title="Send PRL">
+      <PendingBroadcasts network={pearlNetwork} className="mb-4" />
       <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
         <label className="block">
           <span className="label">Destination address</span>
@@ -685,9 +710,30 @@ export default function SendPRL() {
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
-            onChange={(e) => setDestination(e.target.value)}
+            onChange={(e) => {
+              setDestination(e.target.value);
+              setPayTwiceAck(false);
+            }}
           />
         </label>
+        {sameDestUnresolved.length > 0 && (
+          <div role="alert" className="rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger">
+            <p className="font-medium">An earlier payment to this address may already be on its way.</p>
+            <p className="mt-1">
+              Its broadcast status is unknown. Check it in the panel above first — sending now could pay this
+              address twice.
+            </p>
+            <label className="mt-2 flex items-start gap-2">
+              <input
+                type="checkbox"
+                className="mt-2"
+                checked={payTwiceAck}
+                onChange={(e) => setPayTwiceAck(e.target.checked)}
+              />
+              <span>I understand this may pay this address twice. Send anyway.</span>
+            </label>
+          </div>
+        )}
         <label className="block">
           <span className="label">Amount (PRL)</span>
           <div className="flex gap-2">

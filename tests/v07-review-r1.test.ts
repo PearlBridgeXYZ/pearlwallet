@@ -348,7 +348,11 @@ describe("S5 — edge 503s and definitive rejections after a maybe-delivered att
     expect(pendingOutpoints().size).toBe(0);
   });
 
-  it("plain 503 then -26, probe says absent → plain rejection, nothing recorded", async () => {
+  // Round 2 (R2-1): a plain (non-nginx) 503 stays "maybe delivered". A
+  // state-dependent rejection after it can be the echo of our own accepted
+  // tx, so an "absent" probe never turns it into a plain failure; only a
+  // content-deterministic reason confirmed absent twice does.
+  it("plain 503 then -26 missingorspent, probe says absent → status unknown, inputs stay reserved", async () => {
     const { raw, ins } = signedFixture();
     let n = 0;
     const calls = stubRpc((m) => {
@@ -356,8 +360,21 @@ describe("S5 — edge 503s and definitive rejections after a maybe-delivered att
       return ++n === 1 ? new Response("busy", { status: 503 }) : rpcErr(-26, "bad-txns-inputs-missingorspent");
     });
     const err = await broadcastRecordingSpends(raw, ins).catch((e: unknown) => e);
-    expect(err).not.toBeInstanceOf(BroadcastStatusUnknownError);
+    expect(err).toBeInstanceOf(BroadcastStatusUnknownError);
     expect(calls).toContain("getrawtransaction");
+    expect(pendingOutpoints().size).toBe(2);
+  });
+
+  it("plain 503 then -26 min relay fee, probe says absent twice → plain rejection, nothing recorded", async () => {
+    const { raw, ins } = signedFixture();
+    let n = 0;
+    const calls = stubRpc((m) => {
+      if (m === "getrawtransaction") return rpcErr(-5, "No information available about transaction");
+      return ++n === 1 ? new Response("busy", { status: 503 }) : rpcErr(-26, "min relay fee not met");
+    });
+    const err = await broadcastRecordingSpends(raw, ins).catch((e: unknown) => e);
+    expect(err).not.toBeInstanceOf(BroadcastStatusUnknownError);
+    expect(calls.filter((c) => c === "getrawtransaction")).toHaveLength(2);
     expect(pendingOutpoints().size).toBe(0);
   });
 

@@ -18,6 +18,7 @@ export const FAST_RPC_TUNING = {
   backoffMaxMs: 4,
   maxRetries: 5,
   retryBudgetMs: 5_000,
+  probeRecheckDelayMs: 1,
 } as const;
 
 beforeEach(() => {

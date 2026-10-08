@@ -9,14 +9,18 @@ import {
   rawTxId,
   rawTxInputs,
 } from "./pearl-rpc";
-import { scanPrlPool, type PoolUtxoRecord, type PrlPoolScan } from "./balances";
+import { scanPrlPool, type PoolUtxoRecord, type PrlPoolScan, type WalletAddressRef } from "./balances";
 import { scanPrlWallet, type DeriveMoreAddresses } from "./discovery";
 import {
   assertNotPending,
+  beginSubmission,
   excludePendingSpends,
+  finishSubmission,
   outpointKey,
+  recordPendingIntent,
   releasePendingSpends,
   reservePendingSpends,
+  withPendingSpendsLock,
 } from "./pending-spends";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
 import type { PearlNetwork } from "../chains/pearl/network";
@@ -112,6 +116,8 @@ export interface ComposeOptions {
   maxPages?: number;
   /** Per-tx input cap (default and ceiling MAX_SEND_INPUTS). */
   maxInputs?: number;
+  /** Cancels a live walk (lock / wipe / navigation). */
+  signal?: AbortSignal;
 }
 
 function estimateFee(numInputs: number, numOutputs: number, feerate: bigint): bigint {
@@ -226,10 +232,14 @@ export interface SpendableUtxoSet {
   addressesScanned: number;
   /** When the walk's LAST per-address result was read. */
   fetchedAt: number;
+  /** Every address the walk read, with the (branch, index) deriving it —
+   *  the address book a later re-check of these coins can rely on even
+   *  if persisting newly discovered addresses failed. */
+  refs: WalletAddressRef[];
 }
 
 async function listPoolUtxos(
-  opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages">,
+  opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages" | "signal">,
 ): Promise<SpendableUtxoSet> {
   // v0.7: pacing comes from the shared Pearl RPC token bucket; a few
   // addresses walk in parallel. With a change branch supplied the walk
@@ -238,7 +248,7 @@ async function listPoolUtxos(
   if (opts.changePool) {
     const w = await scanPrlWallet(
       { external: opts.pool, internal: opts.changePool },
-      { maxPages: opts.maxPages, deriveMore: opts.deriveMore },
+      { maxPages: opts.maxPages, deriveMore: opts.deriveMore, signal: opts.signal },
     );
     if (
       opts.onDiscovered &&
@@ -252,7 +262,7 @@ async function listPoolUtxos(
     }
     scan = w;
   } else {
-    scan = await scanPrlPool(opts.pool, { maxPages: opts.maxPages });
+    scan = await scanPrlPool(opts.pool, { maxPages: opts.maxPages, signal: opts.signal });
   }
   // Review clock: starts when the last address was read, not when the
   // walk began (a paced walk of a big wallet takes minutes).
@@ -296,6 +306,7 @@ async function listPoolUtxos(
     historyIncomplete,
     addressesScanned: scan.pool.length,
     fetchedAt,
+    refs: scan.refs.map((r) => ({ ...r })),
   };
 }
 
@@ -305,7 +316,7 @@ async function listPoolUtxos(
  * UtxoScanIncompleteError when nothing was found and addresses failed.
  */
 export async function loadSpendableUtxos(
-  opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages">,
+  opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages" | "signal">,
 ): Promise<SpendableUtxoSet> {
   return listPoolUtxos(opts);
 }
@@ -700,31 +711,64 @@ async function signAndBroadcast(
     maxFeeGrains: composed.feeGrains.toString(),
   };
   const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
-  const txid = await broadcastRecordingSpends(raw, composed.utxos);
+  const txid = await broadcastRecordingSpends(raw, composed.utxos, {
+    destination: composed.outputs[0]?.address ?? null,
+    amountGrains: composed.amountGrains,
+  });
   return { txid, composed };
 }
 
+let anonymousSubmission = 0;
+
 /**
  * The one broadcast path for every Pearl spend (Send, consolidation,
- * offline broadcast). Immediately before submitting, the inputs are
- * reserved as pending spends of this tx (services/pending-spends.ts) —
- * refused with PendingSpendConflictError if a different recent broadcast
- * already spends one of them — so no later send or consolidation batch
- * picks them while the walk may still show them. Success and a
- * status-unknown broadcast keep the reservation (the tx may well be in
- * the mempool); a definite rejection releases it.
+ * offline broadcast, vault broadcast). Immediately before submitting, the
+ * inputs are reserved as pending spends of this tx (services/pending-
+ * spends.ts, inside the cross-tab lock) — refused with
+ * PendingSpendConflictError if a different recent broadcast already spends
+ * one of them — so no later send or consolidation batch picks them while
+ * the walk may still show them. Success and a status-unknown broadcast
+ * keep the reservation (the tx may well be in the mempool; a status-
+ * unknown one also records `intent` so the UI can surface it later); a
+ * definite rejection releases it — unless another submission of the same
+ * tx is still in flight here, or one already succeeded or ended unknown.
  */
 export async function broadcastRecordingSpends(
   raw: string,
   inputs: readonly { txid: string; vout: number }[],
+  intent?: { destination: string | null; amountGrains: bigint | null },
 ): Promise<string> {
   const localTxid = rawTxId(raw);
-  const added = reservePendingSpends(localTxid, inputs);
+  const added = await withPendingSpendsLock(() => reservePendingSpends(localTxid, inputs));
+  const key = localTxid ?? `anonymous-${++anonymousSubmission}`;
+  beginSubmission(key, added);
+  let outcome: "accepted" | "unknown" | "rejected" = "rejected";
   try {
-    return await broadcastPearlTx(raw);
+    const txid = await broadcastPearlTx(raw);
+    outcome = "accepted";
+    return txid;
   } catch (e) {
-    if (!(e instanceof BroadcastStatusUnknownError)) releasePendingSpends(added, localTxid);
+    if (e instanceof BroadcastStatusUnknownError) {
+      outcome = "unknown";
+      const id = e.txid ?? localTxid;
+      if (id) {
+        recordPendingIntent({
+          txid: id,
+          destination: intent?.destination ?? null,
+          amountGrains: intent?.amountGrains ?? null,
+        });
+      }
+    }
     throw e;
+  } finally {
+    const release = finishSubmission(key, outcome);
+    if (release.length > 0) {
+      try {
+        await withPendingSpendsLock(() => releasePendingSpends(release, localTxid));
+      } catch {
+        /* the reservation simply stays until it expires (fail closed) */
+      }
+    }
   }
 }
 

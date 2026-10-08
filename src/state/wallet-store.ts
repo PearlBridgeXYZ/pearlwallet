@@ -68,6 +68,10 @@ interface WalletState {
   ethNetwork: EthNetwork;
   blob: KeystoreBlobJSON | null;
   lastActivity: number;
+  /** Bumped by resetPearlAddresses. A discovery result produced by a scan
+   *  that started under an older generation is refused, so an in-flight
+   *  scan over the long list can't undo the reset. */
+  pearlAddressGeneration: number;
 
   init(): Promise<void>;
   createWallet(
@@ -96,7 +100,13 @@ interface WalletState {
   /** Adopt + persist a discovered address set. Accepted only while
    *  unlocked and only as a prefix-extension of the current lists (so a
    *  scan that raced a wallet switch can never write foreign addresses). */
-  extendPearlAddresses(next: { external: readonly string[]; internal: readonly string[] }): Promise<boolean>;
+  extendPearlAddresses(
+    next: { external: readonly string[]; internal: readonly string[] },
+    generation?: number,
+  ): Promise<boolean>;
+  /** An onDiscovered callback bound to the CURRENT address generation —
+   *  create it when a scan starts, not when it finishes. */
+  pearlDiscoveryHandler(): (next: { external: readonly string[]; internal: readonly string[] }) => Promise<boolean>;
   /** Shrinks the tracked single-sig address lists back to the first
    *  RECEIVE_GAP_LIMIT of each branch (same addresses, a prefix) and
    *  persists that; the next scan rediscovers from there. For a list
@@ -205,6 +215,7 @@ export const useWallet = create<WalletState>((set, get) => ({
   // monotonicNow() — see lib/monotonic.ts. Date.now() would be subject
   // to wall-clock manipulation that defeats the auto-lock window.
   lastActivity: monotonicNow(),
+  pearlAddressGeneration: 0,
 
   async init() {
     // Idempotent: under React.StrictMode dev, App's useEffect mounts
@@ -512,10 +523,16 @@ export const useWallet = create<WalletState>((set, get) => ({
     return out.addresses;
   },
 
-  async extendPearlAddresses(next) {
+  pearlDiscoveryHandler() {
+    const generation = get().pearlAddressGeneration;
+    return (next) => get().extendPearlAddresses(next, generation);
+  },
+
+  async extendPearlAddresses(next, generation) {
     return walletLock(async () => {
       const { status, addresses } = get();
       if (status !== "unlocked" || !addresses) return false;
+      if (generation !== undefined && generation !== get().pearlAddressGeneration) return false;
       const curExt = addresses.pearlPool;
       const curInt = addresses.pearlChange ?? [];
       const ext = next.external.slice(0, MAX_ADDRESSES_PER_BRANCH);
@@ -533,6 +550,9 @@ export const useWallet = create<WalletState>((set, get) => ({
   },
 
   async resetPearlAddresses() {
+    // Bump first: every scan already running (or queued behind the lock)
+    // was planned over the list being discarded.
+    set({ pearlAddressGeneration: get().pearlAddressGeneration + 1 });
     return walletLock(async () => {
       const { status, addresses } = get();
       if (status !== "unlocked" || !addresses) return false;

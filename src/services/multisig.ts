@@ -39,10 +39,11 @@ import { pearlMultisigPath } from "../crypto/hd";
 import {
   fetchPrlUtxos,
   fetchPrlBalanceGrains,
-  broadcastPearlTx,
   BroadcastStatusUnknownError,
   type PrlUtxo,
 } from "./pearl-rpc";
+import { broadcastSignedPearlTx, HistoryIncompleteError } from "./pearl-tx";
+import { excludePendingSpends, PendingSpendConflictError } from "./pending-spends";
 import type {
   PearlMultisigComposePsbtRequest,
   PearlMultisigUtxoSpec,
@@ -300,7 +301,11 @@ export interface ComposedVaultSend {
   outputs: { address: string; amountGrains: bigint }[];
   feeGrains: bigint;
   changeGrains: bigint;
+  /** Some vault outputs could not be used (the node omitted their
+   *  script); the spendable total may be lower than the chain balance. */
   degraded: boolean;
+  /** Vault coins left out because a recent broadcast already spends them. */
+  pendingExcluded: number;
   amountGrains: bigint;
   destination: string;
 }
@@ -316,8 +321,17 @@ export interface ComposedVaultSend {
  */
 export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<ComposedVaultSend> {
   const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
-  const { utxos: avail, degraded } = await fetchPrlUtxos(opts.vault.pearlAddress);
-  if (avail.length === 0) throw new Error("E_NO_UTXOS");
+  const walk = await fetchPrlUtxos(opts.vault.pearlAddress);
+  // A page-capped history may list coins spent on a page never read: it
+  // never funds a transaction (same rule as single-sig Send).
+  if (walk.degraded) throw new HistoryIncompleteError(1, 1);
+  const degraded = walk.droppedNoScript > 0;
+  // Coins already being spent by a recent broadcast (this tab or another)
+  // are not offered again.
+  const { spendable: avail, pending } = excludePendingSpends(walk.utxos);
+  if (avail.length === 0) {
+    throw new Error(pending.length > 0 ? "E_NO_UTXOS: every vault coin is already being spent by a recent broadcast" : "E_NO_UTXOS");
+  }
 
   // Largest-first selection — minimises input count and witness footprint.
   const sorted = [...avail].sort((a, b) =>
@@ -390,6 +404,7 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
     feeGrains: fee,
     changeGrains: change,
     degraded,
+    pendingExcluded: pending.length,
     amountGrains: opts.amountGrains,
     destination: opts.destination,
   };
@@ -762,8 +777,14 @@ export function finalizeVaultPsbt(psbtBase64: string): { rawHex: string } {
   return { rawHex: tx.hex };
 }
 
+/**
+ * Broadcasts a finalized vault transaction through the same reservation
+ * path as every other Pearl spend: its inputs (decoded from the raw tx)
+ * are reserved first, refused if another recent broadcast spends one of
+ * them, and released only on a definite rejection.
+ */
 export async function broadcastVaultTx(rawHex: string): Promise<string> {
-  return broadcastPearlTx(rawHex);
+  return broadcastSignedPearlTx(rawHex);
 }
 
 // ---------------------------------------------------------------------------
@@ -889,12 +910,15 @@ export async function broadcastPendingTx(opts: {
   const { rawHex } = finalizeVaultPsbt(opts.pending.psbtBase64);
   let txid: string;
   try {
-    txid = await broadcastPearlTx(rawHex);
+    txid = await broadcastSignedPearlTx(rawHex);
   } catch (err) {
     // Outcome unknown (timeout / dropped connection): the tx may be in the
     // mempool. Leave the record as-is so the user can check the explorer
     // or re-broadcast (idempotent) — never mark it failed.
     if (err instanceof BroadcastStatusUnknownError) throw err;
+    // Refused before submission (a coin is already being spent by another
+    // recent broadcast): nothing was sent, the draft stays as it is.
+    if (err instanceof PendingSpendConflictError) throw err;
     const failed: VaultPendingTxRecord = {
       ...opts.pending,
       status: "failed",

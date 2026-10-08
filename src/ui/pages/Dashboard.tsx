@@ -4,6 +4,7 @@ import ActivityList from "../components/ActivityList";
 import CopyAddress from "../components/CopyAddress";
 import InstallPWA from "../components/InstallPWA";
 import BtxCard from "../components/BtxCard";
+import PendingBroadcasts from "../components/PendingBroadcasts";
 import UpdatedAgo from "../components/UpdatedAgo";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
@@ -25,12 +26,13 @@ export default function Dashboard() {
   // Both single-sig branches + gap-limit discovery (services/discovery.ts);
   // newly found addresses are persisted to the keystore record.
   const derivePearlAddresses = useWallet((s) => s.derivePearlAddresses);
-  const extendPearlAddresses = useWallet((s) => s.extendPearlAddresses);
+  const pearlDiscoveryHandler = useWallet((s) => s.pearlDiscoveryHandler);
+  const pearlNetwork = useWallet((s) => s.pearlNetwork);
   const b = useWalletBalances({
     pool,
     changePool: addresses?.pearlChange,
     deriveMore: derivePearlAddresses,
-    onDiscovered: extendPearlAddresses,
+    bindOnDiscovered: pearlDiscoveryHandler,
     ethAddr: addresses?.eth,
     ethEnabled,
   });
@@ -49,6 +51,9 @@ export default function Dashboard() {
       </div>
 
       <h1 className="page-title">Your wallet</h1>
+      {/* Broadcasts whose outcome is still open (status unknown) stay
+          visible here after leaving the Send screen. */}
+      <PendingBroadcasts network={pearlNetwork} className="mb-4" />
       <div className="card shadow-slabsm sm:shadow-slab">
         <div className="text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Total balance</div>
         {b.totalUsd !== null ? (

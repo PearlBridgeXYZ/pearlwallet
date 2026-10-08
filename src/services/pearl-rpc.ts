@@ -9,7 +9,7 @@ import { hexToBytes } from "@noble/hashes/utils";
 import { PEARL_RPC_POOL, pearlParams } from "../chains/pearl/network";
 import { useUI } from "../state/ui-store";
 import { TokenBucket, sleep, type RpcPriority } from "./rpc-limiter";
-import { onBalanceMemoryClear } from "../state/balance-memory";
+import { memoryEpoch, onBalanceMemoryClear } from "../state/balance-memory";
 
 interface RpcResult<T> {
   jsonrpc?: string;
@@ -87,6 +87,10 @@ export interface PearlRpcTuning {
   /** Addresses walked in parallel by a pool scan. The token bucket still
    *  bounds the aggregate request rate. */
   scanConcurrency: number;
+  /** After a broadcast whose outcome is open, a "node doesn't have it"
+   *  probe is repeated once after this delay before it counts as absent
+   *  (the node may still be admitting the tx we just sent). */
+  probeRecheckDelayMs: number;
 }
 
 const MIN_ATTEMPT_TIMEOUT_MS = 3_000;
@@ -102,6 +106,7 @@ export const DEFAULT_PEARL_RPC_TUNING: Readonly<PearlRpcTuning> = Object.freeze(
   broadcastTimeoutMs: 20_000,
   broadcastRetryBudgetMs: 30_000,
   scanConcurrency: 3,
+  probeRecheckDelayMs: 3_000,
 });
 
 let tuning: PearlRpcTuning = { ...DEFAULT_PEARL_RPC_TUNING };
@@ -273,8 +278,9 @@ export function parseRetryAfterMs(value: string | null, now: number = Date.now()
  *   • `PearlRpcHttpError` (other 4xx) — request malformed/disallowed. Hard.
  *   • `Error("rpc N: msg")` — chain-level JSON-RPC error. Hard (endpoint is fine).
  *   • `PearlRpcMalformedResponseError` — 2xx with an unusable body
- *     (invalid/truncated JSON, null result). Hard for reads; a broadcast
- *     treats it as "status unknown".
+ *     (invalid JSON, null result, malformed error object). Hard for reads;
+ *     a broadcast treats it as "status unknown". A connection dropped
+ *     while reading the body is a `TypeError` (transient), not this.
  */
 async function fetchOnce<T>(
   url: string,
@@ -323,6 +329,10 @@ async function fetchOnce<T>(
     } catch (err) {
       if (timedOut) throw new PearlRpcTimeoutError(timeoutMs);
       if (signal?.aborted) throw err;
+      // The connection dropped mid-body: a network failure (transient,
+      // retried like any fetch rejection), not a malformed answer. A
+      // broadcast still counts it as "may have been delivered".
+      if (err instanceof TypeError) throw err;
       throw new PearlRpcMalformedResponseError("unreadable body");
     }
     let body: RpcResult<T>;
@@ -332,7 +342,20 @@ async function fetchOnce<T>(
       throw new PearlRpcMalformedResponseError("invalid JSON");
     }
     if (!body || typeof body !== "object") throw new PearlRpcMalformedResponseError("not an object");
-    if (body.error) {
+    if (body.error !== null && body.error !== undefined) {
+      const e = body.error as unknown;
+      // Only a well-formed JSON-RPC error {code: integer, message: string}
+      // is the chain speaking. Anything else (a bare string, an object
+      // without a numeric code) is an unusable answer — for a broadcast,
+      // "status unknown", never a plain failure.
+      if (
+        !e ||
+        typeof e !== "object" ||
+        !Number.isInteger((e as { code?: unknown }).code) ||
+        typeof (e as { message?: unknown }).message !== "string"
+      ) {
+        throw new PearlRpcMalformedResponseError("malformed error object");
+      }
       // Chain-level error (-5 zero-activity, -32601 method-not-found).
       // Endpoint is fine; surface directly so caller can swallow as needed.
       throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
@@ -541,7 +564,10 @@ export interface AddressHistory {
 const historyCache = new Map<string, AddressHistory>();
 const HISTORY_CACHE_MAX = 200;
 
-function rememberCompleteHistory(address: string, txs: RawTx[]): void {
+function rememberCompleteHistory(address: string, txs: RawTx[], epoch: number): void {
+  // A read that started before a lock / wipe / wallet switch must not
+  // repopulate the cache that clear just emptied.
+  if (epoch !== memoryEpoch()) return;
   if (historyCache.size >= HISTORY_CACHE_MAX) {
     const oldest = historyCache.keys().next().value;
     if (oldest !== undefined) historyCache.delete(oldest);
@@ -633,6 +659,8 @@ export async function fetchPrlUtxos(
     MAX_UTXO_WALK_PAGES_HARD,
   );
   let skip = 0;
+  // Session epoch at walk start (see rememberCompleteHistory).
+  const epoch = memoryEpoch();
   type Held = { valueGrains: bigint; scriptHex: string };
   const utxo = new Map<string, Held>();
   const seenOutputs = new Set<string>();
@@ -659,7 +687,7 @@ export async function fetchPrlUtxos(
       const msg = err instanceof Error ? err.message : String(err);
       if (msg.includes("No information available about address")) {
         if (pageCount === 0) {
-          rememberCompleteHistory(address, []);
+          rememberCompleteHistory(address, [], epoch);
           return { utxos: [], degraded: false, droppedNoScript: 0, used: false };
         }
         // -5 after earlier non-empty pages: history ended exactly at a
@@ -669,11 +697,11 @@ export async function fetchPrlUtxos(
       throw err;
     }
     if (!page || page.length === 0) {
-      if (pageCount === 0) rememberCompleteHistory(address, []);
+      if (pageCount === 0) rememberCompleteHistory(address, [], epoch);
       break;
     }
     if (pageCount === 0 && page.length < PAGE && page.length <= MAX_RPC_PAGE_LENGTH) {
-      rememberCompleteHistory(address, page);
+      rememberCompleteHistory(address, page, epoch);
     }
     if (page.length > MAX_RPC_PAGE_LENGTH) {
       degraded = true;
@@ -823,21 +851,72 @@ export async function probePearlTx(txid: string | null, opts: { signal?: AbortSi
   }
 }
 
+export type BroadcastRejectionClass = "deterministic" | "state-dependent";
+
+// Rejections that depend on what the node already holds — and so can be
+// CAUSED by our own earlier, possibly delivered attempt of the very same
+// bytes: inputs missing or already spent (by our tx in its mempool or a
+// block), orphan / missing parents, mempool conflicts and replacement
+// rules, finality / sequence locks, mempool chain or capacity limits.
+const STATE_DEPENDENT_REJECTION_RE =
+  /missingorspent|missing[- ]?inputs?|already spent|fully[- ]spent|spent by|orphan|missing (parent|reference)|conflict|replacement|insufficient fee|rbf|non-?final|not final|sequence ?lock|bip68|too-long-mempool-chain|ancestor|descendant|mempool (is )?full|mempool min fee/i;
+
+// Rejections decided by the transaction's own content, the same on every
+// node and at every moment: fee below the relay floor, dust, script or
+// signature failure, non-standard or oversized, value errors.
+const DETERMINISTIC_REJECTION_RE =
+  /min relay fee|under the required amount|insufficient priority|dust|script|signature|sig-?op|not standard|non-?standard|scriptpubkey|bare-multisig|multi-op-return|tx-size|too (big|large)|oversize|absurdly-high-fee|max-fee-exceeded|bad-txns-(vout|vin|in-belowout|txouttotal|inputvalues|fee)|less than the amount spent|negative|version|decode/i;
+
+/**
+ * Classifies a definite sendrawtransaction rejection. "deterministic"
+ * only when the reason is about the transaction's own content; state
+ * reasons — and anything unrecognised — are "state-dependent": after an
+ * attempt that may have reached the node they can be the echo of our own
+ * accepted transaction and never prove it absent. A non-transient HTTP
+ * status (the proxy refusing the request) is about the request itself.
+ */
+export function classifyBroadcastRejection(err: unknown): BroadcastRejectionClass {
+  if (err instanceof PearlRpcHttpError) return "deterministic";
+  const msg = err instanceof Error ? err.message : String(err);
+  if (STATE_DEPENDENT_REJECTION_RE.test(msg)) return "state-dependent";
+  if (DETERMINISTIC_REJECTION_RE.test(msg)) return "deterministic";
+  return "state-dependent";
+}
+
+/** probePearlTx, but an "absent" answer is only trusted once a second
+ *  probe after tuning.probeRecheckDelayMs agrees (the node may still be
+ *  admitting a tx we just submitted). */
+async function probeWithRecheck(txid: string | null): Promise<PearlTxProbe> {
+  const first = await probePearlTx(txid);
+  if (first !== "absent") return first;
+  await sleep(tuning.probeRecheckDelayMs);
+  return probePearlTx(txid);
+}
+
+const TXID_HEX_RE = /^[0-9a-f]{64}$/i;
+
 /**
  * Broadcasts a signed raw transaction. Returns the txid on success.
  *
  * Broadcast is idempotent (same raw tx ⇒ same txid; the node answers
  * "already have transaction" for a duplicate), so transient failures are
  * retried with the shared backoff. Outcome rules:
- *   • node returns txid                         → success
+ *   • node returns this tx's txid (64 hex, equal to the local txid)
+ *                                                → success
+ *   • node returns anything else as its result   → probed: found → success,
+ *                                                  else status unknown
  *   • node says it already has this transaction → success (local txid)
  *   • node rejects on the FIRST contact          → failure (thrown as-is)
  *   • node rejects AFTER an earlier attempt that may have reached it →
- *     the local txid is probed (getrawtransaction): found → success,
- *     absent → the rejection stands (plain failure), else
+ *     the local txid is probed (getrawtransaction, an "absent" re-probed
+ *     once after a short delay): found → success; absent on both probes
+ *     AND a content-deterministic reason (fee floor, dust, script…) → the
+ *     rejection stands (plain failure); anything else — including every
+ *     state-dependent reason (inputs missing/spent, orphan, conflict) or
+ *     an unrecognised one — → BroadcastStatusUnknownError
+ *   • 2xx with an unusable body (invalid/truncated JSON, null result,
+ *     malformed error object) → probed: found → success, else
  *     BroadcastStatusUnknownError
- *   • 2xx with an unusable body (invalid/truncated JSON, null result) →
- *     probed: found → success, else BroadcastStatusUnknownError
  *   • every attempt failed transiently (and at least one may have been
  *     delivered)                                 → BroadcastStatusUnknownError
  *   • only edge refusals (429, nginx rate-limit 503 page; never
@@ -847,8 +926,9 @@ export async function probePearlTx(txid: string | null, opts: { signal?: AbortSi
 export async function broadcastPearlTx(rawHex: string): Promise<string> {
   const localTxid = rawTxId(rawHex);
   let maybeReachedNode = false;
+  let result: unknown;
   try {
-    return await call<string>("sendrawtransaction", [rawHex], {
+    result = await call<unknown>("sendrawtransaction", [rawHex], {
       priority: "high",
       timeoutMs: tuning.broadcastTimeoutMs,
       retryBudgetMs: tuning.broadcastRetryBudgetMs,
@@ -867,7 +947,7 @@ export async function broadcastPearlTx(rawHex: string): Promise<string> {
     }
     if (err instanceof PearlRpcMalformedResponseError) {
       // A server answered 2xx: the node may well have accepted the tx.
-      if ((await probePearlTx(localTxid)) === "found") return localTxid!;
+      if ((await probeWithRecheck(localTxid)) === "found") return localTxid!;
       throw new BroadcastStatusUnknownError(localTxid, err);
     }
     if (isChainLevelError(err) || (err instanceof PearlRpcHttpError && !isTransientHttpStatus(err.status))) {
@@ -875,9 +955,9 @@ export async function broadcastPearlTx(rawHex: string): Promise<string> {
       // delivered the tx, the rejection could be about our own tx (e.g.
       // inputs now spent by it): ask the node whether it holds the tx.
       if (!maybeReachedNode) throw err;
-      const probe = await probePearlTx(localTxid);
+      const probe = await probeWithRecheck(localTxid);
       if (probe === "found") return localTxid!;
-      if (probe === "absent") throw err;
+      if (probe === "absent" && classifyBroadcastRejection(err) === "deterministic") throw err;
       throw new BroadcastStatusUnknownError(localTxid, err);
     }
     // Transport never produced a definitive answer. If no attempt can
@@ -885,4 +965,12 @@ export async function broadcastPearlTx(rawHex: string): Promise<string> {
     if (!maybeReachedNode) throw err;
     throw new BroadcastStatusUnknownError(localTxid, err);
   }
+  // The node said "accepted". Only this transaction's own id confirms
+  // what it accepted; any other answer is resolved by asking for the tx.
+  if (localTxid && typeof result === "string" && TXID_HEX_RE.test(result) && result.toLowerCase() === localTxid) {
+    return localTxid;
+  }
+  const unexpected = new PearlRpcMalformedResponseError("unexpected broadcast result");
+  if ((await probeWithRecheck(localTxid)) === "found") return localTxid!;
+  throw new BroadcastStatusUnknownError(localTxid, unexpected);
 }
