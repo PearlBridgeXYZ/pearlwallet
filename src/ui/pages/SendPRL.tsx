@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Page from "../components/Page";
@@ -12,11 +12,20 @@ import {
   broadcastPearlPrecomposed,
   composePearlSend,
   composePearlSendDeepRetry,
+  computeMaxSendable,
+  loadSpendableUtxos,
   InsufficientFundsError,
+  NoSpendableCoinsError,
+  TooManyInputsError,
+  UtxoScanIncompleteError,
+  MAX_SEND_INPUTS,
   PEARL_PREVIEW_FRESHNESS_MS,
   PEARL_PREVIEW_REFRESH_AT_MS,
+  type MaxSendable,
 } from "../../services/pearl-tx";
-import type { Balances } from "../../services/balances";
+import type { PrlPoolScan } from "../../services/balances";
+import { BroadcastStatusUnknownError, MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
+import { prlScanQueryKey } from "../hooks/useWalletBalances";
 
 type FeeTier = "low" | "normal" | "high";
 
@@ -37,7 +46,11 @@ const UTXO_CACHE_FRESHNESS_MS = 30_000;
 
 interface ValidatedSend {
   dest: string;
+  /** Requested amount; ignored when `max` is set. */
   grains: bigint;
+  /** "Send max": the amount is computed at compose time from the coins,
+   *  fee tier and tip choice (services/pearl-tx computeMaxSendable). */
+  max: boolean;
 }
 
 // The Pearl pool walk is serialized across receive addresses and can
@@ -75,18 +88,22 @@ export default function SendPRL() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
-  const ethEnabled = useUI((s) => s.ethEnabled);
   const pool = useWallet((s) => s.addresses?.pearlPool ?? (s.addresses ? [s.addresses.pearl] : []));
-  const addresses = useWallet((s) => s.addresses);
+  const changePool = useWallet((s) => s.addresses?.pearlChange);
+  const deriveMore = useWallet((s) => s.derivePearlAddresses);
+  const onDiscovered = useWallet((s) => s.extendPearlAddresses);
 
   const [destination, setDestination] = useState("");
   const [amount, setAmount] = useState("");
+  const [sendMax, setSendMax] = useState(false);
   const [tier, setTier] = useState<FeeTier>("normal");
   const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
   const [error, setError] = useState<string | null>(null);
   const [insufficient, setInsufficient] = useState<InsufficientFundsError | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
-  const [tipThisTx, setTipThisTx] = useState(true);
+  // Per-tx tip toggle, seeded from the Settings preference (which promises
+  // that turning the tip off means no tip output is ever added).
+  const [tipThisTx, setTipThisTx] = useState(() => useUI.getState().tipEnabled);
   const [validated, setValidated] = useState<ValidatedSend | null>(null);
   const [sending, setSending] = useState(false);
   // When true, force a deep walk on the next compose (used by the
@@ -94,24 +111,18 @@ export default function SendPRL() {
   // degraded walk).
   const [deepWalk, setDeepWalk] = useState(false);
 
-  // Read the dashboard's balance query out of the react-query cache so
-  // we can re-use its UTXO walk instead of repeating it. Cache key
-  // mirrors Dashboard.tsx exactly — if either side drifts, the cache
-  // misses and we just fall through to a live walk.
-  const balancesCacheKey = useMemo(
-    () => [
-      "balances",
-      addresses?.pearlPool?.join(",") ?? addresses?.pearl,
-      addresses?.eth,
-      ethEnabled,
-    ],
-    [addresses, ethEnabled],
-  );
-  const cachedBalances = queryClient.getQueryData<Balances>(balancesCacheKey);
+  // Read the dashboard's PRL pool scan out of the react-query cache so we
+  // can re-use its UTXO walk instead of repeating it. v0.7: the key is
+  // built by the same helper the dashboard hook uses (prlScanQueryKey),
+  // and we read ONLY `spendable`, which the scan sets solely when that
+  // single fresh scan was complete — partial scans and the dashboard's
+  // keep-last-good display values can never reach coin selection. On a
+  // miss (or a stale/partial scan) composePearlSend walks live.
+  const cachedScan = queryClient.getQueryData<PrlPoolScan>(prlScanQueryKey(pool));
   const cachedUtxos =
-    cachedBalances &&
-    Date.now() - cachedBalances.prlUtxosFetchedAt < UTXO_CACHE_FRESHNESS_MS
-      ? cachedBalances.prlUtxos
+    cachedScan?.spendable &&
+    Date.now() - cachedScan.spendable.fetchedAt < UTXO_CACHE_FRESHNESS_MS
+      ? cachedScan.spendable.utxos
       : undefined;
 
   // Pre-flight: compose the tx so the user sees the actual fee + change
@@ -127,14 +138,58 @@ export default function SendPRL() {
       tipThisTx,
       validated?.dest,
       validated?.grains.toString(),
+      validated?.max,
       deepWalk,
     ],
     enabled: stage === "preview" && !!validated && pool.length > 0,
     queryFn: async () => {
+      if (validated!.max) {
+        // Send max: price the largest amount these coins can send at this
+        // fee tier and tip choice, then compose exactly that amount over
+        // the same coin set (no change output).
+        let utxos = cachedUtxos && cachedUtxos.length > 0 && !deepWalk ? cachedUtxos : null;
+        if (!utxos) {
+          const live = await loadSpendableUtxos({
+            pool,
+            changePool,
+            deriveMore,
+            onDiscovered,
+            maxPages: deepWalk ? MAX_UTXO_WALK_PAGES_HARD : undefined,
+          });
+          if (live.utxos.length === 0) {
+            throw new NoSpendableCoinsError(live.addressesScanned, live.pending.length, live.degraded);
+          }
+          utxos = live.utxos;
+        }
+        const max = computeMaxSendable({
+          utxos,
+          feerateSatPerVbyte: FEERATE_BY_TIER[tier],
+          includeTip: tipThisTx,
+        });
+        if (max.amountGrains <= 0n) {
+          throw new Error("E_NOTHING_TO_SEND: your spendable coins don't cover the network fee at this fee tier");
+        }
+        const composed = await composePearlSend({
+          network: pearlNetwork,
+          pool,
+          changePool,
+          deriveMore,
+          onDiscovered,
+          destination: validated!.dest,
+          amountGrains: max.amountGrains,
+          feerateSatPerVbyte: FEERATE_BY_TIER[tier],
+          includeTip: tipThisTx,
+          cachedUtxos: utxos,
+        });
+        return { ...composed, composedAt: Date.now(), max: max as MaxSendable | null };
+      }
       const composed = deepWalk
         ? await composePearlSendDeepRetry({
             network: pearlNetwork,
             pool,
+            changePool,
+            deriveMore,
+            onDiscovered,
             destination: validated!.dest,
             amountGrains: validated!.grains,
             feerateSatPerVbyte: FEERATE_BY_TIER[tier],
@@ -143,18 +198,36 @@ export default function SendPRL() {
         : await composePearlSend({
             network: pearlNetwork,
             pool,
+            changePool,
+            deriveMore,
+            onDiscovered,
             destination: validated!.dest,
             amountGrains: validated!.grains,
             feerateSatPerVbyte: FEERATE_BY_TIER[tier],
             includeTip: tipThisTx,
             cachedUtxos,
           });
-      return { ...composed, composedAt: Date.now() };
+      return { ...composed, composedAt: Date.now(), max: null as MaxSendable | null };
     },
     // Disable react-query's own retry — we surface InsufficientFundsError
     // structurally below and want the user to drive the deep-retry.
     retry: false,
   });
+
+  // Structured compose errors → specific diagnostics (combine coins,
+  // empty wallet vs incomplete scan, both with a rescan).
+  const tooMany = previewQ.isError && previewQ.error instanceof TooManyInputsError ? previewQ.error : null;
+  const noCoins = previewQ.isError && previewQ.error instanceof NoSpendableCoinsError ? previewQ.error : null;
+  const scanIncomplete =
+    previewQ.isError && previewQ.error instanceof UtxoScanIncompleteError ? previewQ.error : null;
+
+  // Rescan: walk the wallet live at the deepest page depth, ignoring the
+  // dashboard's cached coins.
+  function rescan() {
+    setInsufficient(null);
+    if (!deepWalk) setDeepWalk(true);
+    else void previewQ.refetch();
+  }
 
   // Capture InsufficientFundsError out of the query error so the UI
   // can render structured diagnostics + a "Search deeper" CTA.
@@ -201,6 +274,9 @@ export default function SendPRL() {
     if (!validPearl(destination, pearlNetwork)) {
       return { ok: false, reason: "That doesn't look like a valid Pearl address." };
     }
+    if (sendMax) {
+      return { ok: true, v: { dest: destination.trim(), grains: 0n, max: true } };
+    }
     let grains: bigint;
     try {
       grains = parsePRL(amount);
@@ -210,7 +286,7 @@ export default function SendPRL() {
     if (grains <= 0n) {
       return { ok: false, reason: "Amount must be greater than 0." };
     }
-    return { ok: true, v: { dest: destination.trim(), grains } };
+    return { ok: true, v: { dest: destination.trim(), grains, max: false } };
   }
 
   async function broadcast() {
@@ -220,7 +296,7 @@ export default function SendPRL() {
     setSending(true);
     setError(null);
     try {
-      const { composedAt, ...c } = q;
+      const { composedAt, max: _max, ...c } = q;
       const { txid: hash } = await broadcastPearlPrecomposed(
         { composed: c, composedAt },
         pearlNetwork,
@@ -229,7 +305,14 @@ export default function SendPRL() {
       setStage("sent");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg === "E_PREVIEW_STALE") {
+      if (e instanceof BroadcastStatusUnknownError) {
+        // The tx may already be in the mempool — never call this a failure.
+        setError(
+          `Broadcast status unknown — the network didn't confirm receipt. ` +
+            (e.txid ? `Check the explorer for txid ${e.txid} ` : "Check the explorer ") +
+            `before trying again.`,
+        );
+      } else if (msg === "E_PREVIEW_STALE") {
         setError("UTXO selection expired — refreshing…");
         previewQ.refetch();
       } else if (msg.includes("E_NO_UTXOS")) {
@@ -287,8 +370,10 @@ export default function SendPRL() {
               <dd className="break-all font-mono min-w-0 tabular-nums">{v?.dest}</dd>
             </div>
             <div className="flex justify-between">
-              <dt className="text-text-3">Amount</dt>
-              <dd>{v ? formatGrains(v.grains) : "—"} PRL</dd>
+              <dt className="text-text-3">Amount{v?.max ? " (max)" : ""}</dt>
+              <dd>
+                {composed ? formatGrains(composed.amountGrains) : v && !v.max ? formatGrains(v.grains) : "—"} PRL
+              </dd>
             </div>
             {composed && (
               <>
@@ -323,7 +408,7 @@ export default function SendPRL() {
                 <div className="flex justify-between border-t border-line pt-2">
                   <dt className="font-medium">Total leaving wallet</dt>
                   <dd className="font-medium">
-                    {formatGrains(v!.grains + composed.feeGrains + composed.tipGrains)} PRL
+                    {formatGrains(composed.amountGrains + composed.feeGrains + composed.tipGrains)} PRL
                   </dd>
                 </div>
               </>
@@ -369,7 +454,70 @@ export default function SendPRL() {
             </div>
           )}
 
-          {previewQ.isError && !insufficient && (
+          {composed?.max?.capped && (
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
+              One transaction can spend at most {MAX_SEND_INPUTS} coins, so this sends your largest{" "}
+              {MAX_SEND_INPUTS}. {composed.max.cappedOutCount} more coin
+              {composed.max.cappedOutCount === 1 ? "" : "s"} stay in your wallet.{" "}
+              <Link to="/consolidate" className="underline underline-offset-4">Combine your coins</Link> to send everything at once.
+            </div>
+          )}
+          {composed?.max && !composed.max.exact && (
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
+              With the tip on, sends of 1 PRL or more carry a 1 PRL minimum tip your coins can't
+              cover, so the most you can send is just under 1 PRL. Turn the tip off below to send
+              everything.
+            </div>
+          )}
+
+          {tooMany && (
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
+              <div className="font-medium">Combine your coins first.</div>
+              <p className="mt-1">
+                This amount needs {tooMany.inputsNeeded} coins, but one transaction can spend at
+                most {tooMany.maxInputs}. Your {tooMany.utxoCount} coins hold{" "}
+                {formatGrains(tooMany.spendableGrains)} PRL. Combining them into a few larger
+                coins makes this send possible.
+              </p>
+              {tooMany.maxSendableGrains > 0n && (
+                <p className="mt-1">
+                  Right now one transaction can send up to {formatGrains(tooMany.maxSendableGrains)} PRL.
+                </p>
+              )}
+              <Link to="/consolidate" className="btn-secondary tap mt-2 inline-flex">
+                Combine small coins
+              </Link>
+            </div>
+          )}
+
+          {noCoins && (
+            <div className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-3 text-xs text-danger leading-relaxed">
+              <div className="font-medium">No spendable PRL found.</div>
+              <p className="mt-1">
+                {noCoins.pendingCount > 0
+                  ? `Every coin found (${noCoins.pendingCount}) is already being spent by a transaction this wallet just broadcast. Wait for it to confirm, then rescan.`
+                  : `All ${noCoins.addressesScanned} wallet addresses answered and none holds a coin right now. If you just received PRL it may not be visible yet.`}
+              </p>
+              <button className="mt-1 inline-flex min-h-11 items-center underline underline-offset-4" onClick={rescan} disabled={previewQ.isFetching}>
+                Rescan
+              </button>
+            </div>
+          )}
+
+          {scanIncomplete && (
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs text-warn leading-relaxed">
+              <div className="font-medium">Couldn't finish reading your wallet.</div>
+              <p className="mt-1">
+                {scanIncomplete.failures} of {scanIncomplete.addressesScanned} addresses didn't
+                answer (the Pearl network is busy). Your coins aren't missing. Try again.
+              </p>
+              <button className="mt-1 inline-flex min-h-11 items-center underline underline-offset-4" onClick={rescan} disabled={previewQ.isFetching}>
+                Rescan
+              </button>
+            </div>
+          )}
+
+          {previewQ.isError && !insufficient && !tooMany && !noCoins && !scanIncomplete && (
             <p className="mt-3 text-sm text-danger leading-relaxed break-words">
               Couldn't compose: {(previewQ.error as Error).message}
             </p>
@@ -428,7 +576,7 @@ export default function SendPRL() {
               Back
             </button>
             <button
-              disabled={!composed || sending || !!insufficient}
+              disabled={!composed || sending || !!insufficient || previewQ.isError}
               onClick={broadcast}
               className="btn-primary flex-1 min-w-11"
             >
@@ -457,12 +605,30 @@ export default function SendPRL() {
         </label>
         <label className="block">
           <span className="label">Amount (PRL)</span>
-          <input
-            className="input mono break-all min-w-0 tabular-nums"
-            inputMode="decimal"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
+          <div className="flex gap-2">
+            <input
+              className="input mono break-all min-w-0 flex-1 tabular-nums"
+              inputMode="decimal"
+              value={sendMax ? "" : amount}
+              placeholder={sendMax ? "Everything spendable (max)" : undefined}
+              disabled={sendMax}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+            <button
+              type="button"
+              className={sendMax ? "btn-primary min-w-11" : "btn-secondary min-w-11"}
+              aria-pressed={sendMax}
+              onClick={() => setSendMax((m) => !m)}
+            >
+              Max
+            </button>
+          </div>
+          {sendMax && (
+            <span className="mt-1 block text-xs text-text-3 leading-relaxed">
+              Sends everything spendable minus the network fee
+              {tipThisTx ? " and tip" : ""}; the exact amount is shown on the next screen.
+            </span>
+          )}
         </label>
         <fieldset>
           <legend className="label">Fee tier</legend>

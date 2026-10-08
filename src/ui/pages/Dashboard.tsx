@@ -1,5 +1,4 @@
 import { Link } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
 import ActivityList from "../components/ActivityList";
 import CopyAddress from "../components/CopyAddress";
@@ -8,7 +7,7 @@ import BtxCard from "../components/BtxCard";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { btxSurfaceOn } from "../../lib/features";
-import { fetchBalances } from "../../services/balances";
+import { useWalletBalances } from "../hooks/useWalletBalances";
 import { formatGrains, formatWei, formatWprl, formatUSD } from "../../lib/format";
 
 export default function Dashboard() {
@@ -18,26 +17,25 @@ export default function Dashboard() {
   const offlineSigningEnabled = useUI((s) => s.offlineSigningEnabled);
   const btxOn = btxSurfaceOn(useUI((s) => s.btxEnabled));
 
-  const balancesQ = useQuery({
-    queryKey: [
-      "balances",
-      addresses?.pearlPool?.join(",") ?? addresses?.pearl,
-      addresses?.eth,
-      ethEnabled,
-    ],
-    queryFn: () =>
-      fetchBalances(addresses!.pearlPool ?? [addresses!.pearl], addresses!.eth, {
-        ethEnabled,
-      }),
-    enabled: !!addresses,
-    refetchInterval: 30_000,
+  // v0.7: progressive per-asset balances (see ui/hooks/useWalletBalances.ts).
+  // Each asset shows as soon as its own source answers; the total needs
+  // only PRL + price and is null (never $0.00) while either is unknown.
+  const pool = addresses ? addresses.pearlPool ?? [addresses.pearl] : [];
+  // Both single-sig branches + gap-limit discovery (services/discovery.ts);
+  // newly found addresses are persisted to the keystore record.
+  const derivePearlAddresses = useWallet((s) => s.derivePearlAddresses);
+  const extendPearlAddresses = useWallet((s) => s.extendPearlAddresses);
+  const b = useWalletBalances({
+    pool,
+    changePool: addresses?.pearlChange,
+    deriveMore: derivePearlAddresses,
+    onDiscovered: extendPearlAddresses,
+    ethAddr: addresses?.eth,
+    ethEnabled,
   });
-
-  const balances = balancesQ.data;
-  const totalUsd = balances
-    ? balances.prlUsd * Number(balances.prl) / 1e8
-      + (ethEnabled ? balances.wprlUsd * Number(balances.wprl) / 1e8 : 0)
-    : 0;
+  const price = b.price.value;
+  const usdOf = (v: bigint | null) =>
+    v !== null && price !== null ? `≈ ${formatUSD((price * Number(v)) / 1e8)}` : "";
 
   return (
     <Page>
@@ -52,18 +50,23 @@ export default function Dashboard() {
       <h1 className="page-title">Your wallet</h1>
       <div className="card shadow-slabsm sm:shadow-slab">
         <div className="text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Total balance</div>
-        {balances ? (
-          balances.prlSource === "error" || (ethEnabled && balances.wprlSource === "error") ? (
-            <div className="mt-3 text-lg text-text-3">Total unavailable</div>
-          ) : (
-            <div className="mt-3 break-all text-[38px] font-semibold leading-none tracking-[-.5px] tabular-nums sm:text-5xl">{formatUSD(totalUsd)}</div>
-          )
-        ) : balancesQ.isError ? (
-          <div className="mt-3 text-sm text-danger">Balances unavailable. Please try again later.</div>
+        {b.totalUsd !== null ? (
+          <div className="mt-3 break-all text-[38px] font-semibold leading-none tracking-[-.5px] tabular-nums sm:text-5xl">{formatUSD(b.totalUsd)}</div>
+        ) : b.prl.value !== null && b.price.status === "error" ? (
+          <div className="mt-3 text-lg text-text-3">Price unavailable</div>
+        ) : b.prl.status === "error" && !b.scan.running ? (
+          <div className="mt-3 text-lg text-text-3">Balance unavailable. Retrying shortly.</div>
+        ) : b.scan.running && b.scan.total > 0 ? (
+          <div role="status" className="mt-3 text-lg tabular-nums text-text-3">Scanning addresses {b.scan.done}/{b.scan.total}…</div>
         ) : (
           <div role="status" className="mt-3">
             <span className="sr-only">Loading total balance</span>
             <span aria-hidden="true" className="block h-12 w-48 max-w-full animate-pulse rounded-pb bg-surface-3" />
+          </div>
+        )}
+        {(b.totalStatus === "partial" || b.totalStale) && b.totalUsd !== null && (
+          <div className="mt-2 text-xs text-warn">
+            {b.totalStatus === "partial" ? "Some balances couldn't be read. The total may be low." : "Showing last known balance."}
           </div>
         )}
         <p className="mt-3 text-xs leading-6 text-text-3">
@@ -78,17 +81,18 @@ export default function Dashboard() {
             </div>
             <div className="min-w-0 text-right">
               <div className="break-words text-xl font-medium tabular-nums">
-                {balances?.prlSource === "error" || (!balances && balancesQ.isError) ? "Unavailable" : balances ? formatGrains(balances.prl) : (
+                {b.prl.value !== null ? formatGrains(b.prl.value) : b.prl.status === "error" ? "Unavailable" : b.prl.status === "loading" ? (
                   <span role="status" className="block">
                     <span className="sr-only">Loading PRL balance</span>
                     <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse rounded-pb bg-surface-3" />
                   </span>
-                )}
+                ) : "—"}
               </div>
-              <div className="mt-1 text-xs text-text-3">
-                {balances && balances.prlSource !== "error" ? `≈ ${formatUSD(balances.prlUsd * Number(balances.prl) / 1e8)}` : ""}
-              </div>
-              {balances?.prlSource === "error" && (
+              <div className="mt-1 text-xs text-text-3">{usdOf(b.prl.value)}</div>
+              {b.prl.status === "partial" && (
+                <div className="mt-1 text-xs text-warn">Partial. Some addresses couldn't be read.</div>
+              )}
+              {b.prl.status === "error" && (
                 <div className="mt-1 text-xs text-danger">Pearl balance could not be fetched.</div>
               )}
             </div>
@@ -102,17 +106,15 @@ export default function Dashboard() {
                 </div>
                 <div className="min-w-0 text-right">
                   <div className="break-words text-xl font-medium tabular-nums">
-                    {balances?.wprlSource === "error" || (!balances && balancesQ.isError) ? "Unavailable" : balances ? formatWprl(balances.wprl) : (
+                    {b.wprl?.value != null ? formatWprl(b.wprl.value) : b.wprl?.status === "error" ? "Unavailable" : b.wprl?.status === "loading" ? (
                       <span role="status" className="block">
                         <span className="sr-only">Loading WPRL balance</span>
                         <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse rounded-pb bg-surface-3" />
                       </span>
-                    )}
+                    ) : "—"}
                   </div>
-                  <div className="mt-1 text-xs text-text-3">
-                    {balances && balances.wprlSource !== "error" ? `≈ ${formatUSD(balances.wprlUsd * Number(balances.wprl) / 1e8)}` : ""}
-                  </div>
-                  {balances?.wprlSource === "error" && (
+                  <div className="mt-1 text-xs text-text-3">{usdOf(b.wprl?.value ?? null)}</div>
+                  {b.wprl?.status === "error" && (
                     <div className="mt-1 text-xs text-danger">Ethereum balance could not be fetched.</div>
                   )}
                 </div>
@@ -124,17 +126,17 @@ export default function Dashboard() {
                 </div>
                 <div className="min-w-0 text-right">
                   <div className="break-words text-xl font-medium tabular-nums">
-                    {balances?.ethSource === "error" || (!balances && balancesQ.isError) ? "Unavailable" : balances ? formatWei(balances.eth) : (
+                    {b.eth?.value != null ? formatWei(b.eth.value) : b.eth?.status === "error" ? "Unavailable" : b.eth?.status === "loading" ? (
                       <span role="status" className="block">
                         <span className="sr-only">Loading ETH balance</span>
                         <span aria-hidden="true" className="ml-auto block h-6 w-28 max-w-full animate-pulse rounded-pb bg-surface-3" />
                       </span>
-                    )}
+                    ) : "—"}
                   </div>
-                  {balances?.ethSource === "error" && (
+                  {b.eth?.status === "error" && (
                     <div className="mt-1 text-xs text-danger">Ethereum balance could not be fetched.</div>
                   )}
-                  {balances && balances.wprl > 0n && balances.eth === 0n && balances.ethSource === "live" && (
+                  {b.wprl?.value != null && b.wprl.value > 0n && b.eth?.value === 0n && b.eth.status === "ok" && !b.eth.stale && (
                     <div className="mt-1 text-xs text-warn">Add ETH to cover WPRL network fees.</div>
                   )}
                 </div>
@@ -161,6 +163,11 @@ export default function Dashboard() {
             <Link to="/receive" className="btn-secondary tap">Receive</Link>
           </div>
         )}
+        <div className="mt-2 text-center">
+          <Link to="/consolidate" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">
+            Combine small coins
+          </Link>
+        </div>
         {multisigEnabled && (
           <div className="mt-2">
             <Link to="/vaults" className="btn-secondary block w-full text-center">
@@ -197,7 +204,9 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold">Recent activity</h2>
           <Link to="/history" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">See all</Link>
         </div>
-        <ActivityList limit={5} truncate />
+        {/* Start the activity scan once the first PRL scan has settled so
+            it doesn't compete with the balance scan for the RPC budget. */}
+        <ActivityList limit={5} truncate enabled={b.prl.status !== "loading"} />
       </div>
 
       <div className="mt-4 text-center text-xs text-text-3">

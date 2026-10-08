@@ -218,7 +218,8 @@ describe("v0.1.11 / broadcastPearlPrecomposed", () => {
           vout: 0,
           valueGrains: 1_000_000_000n,
           scriptHex: "5120" + "00".repeat(32),
-          poolIndex: 0,
+          branch: 0,
+          index: 0,
         },
       ],
       outputs: [

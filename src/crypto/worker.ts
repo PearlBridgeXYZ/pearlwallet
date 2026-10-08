@@ -6,16 +6,30 @@ import {
   validateMnemonic,
   mnemonicToSeed,
 } from "./mnemonic";
+import type { HDKey } from "@scure/bip32";
 import {
   masterFromSeed,
   DEFAULT_ETH_PATH,
-  RECEIVE_GAP_LIMIT,
-  pearlReceivePath,
+  pearlAccountPath,
+  publicAccountNode,
   pearlMultisigPath,
   findMultisigSlot,
+  type HdBranch,
 } from "./hd";
+import {
+  pearlAddressSetFromAccount,
+  pearlBranchAddressRange,
+  validateDeriveRange,
+  type PearlBranchCounts,
+} from "./pearl-addresses";
+import {
+  signPearlTxWithSeed,
+  signPearlConsolidationWithSeed,
+  type PearlTxRequest,
+  type PearlTxOutput,
+  type PearlConsolidationRequest,
+} from "./pearl-sign";
 import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
-import { pearlAddressFromCompressedPubkey } from "../chains/pearl/address";
 import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm, clearBtxAccountSecrets } from "../chains/btx/derive";
 import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
@@ -28,11 +42,7 @@ import { signTransaction as ethSignTransaction } from "viem/accounts";
 import * as btc from "@scure/btc-signer";
 import { base64 } from "@scure/base";
 
-interface PearlReceiveKey {
-  index: number;
-  privKey: Uint8Array;
-  pubKey: Uint8Array;
-}
+export type { PearlUtxoSpec, PearlTxOutput, PearlTxRequest, PearlConsolidationRequest } from "./pearl-sign";
 
 // WorkerSession deliberately does NOT carry the mnemonic past derivation.
 // The mnemonic is in scope only inside the createWallet/restoreWallet/
@@ -49,10 +59,15 @@ interface PearlReceiveKey {
 // re-decrypting the keystore. Seed ≠ mnemonic: an attacker with the seed
 // can derive any HD child but cannot recover the BIP-39 phrase (the seed
 // is the post-PBKDF2 output, a one-way derivation). The seed is wiped on
-// lock alongside the pearlReceive privkeys.
+// lock alongside the eth privkey.
+//
+// v0.7: no Pearl single-sig private keys are kept resident. Addresses come
+// from a PUBLIC-only account node (m/86'/808276'/0'); signPearlTx derives
+// each input's key from the seed for exactly the (branch, index) the input
+// names, checks it against the prevout script, signs, and wipes it.
 interface WorkerSession {
-  // External receive pool — RECEIVE_GAP_LIMIT entries, index 0..N-1.
-  pearlReceive: PearlReceiveKey[];
+  // Public-only account node m/86'/808276'/0' (no private key).
+  pearlAccountPub: HDKey;
   ethPrivKey: Uint8Array;
   ethPubKey: Uint8Array;
   // 64-byte BIP-39 seed retained for ad-hoc multisig child derivation. Wiped
@@ -67,7 +82,6 @@ let session: WorkerSession | null = null;
 
 function wipeSession(): void {
   if (!session) return;
-  for (const k of session.pearlReceive) k.privKey.fill(0);
   session.ethPrivKey.fill(0);
   session.seed.fill(0);
   session = null;
@@ -121,46 +135,31 @@ function toChecksumAddress(address: string): string {
   return result;
 }
 
-async function seedFromMnemonic(mnemonic: string): Promise<{
-  pearlReceive: PearlReceiveKey[];
-  ethPrivKey: Uint8Array;
-  ethPubKey: Uint8Array;
-  seed: Uint8Array;
-}> {
+async function seedFromMnemonic(mnemonic: string): Promise<WorkerSession> {
   const seed = await mnemonicToSeed(mnemonic);
   const master = masterFromSeed(seed);
 
-  const pearlReceive: PearlReceiveKey[] = [];
-  for (let i = 0; i < RECEIVE_GAP_LIMIT; i++) {
-    const node = master.derive(pearlReceivePath(i));
-    if (!node.privateKey || !node.publicKey) {
-      throw new Error(`HD derivation failed at pearl receive index ${i}`);
-    }
-    pearlReceive.push({
-      index: i,
-      privKey: node.privateKey,
-      pubKey: node.publicKey,
-    });
-  }
+  const pearlAccountPub = publicAccountNode(master, pearlAccountPath());
 
   const ethNode = master.derive(DEFAULT_ETH_PATH);
   if (!ethNode.privateKey || !ethNode.publicKey) {
     throw new Error("HD derivation failed at eth path");
   }
-  return {
-    pearlReceive,
-    ethPrivKey: ethNode.privateKey,
-    ethPubKey: ethNode.publicKey,
-    seed,
-  };
+  // Copy the eth key out, then wipe every private node we touched.
+  const ethPrivKey = Uint8Array.from(ethNode.privateKey);
+  const ethPubKey = Uint8Array.from(ethNode.publicKey);
+  ethNode.wipePrivateData();
+  master.wipePrivateData();
+  return { pearlAccountPub, ethPrivKey, ethPubKey, seed };
 }
 
-function pearlAddressesFromSession(
+function addressesFromSession(
   s: WorkerSession,
   network: PearlNetwork,
-): string[] {
-  const params = pearlParams(network);
-  return s.pearlReceive.map((k) => pearlAddressFromCompressedPubkey(k.pubKey, params));
+  counts?: Partial<PearlBranchCounts>,
+): Addresses {
+  const { pearlPool, pearlChange } = pearlAddressSetFromAccount(s.pearlAccountPub, network, counts);
+  return { pearl: pearlPool[0]!, pearlPool, pearlChange, eth: ethAddressFromPubkey(s.ethPubKey) };
 }
 
 interface BlobJSON {
@@ -215,29 +214,9 @@ export interface EthTxRequest {
   maxPriorityFeePerGas: string;
 }
 
-// One UTXO available to spend. `scriptHex` is the prevout's scriptPubKey
-// (P2TR: OP_1 <32-byte tweaked key>, 34 bytes => 68 hex chars). poolIndex
-// names which receive-pool key spent it; the worker uses that to choose
-// the correct privKey for each input. valueGrains is a bigint serialised
-// as decimal string for postMessage.
-export interface PearlUtxoSpec {
-  txid: string;
-  vout: number;
-  valueGrains: string;
-  scriptHex: string;
-  poolIndex: number;
-}
-
-export interface PearlTxOutput {
-  address: string;
-  amountGrains: string;
-}
-
-export interface PearlTxRequest {
-  utxos: PearlUtxoSpec[];
-  outputs: PearlTxOutput[];
-  network: PearlNetwork;
-}
+// Single-sig Pearl spend types (PearlUtxoSpec / PearlTxOutput /
+// PearlTxRequest) live in ./pearl-sign and are re-exported above. Each
+// input carries the HD (branch, index) of the key that controls it.
 
 // Multisig vault descriptor as carried over the worker boundary. The full
 // descriptor (leaf script, output script, address, NUMS internal key) is
@@ -314,9 +293,25 @@ export interface PearlSigProofResponse {
 export type WorkerCmd =
   | { id: string; cmd: "createWallet"; strength: 128 | 256; password: string; network: PearlNetwork }
   | { id: string; cmd: "restoreWallet"; mnemonic: string; password: string; network: PearlNetwork }
-  | { id: string; cmd: "unlock"; blob: BlobJSON; password: string; network: PearlNetwork }
+  | {
+      id: string;
+      cmd: "unlock";
+      blob: BlobJSON;
+      password: string;
+      network: PearlNetwork;
+      /** Per-branch address counts previously discovered (persisted). */
+      counts?: Partial<PearlBranchCounts>;
+    }
   | { id: string; cmd: "lock" }
-  | { id: string; cmd: "deriveAddresses"; network: PearlNetwork }
+  | { id: string; cmd: "deriveAddresses"; network: PearlNetwork; counts?: Partial<PearlBranchCounts> }
+  | {
+      id: string;
+      cmd: "derivePearlAddresses";
+      network: PearlNetwork;
+      branch: HdBranch;
+      start: number;
+      count: number;
+    }
   | { id: string; cmd: "deriveBtx" }
   | { id: string; cmd: "signBtxTx"; ins: BtxTxInput[]; outs: BtxTxOutput[] }
   | { id: string; cmd: "exportMnemonic"; password: string; blob: BlobJSON }
@@ -325,6 +320,7 @@ export type WorkerCmd =
   | { id: string; cmd: "changePassword"; oldPassword: string; newPassword: string; blob: BlobJSON }
   | { id: string; cmd: "signEthTx"; tx: EthTxRequest }
   | { id: string; cmd: "signPearlTx"; req: PearlTxRequest }
+  | { id: string; cmd: "signPearlConsolidation"; req: PearlConsolidationRequest }
   | { id: string; cmd: "derivePearlMultisigPubkey"; vaultAccount: number; keyIndex: number }
   | {
       id: string;
@@ -345,8 +341,10 @@ interface Addresses {
   // Primary (index 0). Kept for compatibility with code that just needs one
   // address (e.g. legacy publicData on the keystore record).
   pearl: string;
-  // External receive pool, ordered by index 0..RECEIVE_GAP_LIMIT-1.
+  // External receive branch (m/86'/808276'/0'/0/i), ordered by index.
   pearlPool: string[];
+  // Internal/change branch (m/86'/808276'/0'/1/i), ordered by index.
+  pearlChange: string[];
   eth: string;
 }
 
@@ -375,17 +373,11 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // can sit in worker heap until GC.
       wipeSession();
       const mnemonic = generateMnemonic(msg.strength);
-      const keys = await seedFromMnemonic(mnemonic);
-      session = { ...keys };
-      const pool = pearlAddressesFromSession(session, msg.network);
-      const eth = ethAddressFromPubkey(keys.ethPubKey);
+      session = await seedFromMnemonic(mnemonic);
+      const addresses = addressesFromSession(session, msg.network);
       const plaintext = new TextEncoder().encode(JSON.stringify({ mnemonic }));
       const blob = await encryptPlaintext(plaintext, msg.password);
-      const out: CreatedWallet = {
-        mnemonic,
-        blob: blobToJSON(blob),
-        addresses: { pearl: pool[0]!, pearlPool: pool, eth },
-      };
+      const out: CreatedWallet = { mnemonic, blob: blobToJSON(blob), addresses };
       return out;
     }
 
@@ -395,17 +387,11 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       }
       wipeSession();
       const mnemonic = msg.mnemonic.trim().toLowerCase();
-      const keys = await seedFromMnemonic(mnemonic);
-      session = { ...keys };
-      const pool = pearlAddressesFromSession(session, msg.network);
-      const eth = ethAddressFromPubkey(keys.ethPubKey);
+      session = await seedFromMnemonic(mnemonic);
+      const addresses = addressesFromSession(session, msg.network);
       const plaintext = new TextEncoder().encode(JSON.stringify({ mnemonic }));
       const blob = await encryptPlaintext(plaintext, msg.password);
-      const out: CreatedWallet = {
-        mnemonic,
-        blob: blobToJSON(blob),
-        addresses: { pearl: pool[0]!, pearlPool: pool, eth },
-      };
+      const out: CreatedWallet = { mnemonic, blob: blobToJSON(blob), addresses };
       return out;
     }
 
@@ -415,13 +401,8 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       const { mnemonic } = JSON.parse(new TextDecoder().decode(plaintext)) as {
         mnemonic: string;
       };
-      const keys = await seedFromMnemonic(mnemonic);
-      session = { ...keys };
-      const pool = pearlAddressesFromSession(session, msg.network);
-      const eth = ethAddressFromPubkey(keys.ethPubKey);
-      const out: UnlockedResult = {
-        addresses: { pearl: pool[0]!, pearlPool: pool, eth },
-      };
+      session = await seedFromMnemonic(mnemonic);
+      const out: UnlockedResult = { addresses: addressesFromSession(session, msg.network, msg.counts) };
       return out;
     }
 
@@ -431,10 +412,19 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
 
     case "deriveAddresses": {
       if (!session) throw new Error("E_LOCKED");
-      const pool = pearlAddressesFromSession(session, msg.network);
-      const eth = ethAddressFromPubkey(session.ethPubKey);
-      const out: Addresses = { pearl: pool[0]!, pearlPool: pool, eth };
+      const out: Addresses = addressesFromSession(session, msg.network, msg.counts);
       return out;
+    }
+
+    case "derivePearlAddresses": {
+      // Address discovery (services/discovery.ts) asks for more of one
+      // branch as it finds used addresses. Public data only; bounded so a
+      // hostile caller can't pin the worker.
+      if (!session) throw new Error("E_LOCKED");
+      validateDeriveRange(msg.branch, msg.start, msg.count);
+      return {
+        addresses: pearlBranchAddressRange(session.pearlAccountPub, msg.network, msg.branch, msg.start, msg.count),
+      };
     }
 
     case "deriveBtx": {
@@ -566,66 +556,21 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // Build, sign, finalise a P2TR Pearl tx. Inputs are pre-selected by
       // the caller (services/pearl-tx.ts) so the worker is purely a
       // signer here — never sees the user's RPC choice, never picks
-      // coins, never decides change. Defensive shape checks come first.
+      // coins, never decides change. Each input's key is derived from the
+      // seed for exactly its (branch, index) and must reproduce the
+      // prevout script, else E_PEARL_FOREIGN_INPUT (see ./pearl-sign).
       if (!session) throw new Error("E_LOCKED");
-      const r = msg.req;
-      if (!Array.isArray(r.utxos) || r.utxos.length === 0) {
-        throw new Error("E_PEARL_NO_INPUTS");
-      }
-      if (!Array.isArray(r.outputs) || r.outputs.length === 0) {
-        throw new Error("E_PEARL_NO_OUTPUTS");
-      }
-      const params = pearlParams(r.network);
-      const network = { bech32: params.hrp, pubKeyHash: 0x00, scriptHash: 0x05, wif: 0x80 };
+      return signPearlTxWithSeed(session.seed, msg.req as PearlTxRequest);
+    }
 
-      const tx = new btc.Transaction({ allowUnknownOutputs: false });
-
-      for (const u of r.utxos) {
-        if (
-          typeof u.txid !== "string" ||
-          !/^[0-9a-fA-F]{64}$/.test(u.txid) ||
-          typeof u.vout !== "number" ||
-          u.vout < 0 ||
-          typeof u.scriptHex !== "string" ||
-          !/^[0-9a-fA-F]+$/.test(u.scriptHex) ||
-          typeof u.poolIndex !== "number" ||
-          u.poolIndex < 0 ||
-          u.poolIndex >= session.pearlReceive.length
-        ) {
-          throw new Error("E_PEARL_UTXO_SHAPE");
-        }
-        const valueGrains = BigInt(u.valueGrains);
-        if (valueGrains <= 0n) throw new Error("E_PEARL_UTXO_VALUE");
-        const key = session.pearlReceive[u.poolIndex]!;
-        // tapInternalKey is the x-only (32-byte) internal pubkey. The
-        // node's compressed pubkey carries a parity byte we strip.
-        const xOnly = key.pubKey.slice(1);
-        tx.addInput({
-          txid: hexToBytes(u.txid),
-          index: u.vout,
-          witnessUtxo: { amount: valueGrains, script: hexToBytes(u.scriptHex) },
-          tapInternalKey: xOnly,
-        });
-      }
-
-      for (const o of r.outputs) {
-        if (typeof o.address !== "string" || typeof o.amountGrains !== "string") {
-          throw new Error("E_PEARL_OUTPUT_SHAPE");
-        }
-        const amt = BigInt(o.amountGrains);
-        if (amt <= 0n) throw new Error("E_PEARL_OUTPUT_VALUE");
-        tx.addOutputAddress(o.address, amt, network);
-      }
-
-      // Sign every input with its corresponding pool-index key.
-      // signIdx applies the BIP-86 tweak internally when tapInternalKey
-      // matches the privkey's pubkey, so we pass the raw privkey here.
-      for (let i = 0; i < r.utxos.length; i++) {
-        const pk = session.pearlReceive[r.utxos[i]!.poolIndex]!.privKey;
-        tx.signIdx(pk, i);
-      }
-      tx.finalize();
-      return { raw: tx.hex };
+    case "signPearlConsolidation": {
+      // Consolidation = self-transfer. Beyond signPearlTx's input binding,
+      // the worker itself checks there is exactly one output, that it pays
+      // this wallet's own address at the named (branch, index), and that
+      // the fee is positive and at most 2 % of the inputs — the main
+      // thread cannot turn a "combine coins" click into a payment.
+      if (!session) throw new Error("E_LOCKED");
+      return signPearlConsolidationWithSeed(session.seed, msg.req as PearlConsolidationRequest);
     }
 
     case "derivePearlMultisigPubkey": {

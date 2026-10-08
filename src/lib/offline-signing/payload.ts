@@ -45,8 +45,15 @@ export interface PearlUnsignedPayload {
     valueGrains: string;
     /** Hex P2TR scriptPubKey, lowercase. */
     scriptHex: string;
-    /** Receive-pool index (0..gap-limit). Signer derives the matching key. */
+    /** HD address index within `branch`. Signer derives the matching key
+     *  and refuses unless its P2TR script equals scriptHex. */
     poolIndex: number;
+    /** v0.7: HD branch — 0 external (default when absent), 1 internal/
+     *  change. Omitted for branch 0 so such payloads stay byte-identical
+     *  to earlier ones. An older signer ignores this field and would sign
+     *  a branch-1 input with the wrong key; the node rejects that tx, no
+     *  funds move. */
+    branch?: 0 | 1;
   }>;
   outputs: Array<{
     address: string;
@@ -245,13 +252,18 @@ function validatePearlUnsigned(o: Record<string, unknown>): PearlUnsignedPayload
     if (!isInt(x.poolIndex) || x.poolIndex < 0) {
       throw new Error(`E_PAYLOAD_FIELD: utxos[${i}].poolIndex`);
     }
-    return {
+    if (x.branch !== undefined && x.branch !== 0 && x.branch !== 1) {
+      throw new Error(`E_PAYLOAD_FIELD: utxos[${i}].branch`);
+    }
+    const entry: PearlUnsignedPayload["utxos"][number] = {
       txid: x.txid.toLowerCase(),
       vout: x.vout,
       valueGrains: x.valueGrains,
       scriptHex: x.scriptHex.toLowerCase(),
       poolIndex: x.poolIndex,
     };
+    if (x.branch === 1) entry.branch = 1;
+    return entry;
   });
   if (!Array.isArray(o.outputs) || o.outputs.length === 0) {
     throw new Error("E_PAYLOAD_FIELD: outputs must be a non-empty array");

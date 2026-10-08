@@ -219,7 +219,8 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
     });
 
     expect(c.utxos.length).toBe(1);
-    expect(c.utxos[0]!.poolIndex).toBe(0);
+    expect(c.utxos[0]!.branch).toBe(0);
+    expect(c.utxos[0]!.index).toBe(0);
     // 1-in, 2-out (dest + change), no tip
     expect(c.outputs.length).toBe(2);
     expect(c.outputs[0]!.address).toBe(DEST);
@@ -284,7 +285,8 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
     });
     // 5 PRL is covered by the 8-PRL UTXO alone — only 1 input.
     expect(c.utxos.length).toBe(1);
-    expect(c.utxos[0]!.poolIndex).toBe(1);
+    expect(c.utxos[0]!.branch).toBe(0);
+    expect(c.utxos[0]!.index).toBe(1);
     expect(c.utxos[0]!.valueGrains).toBe(800_000_000n);
   });
 

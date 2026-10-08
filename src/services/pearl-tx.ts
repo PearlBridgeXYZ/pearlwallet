@@ -3,11 +3,13 @@
 // and the sentry RPC.
 
 import {
-  fetchPrlUtxos,
   broadcastPearlTx,
+  BroadcastStatusUnknownError,
   MAX_UTXO_WALK_PAGES_HARD,
-  type PrlUtxo,
 } from "./pearl-rpc";
+import { scanPrlPool, type PoolUtxoRecord, type PrlPoolScan } from "./balances";
+import { scanPrlWallet, type DeriveMoreAddresses } from "./discovery";
+import { excludePendingSpends, outpointKey, recordPendingSpends } from "./pending-spends";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
 import type { PearlNetwork } from "../chains/pearl/network";
 import { cryptoWorker } from "../crypto/worker-client";
@@ -31,9 +33,25 @@ const FIXED_OVERHEAD_VBYTES = 11n;
 // it into fee instead.
 const DUST_LIMIT_GRAINS = 546n;
 
+/** Most inputs one send may spend. Equal to the signer's hard cap
+ *  (crypto/pearl-sign MAX_PEARL_SIGN_INPUTS — a test pins the two
+ *  together); a 500-input key-path tx is ~28.8 kvB, far below the
+ *  100 kvB standardness limit. A send needing more coins raises
+ *  TooManyInputsError and the UI offers consolidation instead. */
+export const MAX_SEND_INPUTS = 500;
+
+/** Policy limit on a standard transaction's virtual size
+ *  (MAX_STANDARD_TX_WEIGHT 400,000 WU / 4). */
+export const STANDARD_TX_MAX_VBYTES = 100_000n;
+
 export interface ComposedPearlTx {
-  utxos: { txid: string; vout: number; valueGrains: bigint; scriptHex: string; poolIndex: number }[];
+  /** Picked inputs; (branch, index) names the HD key that controls each. */
+  utxos: { txid: string; vout: number; valueGrains: bigint; scriptHex: string; branch: 0 | 1; index: number }[];
   outputs: { address: string; amountGrains: bigint }[];
+  /** Amount paid to the destination (outputs[0]). */
+  amountGrains: bigint;
+  /** Exactly sum(inputs) − sum(outputs): the size-based estimate plus any
+   *  sub-dust leftover that could not become a change output. */
   feeGrains: bigint;
   tipGrains: bigint;
   changeGrains: bigint;
@@ -49,10 +67,19 @@ export interface ComposedPearlTx {
 
 export interface ComposeOptions {
   network: PearlNetwork;
-  pool: string[]; // receive-pool addresses, ordered by index
+  /** External (receive) branch addresses, ordered by index. Change is
+   *  paid back to pool[0] (external index 0). */
+  pool: string[];
+  /** Internal (change) branch addresses, ordered by index. When given,
+   *  the live walk covers both branches with gap-limit discovery
+   *  (services/discovery.ts); when omitted, only `pool` is walked. */
+  changePool?: string[];
+  /** Derives addresses past the known set during the live walk. */
+  deriveMore?: DeriveMoreAddresses;
+  /** Receives the discovered address set when the live walk extended it. */
+  onDiscovered?: (set: { external: string[]; internal: string[] }) => unknown;
   destination: string;
   amountGrains: bigint;
-  /** Change is paid back to the pool's primary address (index 0). */
   feerateSatPerVbyte?: bigint;
   /** When true, include the v0.1.4 tip output to the PearlBridge dev
    *  team address. UI exposes a per-tx toggle bound to a global pref. */
@@ -67,6 +94,8 @@ export interface ComposeOptions {
    *  walk produced E_INSUFFICIENT_FUNDS. Clamped server-side to
    *  MAX_UTXO_WALK_PAGES_HARD. */
   maxPages?: number;
+  /** Per-tx input cap (default and ceiling MAX_SEND_INPUTS). */
+  maxInputs?: number;
 }
 
 function estimateFee(numInputs: number, numOutputs: number, feerate: bigint): bigint {
@@ -77,33 +106,159 @@ function estimateFee(numInputs: number, numOutputs: number, feerate: bigint): bi
   return vbytes * feerate;
 }
 
-export interface PoolUtxo extends PrlUtxo { poolIndex: number }
+/** Bitcoin CompactSize length for a count. */
+function compactSizeLen(n: number): number {
+  return n < 0xfd ? 1 : n <= 0xffff ? 3 : 5;
+}
+
+/**
+ * Exact virtual size of a segwit tx spending `numInputs` P2TR key-path
+ * inputs (64-byte SIGHASH_DEFAULT Schnorr signature, empty scriptSig)
+ * to `numOutputs` P2TR outputs: ceil(weight / 4) with
+ *   weight = 4 × (version 4 + locktime 4 + counts + 41/input + 43/output)
+ *          + 2 (segwit marker + flag) + 66/input (witness: 1 + 1 + 64).
+ * Consolidation prices its fee from this; tests pin it to the real size
+ * of signed transactions.
+ */
+export function p2trKeyPathVsize(numInputs: number, numOutputs: number): bigint {
+  if (!Number.isInteger(numInputs) || !Number.isInteger(numOutputs) || numInputs < 1 || numOutputs < 1) {
+    throw new Error("E_VSIZE_ARGS");
+  }
+  const base = 8 + compactSizeLen(numInputs) + compactSizeLen(numOutputs) + 41 * numInputs + 43 * numOutputs;
+  const weight = 4 * base + 2 + 66 * numInputs;
+  return BigInt(Math.ceil(weight / 4));
+}
+
+export type PoolUtxo = PoolUtxoRecord;
+
+/** The live walk finished but some addresses never answered and nothing
+ *  was found: an RPC problem, not an empty wallet. */
+export class UtxoScanIncompleteError extends Error {
+  readonly code = "E_UTXO_SCAN_INCOMPLETE" as const;
+  constructor(
+    readonly failures: number,
+    readonly addressesScanned: number,
+  ) {
+    super(
+      `E_UTXO_SCAN_INCOMPLETE: ${failures} of ${addressesScanned} addresses could not be read (Pearl RPC busy) — try again`,
+    );
+    this.name = "UtxoScanIncompleteError";
+  }
+}
+
+/** The walk read every address and found no coin this wallet can spend
+ *  right now. `pendingCount` coins exist but are already being spent by
+ *  a recent broadcast from this wallet. */
+export class NoSpendableCoinsError extends Error {
+  readonly code = "E_NO_UTXOS" as const;
+  constructor(
+    readonly addressesScanned: number,
+    readonly pendingCount: number,
+    readonly degraded: boolean,
+  ) {
+    super("E_NO_UTXOS");
+    this.name = "NoSpendableCoinsError";
+  }
+}
+
+function sortLargestFirst<T extends { valueGrains: bigint; txid: string; vout: number }>(utxos: T[]): T[] {
+  // Value descending; ties broken by outpoint so selection is deterministic.
+  return utxos.sort((a, b) => {
+    if (a.valueGrains !== b.valueGrains) return a.valueGrains > b.valueGrains ? -1 : 1;
+    const ka = outpointKey(a);
+    const kb = outpointKey(b);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  });
+}
+
+function dedupeOutpoints<T extends { txid: string; vout: number }>(utxos: readonly T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const u of utxos) {
+    const k = outpointKey(u);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(u);
+  }
+  return out;
+}
+
+export interface SpendableUtxoSet {
+  /** Spendable coins, largest first, coins of pending broadcasts removed. */
+  utxos: PoolUtxo[];
+  /** Coins the walk returned that a recent broadcast already spends. */
+  pending: PoolUtxo[];
+  degraded: boolean;
+  addressesScanned: number;
+  fetchedAt: number;
+}
 
 async function listPoolUtxos(
-  pool: string[],
-  opts: { maxPages?: number } = {},
-): Promise<{ utxos: PoolUtxo[]; degraded: boolean }> {
-  let degraded = false;
-  const out: PoolUtxo[] = [];
-  for (let i = 0; i < pool.length; i++) {
-    if (i > 0) await new Promise((r) => setTimeout(r, 300));
-    try {
-      const r = await fetchPrlUtxos(pool[i]!, { maxPages: opts.maxPages });
-      if (r.degraded) degraded = true;
-      for (const u of r.utxos) out.push({ ...u, poolIndex: i });
-    } catch {
-      // Mirror balances.ts tolerance — a single pool address being
-      // unavailable shouldn't deny the user spending from the rest.
-      degraded = true;
+  opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages">,
+): Promise<SpendableUtxoSet> {
+  const fetchedAt = Date.now();
+  // v0.7: pacing comes from the shared Pearl RPC token bucket; a few
+  // addresses walk in parallel. With a change branch supplied the walk
+  // is the same gap-limit discovery scan the dashboard runs.
+  let scan: PrlPoolScan;
+  if (opts.changePool) {
+    const w = await scanPrlWallet(
+      { external: opts.pool, internal: opts.changePool },
+      { maxPages: opts.maxPages, deriveMore: opts.deriveMore },
+    );
+    if (
+      opts.onDiscovered &&
+      (w.discovered.external.length > opts.pool.length || w.discovered.internal.length > opts.changePool.length)
+    ) {
+      try {
+        await opts.onDiscovered(w.discovered);
+      } catch {
+        /* persistence is best-effort; the scan result stands */
+      }
     }
+    scan = w;
+  } else {
+    scan = await scanPrlPool(opts.pool, { maxPages: opts.maxPages });
   }
-  // Largest-first selection is the simplest, lowest-input-count
-  // strategy. We don't have on-chain confirmation height in the UTXO
-  // walk so we can't filter unconfirmed; the sentry-side mempool view
-  // already includes mempool transactions, which means we'll happily
-  // spend a 1-conf input.
-  out.sort((a, b) => (a.valueGrains > b.valueGrains ? -1 : a.valueGrains < b.valueGrains ? 1 : 0));
-  return { utxos: out, degraded };
+  // Mirror balances.ts tolerance — a single pool address being
+  // unavailable shouldn't deny the user spending from the rest; the
+  // result is flagged degraded so a shortfall offers a deeper retry.
+  const out: PoolUtxo[] = [];
+  scan.perAddress.forEach((r, i) => {
+    if (r.status !== "ok") return;
+    const ref = scan.refs[i]!;
+    for (const u of r.utxos) out.push({ ...u, branch: ref.branch, index: ref.index });
+  });
+  const degraded = scan.degraded || scan.failures > 0;
+  // Nothing found AND some addresses could not be read: that is an RPC
+  // problem, not an empty wallet. Say so instead of E_NO_UTXOS.
+  if (out.length === 0 && scan.failures > 0) {
+    throw new UtxoScanIncompleteError(scan.failures, scan.pool.length);
+  }
+  // We don't have on-chain confirmation height in the UTXO walk so we
+  // can't filter unconfirmed; the sentry-side mempool view already
+  // includes mempool transactions, which means we'll happily spend a
+  // 1-conf input. Coins spent by our own recent broadcasts are removed
+  // (services/pending-spends.ts) whether or not the walk shows them.
+  const { spendable, pending } = excludePendingSpends(dedupeOutpoints(out));
+  return {
+    utxos: sortLargestFirst(spendable),
+    pending,
+    degraded,
+    addressesScanned: scan.pool.length,
+    fetchedAt,
+  };
+}
+
+/**
+ * Live walk of the wallet (both branches when `changePool` is given),
+ * returning the coins Send / Send-max / Consolidate may spend. Throws
+ * UtxoScanIncompleteError when nothing was found and addresses failed.
+ */
+export async function loadSpendableUtxos(
+  opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages">,
+): Promise<SpendableUtxoSet> {
+  return listPoolUtxos(opts);
 }
 
 function sumGrains(utxos: { valueGrains: bigint }[]): bigint {
@@ -128,111 +283,301 @@ export class InsufficientFundsError extends Error {
   }
 }
 
-/**
- * Greedy coin selection. Adds UTXOs largest-first until total >= amount
- * + tip + estimated fee for the current input count. Re-estimates fee
- * on each input addition because adding a coin grows the tx.
- *
- * UTXO COMBINING: there's no per-tx input cap here — the loop walks
- * the entire pool's UTXO set largest-first and stacks coins until the
- * total covers amount + fee + tip. A 100k PRL send against a wallet
- * holding 500k PRL spread across many smaller UTXOs WILL combine
- * enough of them. If `cachedUtxos` covers the amount we use the cache
- * (fast path, no network); otherwise we walk the pool live with
- * `opts.maxPages` controlling depth. On a degraded walk that still
- * comes up short we throw an InsufficientFundsError that includes
- * the actual numbers — UI can offer a deeper-walk retry.
- */
-export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPearlTx> {
-  const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
-
-  // Decide whether to use the cache or do a live walk. The cache is a
-  // hint: trust it if it covers the requested amount + a generous
-  // worst-case fee headroom. If it doesn't, do a live walk anyway —
-  // the cache may have been built with a smaller maxPages and the
-  // user genuinely has more coins than the cache shows.
-  let avail: PoolUtxo[] = [];
-  let degraded = false;
-  const cache = opts.cachedUtxos;
-  const tipGrainsEarly = opts.includeTip ? computeTipGrains(opts.amountGrains) : 0n;
-  const cacheCovers =
-    !!cache &&
-    cache.length > 0 &&
-    sumGrains(cache) >=
-      opts.amountGrains +
-        tipGrainsEarly +
-        // Worst-case fee headroom: cache might pick many small inputs.
-        // Reserve fee for up to 100 inputs at the requested feerate —
-        // if we genuinely need more than that, fall through to live.
-        estimateFee(Math.min(cache.length, 100), 3, feerate);
-
-  if (cacheCovers) {
-    avail = [...cache!].sort((a, b) =>
-      a.valueGrains > b.valueGrains ? -1 : a.valueGrains < b.valueGrains ? 1 : 0,
-    );
-  } else {
-    const live = await listPoolUtxos(opts.pool, { maxPages: opts.maxPages });
-    avail = live.utxos;
-    degraded = live.degraded;
+/** The wallet holds enough PRL, but covering this amount needs more
+ *  coins than one transaction may spend. The fix is to combine coins
+ *  first (Consolidate screen); `maxSendableGrains` is what a single
+ *  transaction can send right now. */
+export class TooManyInputsError extends Error {
+  readonly code = "E_TOO_MANY_INPUTS" as const;
+  constructor(
+    readonly inputsNeeded: number,
+    readonly maxInputs: number,
+    readonly utxoCount: number,
+    readonly spendableGrains: bigint,
+    readonly maxSendableGrains: bigint,
+  ) {
+    super(`E_TOO_MANY_INPUTS: this send needs ${inputsNeeded} coins; one transaction can spend at most ${maxInputs}`);
+    this.name = "TooManyInputsError";
   }
+}
 
-  if (avail.length === 0) throw new Error("E_NO_UTXOS");
+function clampMaxInputs(n: number | undefined): number {
+  if (n === undefined) return MAX_SEND_INPUTS;
+  if (!Number.isInteger(n) || n < 1) throw new Error("E_MAX_INPUTS");
+  return Math.min(n, MAX_SEND_INPUTS);
+}
 
-  const tipGrains = opts.includeTip ? computeTipGrains(opts.amountGrains) : 0n;
-  // Output count: dest + optional tip + change (provisional — may
-  // collapse if change ends up under dust).
-  let numOutputs = opts.includeTip ? 3 : 2;
+interface CoinSelection {
+  picked: PoolUtxo[];
+  sum: bigint;
+  feeGrains: bigint;
+  changeGrains: bigint;
+}
+
+/**
+ * Greedy largest-first selection over `avail` (already sorted largest
+ * first). Stops at the first prefix that covers amount + tip + the fee
+ * of a change-less tx; then adds a change output when the leftover pays
+ * for it and is at least dust, else the sub-dust leftover goes to fee.
+ * Largest-first minimises the input count for any target, so if the
+ * covering prefix is longer than `maxInputs`, no selection within the
+ * cap exists → TooManyInputsError.
+ */
+function selectCoins(
+  avail: PoolUtxo[],
+  amountGrains: bigint,
+  tipGrains: bigint,
+  feerate: bigint,
+  maxInputs: number,
+  includeTip: boolean,
+  degraded: boolean,
+): CoinSelection {
+  // Outputs without change: destination, plus the tip when one is due.
+  const baseOutputs = tipGrains > 0n ? 2 : 1;
   const picked: PoolUtxo[] = [];
   let sum = 0n;
   for (const u of avail) {
     picked.push(u);
     sum += u.valueGrains;
-    const fee = estimateFee(picked.length, numOutputs, feerate);
-    const need = opts.amountGrains + tipGrains + fee;
-    if (sum >= need) break;
+    if (sum >= amountGrains + tipGrains + estimateFee(picked.length, baseOutputs, feerate)) break;
   }
-  let fee = estimateFee(picked.length, numOutputs, feerate);
-  let need = opts.amountGrains + tipGrains + fee;
+  const feeNoChange = estimateFee(picked.length, baseOutputs, feerate);
   const totalAvail = sumGrains(avail);
-  if (sum < need) {
-    throw new InsufficientFundsError(need, totalAvail, avail.length, degraded);
+  if (avail.length === 0 || sum < amountGrains + tipGrains + feeNoChange) {
+    throw new InsufficientFundsError(amountGrains + tipGrains + feeNoChange, totalAvail, avail.length, degraded);
   }
+  if (picked.length > maxInputs) {
+    const max = computeMaxSendable({ utxos: avail, feerateSatPerVbyte: feerate, includeTip, maxInputs });
+    throw new TooManyInputsError(picked.length, maxInputs, avail.length, totalAvail, max.amountGrains);
+  }
+  const feeWithChange = estimateFee(picked.length, baseOutputs + 1, feerate);
+  const change = sum - amountGrains - tipGrains - feeWithChange;
+  if (change >= DUST_LIMIT_GRAINS) {
+    return { picked, sum, feeGrains: feeWithChange, changeGrains: change };
+  }
+  // No change output: the leftover (< dust + one output's fee) is paid
+  // to miners and is part of the fee — the fee line shows what the tx
+  // really pays, and inputs = outputs + fee holds exactly.
+  return { picked, sum, feeGrains: sum - amountGrains - tipGrains, changeGrains: 0n };
+}
 
-  let change = sum - need;
-  if (change < DUST_LIMIT_GRAINS) {
-    // Drop the change output. Recompute fee for one fewer output and
-    // donate the would-be change to the miners — cheaper than burning
-    // a tx for a dust UTXO that can't be spent.
-    numOutputs -= 1;
-    fee = estimateFee(picked.length, numOutputs, feerate);
-    need = opts.amountGrains + tipGrains + fee;
-    if (sum < need) {
-      throw new InsufficientFundsError(need, totalAvail, avail.length, degraded);
+/**
+ * Greedy coin selection. Adds UTXOs largest-first until total >= amount
+ * + tip + estimated fee for the current input count. Re-estimates fee
+ * on each input addition because adding a coin grows the tx.
+ *
+ * UTXO COMBINING: the loop walks the pool's whole UTXO set largest-first
+ * and stacks coins until the total covers amount + fee + tip. A 100k
+ * PRL send against a wallet holding 500k PRL spread across many smaller
+ * UTXOs WILL combine enough of them — up to MAX_SEND_INPUTS coins per
+ * transaction. Needing more raises TooManyInputsError (combine coins
+ * first). If `cachedUtxos` covers the amount we use the cache (fast
+ * path, no network); otherwise we walk the pool live with
+ * `opts.maxPages` controlling depth. On a degraded walk that still
+ * comes up short we throw an InsufficientFundsError that includes the
+ * actual numbers — UI can offer a deeper-walk retry. Coins spent by a
+ * recent broadcast from this wallet are never selected.
+ */
+export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPearlTx> {
+  const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
+  if (feerate <= 0n) throw new Error("E_FEERATE");
+  if (opts.amountGrains <= 0n) throw new Error("E_AMOUNT");
+  const maxInputs = clampMaxInputs(opts.maxInputs);
+  const tipGrains = opts.includeTip ? computeTipGrains(opts.amountGrains) : 0n;
+
+  // The cache is a hint: use it when selection over it succeeds. If it
+  // doesn't, do a live walk anyway — the cache may have been built with
+  // a smaller maxPages and the user genuinely has more coins than the
+  // cache shows.
+  let avail: PoolUtxo[] = [];
+  let degraded = false;
+  let selection: CoinSelection | null = null;
+  const cache = opts.cachedUtxos;
+  if (cache && cache.length > 0) {
+    const cached = sortLargestFirst(excludePendingSpends(dedupeOutpoints(cache)).spendable);
+    if (cached.length > 0) {
+      try {
+        selection = selectCoins(cached, opts.amountGrains, tipGrains, feerate, maxInputs, opts.includeTip, false);
+        avail = cached;
+      } catch {
+        selection = null;
+      }
     }
-    change = 0n;
   }
 
+  if (!selection) {
+    const live = await listPoolUtxos(opts);
+    avail = live.utxos;
+    degraded = live.degraded;
+    if (avail.length === 0) {
+      throw new NoSpendableCoinsError(live.addressesScanned, live.pending.length, live.degraded);
+    }
+    selection = selectCoins(avail, opts.amountGrains, tipGrains, feerate, maxInputs, opts.includeTip, degraded);
+  }
+
+  const { picked, feeGrains, changeGrains } = selection;
   const outputs: { address: string; amountGrains: bigint }[] = [
     { address: opts.destination, amountGrains: opts.amountGrains },
   ];
-  if (opts.includeTip && tipGrains > 0n) {
+  if (tipGrains > 0n) {
     outputs.push({ address: tipAddressFor(opts.network), amountGrains: tipGrains });
   }
-  if (change > 0n) {
-    outputs.push({ address: opts.pool[0]!, amountGrains: change });
+  if (changeGrains > 0n) {
+    // Change stays on external index 0 (unchanged behaviour); paying
+    // change to the internal branch is a separate, deliberate step.
+    outputs.push({ address: opts.pool[0]!, amountGrains: changeGrains });
+  }
+  // Money invariant: every grain in is accounted for.
+  if (selection.sum !== outputs.reduce((a, o) => a + o.amountGrains, 0n) + feeGrains || feeGrains <= 0n) {
+    throw new Error("E_COMPOSE_INVARIANT");
   }
 
   return {
-    utxos: picked,
+    utxos: picked.map((u) => ({
+      txid: u.txid,
+      vout: u.vout,
+      valueGrains: u.valueGrains,
+      scriptHex: u.scriptHex,
+      branch: u.branch,
+      index: u.index,
+    })),
     outputs,
-    feeGrains: fee,
+    amountGrains: opts.amountGrains,
+    feeGrains,
     tipGrains,
-    changeGrains: change,
+    changeGrains,
     degraded,
-    spendableGrains: totalAvail,
+    spendableGrains: sumGrains(avail),
     spendableUtxoCount: avail.length,
   };
 }
+
+export interface MaxSendableOptions {
+  /** Spendable coins (any order; duplicates and coins of pending
+   *  broadcasts are ignored). */
+  utxos: readonly PoolUtxo[];
+  feerateSatPerVbyte?: bigint;
+  includeTip: boolean;
+  /** Per-tx input cap (default and ceiling MAX_SEND_INPUTS). */
+  maxInputs?: number;
+}
+
+export interface MaxSendable {
+  /** Largest destination amount one transaction can send. 0 = nothing. */
+  amountGrains: bigint;
+  tipGrains: bigint;
+  /** sum(inputs) − amount − tip − change. */
+  feeGrains: bigint;
+  /** 0 unless `exact` is false (tip-floor gap, see below). */
+  changeGrains: bigint;
+  /** The coins that fund it: the largest `maxInputs` economic coins. */
+  inputs: PoolUtxo[];
+  inputGrains: bigint;
+  /** amount + tip + fee == inputGrains and there is no change output. */
+  exact: boolean;
+  /** More economic coins exist than one tx may spend. */
+  capped: boolean;
+  /** Coins whose value does not cover their own input fee — left out. */
+  uneconomicCount: number;
+  /** Coins left out because of the input cap. */
+  cappedOutCount: number;
+}
+
+/**
+ * "Send max": the largest amount A such that
+ *   A + tip(A) + fee == sum(selected inputs)
+ * with no change output, where the selected inputs are the largest
+ * `maxInputs` coins worth spending (value > marginal input fee) and the
+ * fee is the size-based estimate for (inputs, dest [+ tip]) outputs.
+ *
+ * cost(A) = A + tip(A) + fee(tip(A) > 0 ? 2 : 1 outputs) is
+ * non-decreasing in A (tip(A) is: 0 below 1 PRL, then the 1 PRL floor,
+ * then 10 bps), so the max A with cost(A) ≤ S is found by binary search.
+ * The leftover S − cost(A) is then:
+ *   0             — the normal, exact case;
+ *   1 grain       — 10-bps region, where A + floor(A/1000) skips a value;
+ *                   the grain is added to the fee (still no change);
+ *   larger        — the tip-floor gap: S can cover A < 1 PRL with no
+ *                   tip but not A ≥ 1 PRL plus the 1 PRL tip. A is then
+ *                   1 PRL − 1 grain and the leftover returns as change
+ *                   (or is fee when below dust); `exact` is false. With
+ *                   the tip off the same coins send everything.
+ * composePearlSend with the returned amount selects the same inputs and
+ * produces the same fee (tests pin this).
+ */
+export function computeMaxSendable(opts: MaxSendableOptions): MaxSendable {
+  const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
+  if (feerate <= 0n) throw new Error("E_FEERATE");
+  const maxInputs = clampMaxInputs(opts.maxInputs);
+  const marginal = PER_INPUT_VBYTES * feerate;
+  // Coins of pending broadcasts are excluded here too, so the max always
+  // matches what composePearlSend will select.
+  const all = sortLargestFirst(excludePendingSpends(dedupeOutpoints(opts.utxos)).spendable);
+  const economic = all.filter((u) => u.valueGrains > marginal);
+  const inputs = economic.slice(0, maxInputs);
+  const S = sumGrains(inputs);
+  const zero: MaxSendable = {
+    amountGrains: 0n,
+    tipGrains: 0n,
+    feeGrains: 0n,
+    changeGrains: 0n,
+    inputs: [],
+    inputGrains: 0n,
+    exact: false,
+    capped: economic.length > maxInputs,
+    uneconomicCount: all.length - economic.length,
+    cappedOutCount: Math.max(0, economic.length - maxInputs),
+  };
+  if (inputs.length === 0) return zero;
+
+  const k = inputs.length;
+  const tipOf = (a: bigint) => (opts.includeTip ? computeTipGrains(a) : 0n);
+  const feeOf = (tip: bigint) => estimateFee(k, tip > 0n ? 2 : 1, feerate);
+  const cost = (a: bigint) => {
+    const t = tipOf(a);
+    return a + t + feeOf(t);
+  };
+  // Binary search the largest A in [0, S] with cost(A) ≤ S.
+  let lo = 0n;
+  let hi = S;
+  if (cost(0n) > S) return zero;
+  while (lo < hi) {
+    const mid = (lo + hi + 1n) / 2n;
+    if (cost(mid) <= S) lo = mid;
+    else hi = mid - 1n;
+  }
+  const A = lo;
+  // A destination output at or below dust would not relay.
+  if (A <= DUST_LIMIT_GRAINS) return zero;
+  const tip = tipOf(A);
+  const baseOutputs = tip > 0n ? 2 : 1;
+  const leftover = S - cost(A);
+  let fee = feeOf(tip);
+  let change = 0n;
+  if (leftover > 0n) {
+    // Same rule composePearlSend applies: a change output only when it
+    // is at least dust after paying for itself.
+    const withChange = S - A - tip - estimateFee(k, baseOutputs + 1, feerate);
+    if (withChange >= DUST_LIMIT_GRAINS) {
+      change = withChange;
+      fee = estimateFee(k, baseOutputs + 1, feerate);
+    } else {
+      fee += leftover;
+    }
+  }
+  if (A + tip + fee + change !== S) throw new Error("E_MAX_INVARIANT");
+  return {
+    ...zero,
+    amountGrains: A,
+    tipGrains: tip,
+    feeGrains: fee,
+    changeGrains: change,
+    inputs,
+    inputGrains: S,
+    exact: change === 0n,
+  };
+}
+
 
 /** Caller-side helper that re-tries composePearlSend with the hard
  *  maximum walk depth. Use after catching an InsufficientFundsError
@@ -285,7 +630,8 @@ async function signAndBroadcast(
       vout: u.vout,
       valueGrains: u.valueGrains.toString(),
       scriptHex: u.scriptHex,
-      poolIndex: u.poolIndex,
+      branch: u.branch,
+      index: u.index,
     })),
     outputs: composed.outputs.map((o) => ({
       address: o.address,
@@ -294,8 +640,29 @@ async function signAndBroadcast(
     network,
   };
   const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
-  const txid = await broadcastPearlTx(raw);
+  const txid = await broadcastRecordingSpends(raw, composed.utxos);
   return { txid, composed };
+}
+
+/**
+ * Broadcasts a signed tx and records its inputs as pending spends
+ * (services/pending-spends.ts) so no later send or consolidation batch
+ * picks them while the walk may still show them. A status-unknown
+ * broadcast is recorded too — the tx may well be in the mempool. A
+ * definite rejection records nothing.
+ */
+export async function broadcastRecordingSpends(
+  raw: string,
+  inputs: readonly { txid: string; vout: number }[],
+): Promise<string> {
+  try {
+    const txid = await broadcastPearlTx(raw);
+    recordPendingSpends(txid, inputs);
+    return txid;
+  } catch (e) {
+    if (e instanceof BroadcastStatusUnknownError) recordPendingSpends(e.txid, inputs);
+    throw e;
+  }
 }
 
 /**

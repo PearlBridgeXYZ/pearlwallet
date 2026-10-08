@@ -13,19 +13,120 @@ export const ETH_COIN_TYPE = 60;
 export const DEFAULT_PEARL_PATH = `m/86'/${PEARL_COIN_TYPE}'/0'/0/0`;
 export const DEFAULT_ETH_PATH = `m/44'/${ETH_COIN_TYPE}'/0'/0/0`;
 
-// Number of external receive addresses to derive and track per wallet.
-// Pearl L1 is UTXO-based: a user funding their wallet from oyster (or any
-// HD wallet that advances the receive index per `getnewaddress` call) will
-// hold balances across multiple addresses. Mirroring BIP-44's standard
-// gap-limit convention, we derive RECEIVE_GAP_LIMIT external addresses on
-// every create/restore/unlock and aggregate balances across all of them.
+// Initial address window per branch, and the BIP-44 gap limit. Pearl L1
+// is UTXO-based: a user funding their wallet from oyster (or any HD wallet
+// that advances the receive index per `getnewaddress` call) will hold
+// balances across multiple addresses. We derive RECEIVE_GAP_LIMIT
+// addresses per branch on create/restore (more on unlock if discovery
+// previously found more) and services/discovery.ts extends each branch
+// until RECEIVE_GAP_LIMIT consecutive addresses are unused.
 export const RECEIVE_GAP_LIMIT = 20;
 
 export function pearlReceivePath(index: number): string {
-  if (!Number.isInteger(index) || index < 0) {
-    throw new Error(`pearlReceivePath: bad index ${index}`);
+  return pearlBranchPath(PEARL_EXTERNAL_BRANCH, index);
+}
+
+// ─── BIP-86 account branches (v0.7 address discovery) ────────────────────
+//
+// BIP-44-style chains under the single-sig account m/86'/808276'/0':
+//   branch 0 = external (receive addresses shown to payers)
+//   branch 1 = internal (change). The Pearl reference wallet (oyster, and
+//              the desktop wallet built on it) pays change to branch 1, so a
+//              seed that has ever sent PRL from there holds coins at
+//              m/86'/808276'/0'/1/i. Both branches are plain BIP-86 P2TR.
+//
+// Discovery (services/discovery.ts) walks each branch until
+// DISCOVERY_GAP_LIMIT consecutive addresses have no history, never past
+// MAX_ADDRESSES_PER_BRANCH.
+//
+// KNOWN GAP (not emulated): btcutil hdkeychain issue #172. Oyster derives
+// the hardened purpose'/coin'/account' levels with DeriveNonStandard, which
+// for the ~2/256 of seeds where an intermediate private key has a leading
+// zero byte (shorter than 32 bytes) yields a different subtree than BIP-32
+// (and @scure/bip32). For those seeds every address here differs from the
+// one oyster shows, so their funds are not found. Emulating the
+// non-standard derivation is a separate, attended change.
+export type HdBranch = 0 | 1;
+export const PEARL_EXTERNAL_BRANCH: HdBranch = 0;
+export const PEARL_INTERNAL_BRANCH: HdBranch = 1;
+export const PEARL_SINGLESIG_ACCOUNT = 0;
+
+/** Consecutive unused addresses that end discovery on a branch (BIP-44). */
+export const DISCOVERY_GAP_LIMIT = RECEIVE_GAP_LIMIT;
+/** Hard safety cap on addresses derived/scanned per branch. */
+export const MAX_ADDRESSES_PER_BRANCH = 1000;
+/** Upper bound on one worker derivation request. */
+export const MAX_DERIVE_BATCH = 200;
+/** Non-hardened BIP-32 child index ceiling (exclusive). */
+const NON_HARDENED_LIMIT = 0x80000000;
+
+export function isHdBranch(b: unknown): b is HdBranch {
+  return b === 0 || b === 1;
+}
+
+function checkChildIndex(fn: string, index: number): void {
+  if (!Number.isInteger(index) || index < 0 || index >= NON_HARDENED_LIMIT) {
+    throw new Error(`${fn}: bad index ${index}`);
   }
-  return `m/86'/${PEARL_COIN_TYPE}'/0'/0/${index}`;
+}
+
+/** Account-level path for a BIP-86 coin type (account is hardened). */
+export function bip86AccountPath(coinType: number, account = 0): string {
+  checkChildIndex("bip86AccountPath", coinType);
+  checkChildIndex("bip86AccountPath", account);
+  return `m/86'/${coinType}'/${account}'`;
+}
+
+/** Full BIP-86 path m/86'/coin'/account'/branch/index. Parametrised by
+ *  coin type so the official BIP-86 vectors (coin type 0) can be asserted
+ *  with the exact code path Pearl (coin type 808276) uses. */
+export function bip86Path(coinType: number, branch: HdBranch, index: number, account = 0): string {
+  if (!isHdBranch(branch)) throw new Error(`bip86Path: bad branch ${String(branch)}`);
+  checkChildIndex("bip86Path", index);
+  return `${bip86AccountPath(coinType, account)}/${branch}/${index}`;
+}
+
+/** Pearl single-sig account node path: m/86'/808276'/0'. */
+export function pearlAccountPath(): string {
+  return bip86AccountPath(PEARL_COIN_TYPE, PEARL_SINGLESIG_ACCOUNT);
+}
+
+/** Pearl single-sig address path: m/86'/808276'/0'/{branch}/{index}. */
+export function pearlBranchPath(branch: HdBranch, index: number): string {
+  return bip86Path(PEARL_COIN_TYPE, branch, index, PEARL_SINGLESIG_ACCOUNT);
+}
+
+/**
+ * Public-only account node (no private key) for address derivation.
+ * Non-hardened children of a public parent equal those of the private
+ * parent, so addresses match private derivation exactly.
+ */
+export function publicAccountNode(master: HDKey, accountPath: string): HDKey {
+  const acct = master.derive(accountPath);
+  const pub = HDKey.fromExtendedKey(acct.publicExtendedKey);
+  acct.wipePrivateData();
+  return pub;
+}
+
+/** Compressed (33-byte) pubkeys at account/branch/[start, start+count). */
+export function branchPubkeys(
+  account: HDKey,
+  branch: HdBranch,
+  start: number,
+  count: number,
+): Uint8Array[] {
+  if (!isHdBranch(branch)) throw new Error(`branchPubkeys: bad branch ${String(branch)}`);
+  checkChildIndex("branchPubkeys", start);
+  if (!Number.isInteger(count) || count < 0) throw new Error(`branchPubkeys: bad count ${count}`);
+  checkChildIndex("branchPubkeys", start + Math.max(0, count - 1));
+  const chain = account.deriveChild(branch);
+  const out: Uint8Array[] = [];
+  for (let i = start; i < start + count; i++) {
+    const node = chain.deriveChild(i);
+    if (!node.publicKey) throw new Error(`HD derivation failed at branch ${branch} index ${i}`);
+    out.push(node.publicKey);
+  }
+  return out;
 }
 
 // Multisig pubkey derivation. We use a dedicated `account'` of 100 to

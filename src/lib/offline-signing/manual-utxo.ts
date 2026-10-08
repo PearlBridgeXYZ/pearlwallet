@@ -11,8 +11,10 @@
 //   txid:vout:amountGrains:poolIndex
 //   txid:vout:amountGrains:poolIndex:scriptHex
 //
-// The poolIndex names which receive-pool address held this coin (so the
-// signer knows which key to use). The scriptHex is optional — when
+// The poolIndex names which wallet address held this coin (so the signer
+// knows which key to use): a bare index `i` is the external (receive)
+// branch, `1/i` is the internal (change) branch, `0/i` is explicit
+// external. The scriptHex is optional — when
 // omitted, the UI fills it in from the wallet's known pool scripts.
 // (This module is pure parsing; the UI does the script lookup before
 // handing the result to the payload encoder.)
@@ -27,9 +29,14 @@ export interface ParsedManualUtxo {
   /** Decimal string (grains). */
   valueGrains: string;
   poolIndex: number;
+  /** HD branch; absent = 0 (external). */
+  branch?: 0 | 1;
   /** Optional — UI fills in if missing. */
   scriptHex?: string;
 }
+
+/** Highest accepted manual index (exclusive) — the discovery cap. */
+export const MANUAL_MAX_INDEX = 1000;
 
 export interface ManualUtxoError {
   /** 1-based line number of the offending row (matches the user's editor). */
@@ -81,11 +88,16 @@ export function parseManualUtxos(raw: string): ManualUtxoParseResult {
       errors.push({ line: lineNum, message: "amount must be > 0 — a zero-value UTXO is a footgun" });
       continue;
     }
-    const poolIndex = Number.parseInt(poolRaw!, 10);
-    if (!Number.isInteger(poolIndex) || poolIndex < 0 || poolIndex > 99) {
-      errors.push({ line: lineNum, message: "poolIndex must be 0..99" });
+    const idxMatch = /^(?:([01])\/)?([0-9]{1,4})$/.exec(poolRaw!);
+    const poolIndex = idxMatch ? Number.parseInt(idxMatch[2]!, 10) : NaN;
+    if (!idxMatch || !Number.isInteger(poolIndex) || poolIndex < 0 || poolIndex >= MANUAL_MAX_INDEX) {
+      errors.push({
+        line: lineNum,
+        message: `poolIndex must be 0..${MANUAL_MAX_INDEX - 1}, optionally prefixed 0/ (receive) or 1/ (change)`,
+      });
       continue;
     }
+    const branch: 0 | 1 = idxMatch[1] === "1" ? 1 : 0;
     let scriptHex: string | undefined;
     if (scriptRaw !== undefined && scriptRaw !== "") {
       const s = scriptRaw.toLowerCase();
@@ -110,6 +122,7 @@ export function parseManualUtxos(raw: string): ManualUtxoParseResult {
       valueGrains: amountRaw!,
       poolIndex,
     };
+    if (branch === 1) entry.branch = 1;
     if (scriptHex !== undefined) entry.scriptHex = scriptHex;
     utxos.push(entry);
   }

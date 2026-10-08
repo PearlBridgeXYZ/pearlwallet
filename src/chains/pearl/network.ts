@@ -40,13 +40,17 @@ export const PEARL_MAINNET: PearlNetworkParams = {
 // sentry slots in via DNS alone.
 //
 // CSP `connect-src` (public/_headers) and the override allowlist
-// (state/ui-store.ts) must list the SAME hosts — otherwise the browser
-// blocks the fetch at runtime and rotation can't compensate.
+// (state/ui-store.ts) must list every host in this pool — otherwise the
+// browser blocks the fetch at runtime and rotation can't compensate.
+//
+// v0.7: the three direct sentry hostnames (pearl-sentry-{fsn1,nbg1,hel1}-1)
+// were removed — they have never resolved (NXDOMAIN), so rotating to them
+// only converted a busy primary into "Pearl RPC unreachable". A busy
+// primary is now handled by backoff-and-retry in services/pearl-rpc.ts.
+// Re-add hosts here once they resolve and serve the sentry allowlist.
+// (They remain in the CSP and override allowlist, which is harmless.)
 export const PEARL_RPC_POOL: readonly string[] = [
   "https://rpc.pearlbridge.xyz/",
-  "https://pearl-sentry-fsn1-1.pearlbridge.xyz/rpc",
-  "https://pearl-sentry-nbg1-1.pearlbridge.xyz/rpc",
-  "https://pearl-sentry-hel1-1.pearlbridge.xyz/rpc",
 ];
 
 /** Public block-explorer URL for a confirmed Pearl tx. */

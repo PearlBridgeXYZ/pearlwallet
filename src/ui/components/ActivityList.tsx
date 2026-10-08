@@ -14,28 +14,37 @@ interface Props {
   truncate?: boolean;
   /** Optional filter: "all" | "prl" | "wprl". */
   filter?: "all" | "prl" | "wprl";
+  /** Defer the scan (Dashboard holds it until the first balance scan
+   *  settles so the two don't compete for the RPC budget). */
+  enabled?: boolean;
 }
 
-export default function ActivityList({ limit = 25, truncate = false, filter = "all" }: Props) {
+export default function ActivityList({ limit = 25, truncate = false, filter = "all", enabled = true }: Props) {
   const addresses = useWallet((s) => s.addresses);
   const ethNetwork = useWallet((s) => s.ethNetwork);
+
+  // Both single-sig branches: without the change branch a send would be
+  // shown as spending its change too.
+  const pearlAll = addresses
+    ? [...(addresses.pearlPool ?? [addresses.pearl]), ...(addresses.pearlChange ?? [])]
+    : [];
 
   const activityQ = useQuery({
     queryKey: [
       "activity",
-      addresses?.pearlPool?.join(",") ?? addresses?.pearl,
+      pearlAll.join(","),
       addresses?.eth,
       ethNetwork,
       limit,
     ],
     queryFn: () =>
       fetchActivity(
-        addresses!.pearlPool ?? [addresses!.pearl],
+        pearlAll,
         addresses!.eth as `0x${string}`,
         ethNetwork,
         limit,
       ),
-    enabled: !!addresses,
+    enabled: !!addresses && enabled,
     // Activity is more expensive than balances (pool walk + getLogs).
     // Refetch every 90s — fast enough to catch a fresh receive, slow
     // enough not to hammer the public sentry / public Eth RPC.
@@ -45,7 +54,7 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
 
   if (!addresses) return null;
 
-  if (activityQ.isLoading) {
+  if (activityQ.isLoading || (!enabled && !activityQ.data)) {
     return <p role="status" className="border-b border-line py-5 text-sm text-text-3">Scanning Pearl + Eth for recent activity…</p>;
   }
 

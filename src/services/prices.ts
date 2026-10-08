@@ -31,12 +31,30 @@ interface PriceProxyResponse {
   n_active_asks: number;
 }
 
+/** Client-side timeout for the price proxy. A hung request must not hold
+ *  the dashboard total hostage. */
+export const PRICE_FETCH_TIMEOUT_MS = 10_000;
+
 export async function fetchPrlPrice(): Promise<PrlPrice> {
-  const res = await fetch("/api/prl-price", {
-    headers: { accept: "application/json" },
-  });
-  if (!res.ok) throw new Error(`price http ${res.status}`);
-  const body = (await res.json()) as PriceProxyResponse;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), PRICE_FETCH_TIMEOUT_MS);
+  let body: PriceProxyResponse;
+  try {
+    let res: Response;
+    try {
+      res = await fetch("/api/prl-price", {
+        headers: { accept: "application/json" },
+        signal: ctrl.signal,
+      });
+    } catch (err) {
+      if (ctrl.signal.aborted) throw new Error(`price timeout after ${PRICE_FETCH_TIMEOUT_MS}ms`);
+      throw err;
+    }
+    if (!res.ok) throw new Error(`price http ${res.status}`);
+    body = (await res.json()) as PriceProxyResponse;
+  } finally {
+    clearTimeout(timer);
+  }
   if (typeof body.usd_per_prl !== "number" || !isFinite(body.usd_per_prl) || body.usd_per_prl <= 0) {
     throw new Error("price: invalid response");
   }

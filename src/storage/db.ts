@@ -26,6 +26,12 @@ export interface KeystoreRecord {
     // External receive pool. Optional for forward-compat with v0.1.2 records
     // saved before multi-address support; missing → re-derived on next unlock.
     pearlAddressPool?: string[];
+    // v0.7: internal/change branch (m/86'/808276'/0'/1/i), ordered by
+    // index. Optional + non-indexed: records saved before v0.7 lack it and
+    // get it on the next unlock (no Dexie version bump, no data loss).
+    // Both pools may grow past 20 as address discovery finds used
+    // addresses; unlock re-derives exactly the persisted counts.
+    pearlChangePool?: string[];
     ethAddress: string;
     pearlNetwork: PearlNetwork;
     ethNetwork: EthNetwork;
@@ -224,6 +230,9 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   "pearl-wallet-ui-v4",
   "pearl-wallet-ui-v5",
   "pearl-wallet-ui-v6", // current (v0.2.8 — see ui-store STORAGE_KEY)
+  // Outpoints of recent broadcasts (services/pending-spends.ts) — public
+  // chain data, but it reveals which coins this wallet holds.
+  "pearl-wallet-pending-spends-v1",
 ];
 const UI_STORAGE_KEY_RE = /^pearl-wallet-ui-v\d+$/;
 

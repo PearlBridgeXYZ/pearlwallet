@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import InstallPWA from "../components/InstallPWA";
 import { useWallet } from "../../state/wallet-store";
@@ -595,6 +595,18 @@ export default function Settings() {
           {ethRpcStatus && <p className="mt-3 text-sm leading-7 text-text-2">{ethRpcStatus}</p>}
         </section>
       )}
+
+      <section className="card mb-6">
+        <h2 className="border-b border-line pb-3 text-lg font-semibold">Combine small coins</h2>
+        <p className="mt-3 text-sm leading-7 text-text-2">
+          Many small PRL coins (for example mining payouts) make sends larger, and one
+          transaction can spend at most 500 of them. Combine them into a few large coins at
+          your own address. Only the network fee is spent, no tip.
+        </p>
+        <Link to="/consolidate" className="btn-secondary tap mt-4 inline-flex">
+          Combine small coins
+        </Link>
+      </section>
 
       <section className="card mb-6">
         <h2 className="border-b border-line pb-3 text-lg font-semibold">Optional developer tip</h2>
