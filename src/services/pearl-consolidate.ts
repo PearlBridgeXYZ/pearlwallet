@@ -24,8 +24,10 @@
 // against those invariants and against the pending list, then signed by
 // the worker's signPearlConsolidation, which independently refuses any
 // output that is not this wallet's key at (branch, index) and any fee
-// above 2 %. Inputs are recorded as pending spends on broadcast so a
-// re-run never plans them again.
+// above 2 %. Right before submission the inputs are reserved as pending
+// spends (refused if another broadcast took one meanwhile), so a re-run
+// never plans them again. Later batches are re-checked first by
+// recheckConsolidationBatch, which re-reads only their own addresses.
 
 import {
   broadcastRecordingSpends,
@@ -37,7 +39,8 @@ import {
   type ComposedPearlTx,
   type PoolUtxo,
 } from "./pearl-tx";
-import { excludePendingSpends, outpointKey, pendingOutpoints } from "./pending-spends";
+import { assertNotPending, excludePendingSpends, outpointKey, pendingOutpoints } from "./pending-spends";
+import { walkPoolAddresses, type WalletAddressRef } from "./balances";
 import type { PearlNetwork } from "../chains/pearl/network";
 import type { HdBranch } from "../crypto/hd";
 import { cryptoWorker } from "../crypto/worker-client";
@@ -107,6 +110,10 @@ export interface ComposeConsolidationOptions {
   /** Inputs per tx (default and ceiling CONSOLIDATION_MAX_INPUTS). */
   maxInputs?: number;
   now?: number;
+  /** Coins of pending broadcasts the caller already removed from `utxos`
+   *  (e.g. the live walk splits them off); added to `pendingExcluded` so
+   *  the plan still explains them. */
+  pendingAlreadyExcluded?: number;
 }
 
 /** Fee to add one key-path input at `feerate` (57.5 vB, rounded up). */
@@ -225,7 +232,7 @@ export function composeConsolidation(opts: ComposeConsolidationOptions): Consoli
     dust: { count: dustCoins.length, grains: sum(dustCoins) },
     uneconomic,
     leftover,
-    pendingExcluded: pending.length,
+    pendingExcluded: pending.length + Math.max(0, opts.pendingAlreadyExcluded ?? 0),
     totalInputGrains,
     totalFeeGrains,
     totalReceiveGrains,
@@ -297,6 +304,47 @@ export function verifyBatchStillSpendable(
   }
 }
 
+/** Known single-sig addresses by branch, ordered by index. */
+export interface ConsolidationAddressBook {
+  external: readonly string[];
+  internal: readonly string[];
+}
+
+/**
+ * Re-reads ONLY the addresses that hold this batch's coins (not the whole
+ * wallet), checks every input with verifyBatchStillSpendable, and returns
+ * the time the last of those reads finished — the batch's new review
+ * clock. Throws E_CONSOLIDATION_RECHECK_INCOMPLETE when an address can't
+ * be read completely (RPC failure or page cap): an incomplete history
+ * can't prove a coin unspent.
+ */
+export async function recheckConsolidationBatch(
+  b: ConsolidationBatch,
+  book: ConsolidationAddressBook,
+  opts: { signal?: AbortSignal; now?: () => number } = {},
+): Promise<number> {
+  const refs: WalletAddressRef[] = [];
+  const seen = new Set<string>();
+  for (const u of b.utxos) {
+    const id = `${u.branch}/${u.index}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const address = (u.branch === 1 ? book.internal : book.external)[u.index];
+    if (!address) throw new Error("E_CONSOLIDATION_RECHECK_INCOMPLETE");
+    refs.push({ address, branch: u.branch, index: u.index });
+  }
+  const results = await walkPoolAddresses(refs, { signal: opts.signal, priority: "high" });
+  const fresh: PoolUtxo[] = [];
+  results.forEach((r, i) => {
+    if (r.status !== "ok" || r.capped) throw new Error("E_CONSOLIDATION_RECHECK_INCOMPLETE");
+    const ref = refs[i]!;
+    for (const u of r.utxos) fresh.push({ ...u, branch: ref.branch, index: ref.index });
+  });
+  const at = (opts.now ?? Date.now)();
+  verifyBatchStillSpendable(b, fresh, at);
+  return at;
+}
+
 /** A batch as shown to the user, stamped with when its coins were last
  *  verified (plan time for the first batch, re-scan time for later ones). */
 export interface FrozenConsolidationBatch {
@@ -325,8 +373,13 @@ export async function broadcastConsolidationBatch(
   if (now - frozen.verifiedAt > PEARL_PREVIEW_FRESHNESS_MS) throw new Error("E_PREVIEW_STALE");
   const b = frozen.batch;
   assertConsolidationBatch(b);
-  const pending = pendingOutpoints(now);
-  if (b.utxos.some((u) => pending.has(outpointKey(u)))) throw new Error("E_CONSOLIDATION_INPUT_PENDING");
+  // Reservation check #1 (before signing); broadcastRecordingSpends
+  // re-checks atomically with recording right before submission.
+  try {
+    assertNotPending(b.utxos, null, now);
+  } catch {
+    throw new Error("E_CONSOLIDATION_INPUT_PENDING");
+  }
   const req: PearlConsolidationRequest = {
     utxos: b.utxos.map((u) => ({
       txid: u.txid,

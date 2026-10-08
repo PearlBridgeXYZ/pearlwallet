@@ -32,8 +32,11 @@ interface PriceProxyResponse {
 }
 
 /** Client-side timeout for the price proxy. A hung request must not hold
- *  the dashboard total hostage. */
-export const PRICE_FETCH_TIMEOUT_MS = 10_000;
+ *  the dashboard total hostage. Longer than the function's end-to-end
+ *  upstream budget (functions/api/prl-price.ts UPSTREAM_TOTAL_BUDGET_MS,
+ *  9 s for OTC + CoinGecko together) plus overhead, so a slow OTC that
+ *  falls back to CoinGecko still reaches the client. */
+export const PRICE_FETCH_TIMEOUT_MS = 12_000;
 
 export async function fetchPrlPrice(): Promise<PrlPrice> {
   const ctrl = new AbortController();

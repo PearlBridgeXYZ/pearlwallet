@@ -34,10 +34,11 @@
 // partial or remembered data anywhere Send reads from.
 //
 // RPC load: a full walk is ~40+ paced requests. Periodic refetches run in
-// refresh mode (services/discovery.ts `refresh`): addresses the last
-// complete full walk found unused, more than PRL_REFRESH_WINDOW indexes
-// past the last used one, are skipped unless the refresh sees new
-// activity. A full walk runs on the first scan, every PRL_FULL_RESCAN_MS,
+// refresh mode (services/discovery.ts `refresh`): change addresses the
+// last complete full walk found unused, more than PRL_REFRESH_WINDOW
+// indexes past the last used one, are skipped unless the refresh sees new
+// activity. External (receive) addresses use the full gap limit as their
+// window, so every address the Receive screen can show is walked. A full walk runs on the first scan, every PRL_FULL_RESCAN_MS,
 // and on every manual refetch (Retry / rescan). The in-memory state lives
 // in state/balance-memory.ts and is cleared on lock, wipe and wallet
 // switch.
@@ -58,6 +59,7 @@ import {
   type PrlWalletScan,
   type ScanRefresh,
 } from "../../services/discovery";
+import { DISCOVERY_GAP_LIMIT } from "../../crypto/hd";
 import {
   clearBalanceMemory,
   getProgress,
@@ -115,9 +117,14 @@ export const PRL_SCAN_REFETCH_MS = 120_000;
 /** A refresh-mode scan becomes a full walk once the last full walk is
  *  this old. */
 export const PRL_FULL_RESCAN_MS = 10 * 60_000;
-/** Unused addresses within this many indexes past the last used one are
- *  walked on every refresh (where new payments are most likely to land). */
+/** Change-branch addresses within this many indexes past the last used one
+ *  are walked on every refresh (change is assigned sequentially). */
 export const PRL_REFRESH_WINDOW = 5;
+/** External-branch window: the whole gap limit. Discovery keeps the
+ *  external list at last used + DISCOVERY_GAP_LIMIT, and Receive offers
+ *  every address on it, so every address a payer may have been given is
+ *  walked on every refresh. */
+export const PRL_REFRESH_WINDOW_EXTERNAL = DISCOVERY_GAP_LIMIT;
 export const ETH_REFETCH_MS = 30_000;
 export const PRICE_REFETCH_MS = 60_000;
 
@@ -135,7 +142,11 @@ export function planPrlScan(
 ): ScanRefresh | undefined {
   if (forceFull || !baseline) return undefined;
   if (now - baseline.fullAt >= PRL_FULL_RESCAN_MS) return undefined;
-  return { lastUsed: baseline.lastUsed, knownUnused: baseline.knownUnused, window: PRL_REFRESH_WINDOW };
+  return {
+    lastUsed: baseline.lastUsed,
+    knownUnused: baseline.knownUnused,
+    window: [PRL_REFRESH_WINDOW_EXTERNAL, PRL_REFRESH_WINDOW],
+  };
 }
 
 /**
@@ -214,6 +225,10 @@ export function derivePrlState(
       unknown++;
     }
   });
+  // Scan-level incompleteness (discovery cap, derive failure, no deriver,
+  // page caps): the total is a lower bound even if every address read ok.
+  const wallet = scan as Partial<PrlWalletScan>;
+  if (scan.degraded || (wallet.discovery !== undefined && !wallet.discovery.complete)) degraded = true;
   const n = scan.perAddress.length;
   const error = firstError ?? (queryError ? errMsg(queryError) : undefined);
   if (unknown > n / 2) {

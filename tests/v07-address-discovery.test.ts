@@ -29,7 +29,7 @@ import {
 import { pearlAddressFromCompressedPubkey, encodeTaprootAddress, bip86Tweak } from "../src/chains/pearl/address";
 import { pearlParams, type PearlNetworkParams } from "../src/chains/pearl/network";
 import { fetchPrlUtxos } from "../src/services/pearl-rpc";
-import { scanPrlWallet, type DeriveMoreAddresses } from "../src/services/discovery";
+import { scanPrlWallet, MAX_EXTEND_PER_SCAN, type DeriveMoreAddresses } from "../src/services/discovery";
 import type { PrlPoolScanProgress } from "../src/services/balances";
 import { useUI } from "../src/state/ui-store";
 import type { HdBranch } from "../src/crypto/hd";
@@ -336,16 +336,38 @@ describe("scanPrlWallet — gap-limit discovery on both branches", () => {
   });
 
   it("default cap is 1000 per branch and derivation is batched", async () => {
-    // Every external address used → walk runs to the cap.
+    // Every external address used → walk runs to the cap (with the
+    // per-scan extension bound lifted; see the next test for the default).
     const usedAll: Record<string, MockTx[]> = {};
     for (let i = 0; i < 1000; i++) usedAll[name(0, i)] = [fund(name(0, i), 0.00001)];
     stubChain(usedAll);
     const d = deriver();
-    const scan = await scanPrlWallet({ external: list(0, 20), internal: list(1, 20) }, { deriveMore: d.fn });
+    const scan = await scanPrlWallet(
+      { external: list(0, 20), internal: list(1, 20) },
+      { deriveMore: d.fn, maxExtendPerScan: MAX_ADDRESSES_PER_BRANCH },
+    );
     expect(scan.discovered.external).toHaveLength(MAX_ADDRESSES_PER_BRANCH);
     expect(scan.discovery.reasons).toContain("cap");
     for (const [, , count] of d.calls) expect(count).toBeLessThanOrEqual(MAX_DERIVE_BATCH);
     expect(DISCOVERY_GAP_LIMIT).toBe(20);
+  });
+
+  it("one scan extends a branch by at most MAX_EXTEND_PER_SCAN; later scans continue (review S17)", async () => {
+    // A misbehaving RPC that reports every address as used.
+    const usedAll: Record<string, MockTx[]> = {};
+    for (let i = 0; i < 1000; i++) usedAll[name(0, i)] = [fund(name(0, i), 0.00001)];
+    stubChain(usedAll);
+    const d = deriver();
+    const first = await scanPrlWallet({ external: list(0, 20), internal: list(1, 20) }, { deriveMore: d.fn });
+    expect(MAX_EXTEND_PER_SCAN).toBe(200);
+    expect(first.discovered.external).toHaveLength(20 + MAX_EXTEND_PER_SCAN);
+    expect(first.discovery.reasons).toEqual(["extension-limit"]);
+    expect(first.discovery.complete).toBe(false);
+    expect(first.source).toBe("partial");
+    expect(first.spendable).toBeNull();
+    // The persisted list is the starting point of the next scan.
+    const second = await scanPrlWallet(first.discovered, { deriveMore: d.fn });
+    expect(second.discovered.external).toHaveLength(20 + 2 * MAX_EXTEND_PER_SCAN);
   });
 
   it("without a deriver the known set is scanned and discovery reports incomplete", async () => {

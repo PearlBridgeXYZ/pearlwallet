@@ -6,10 +6,18 @@ import {
   broadcastPearlTx,
   BroadcastStatusUnknownError,
   MAX_UTXO_WALK_PAGES_HARD,
+  rawTxId,
+  rawTxInputs,
 } from "./pearl-rpc";
 import { scanPrlPool, type PoolUtxoRecord, type PrlPoolScan } from "./balances";
 import { scanPrlWallet, type DeriveMoreAddresses } from "./discovery";
-import { excludePendingSpends, outpointKey, recordPendingSpends } from "./pending-spends";
+import {
+  assertNotPending,
+  excludePendingSpends,
+  outpointKey,
+  releasePendingSpends,
+  reservePendingSpends,
+} from "./pending-spends";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
 import type { PearlNetwork } from "../chains/pearl/network";
 import { cryptoWorker } from "../crypto/worker-client";
@@ -56,6 +64,10 @@ export interface ComposedPearlTx {
   tipGrains: bigint;
   changeGrains: bigint;
   degraded: boolean;
+  /** Addresses whose history the walk could not read to the end (page
+   *  cap). Their coins are NOT in the spendable set — an incomplete
+   *  history never funds a transaction. "Search deeper" reads more. */
+  historyIncomplete: number;
   /** Total spendable grains the walk found across the pool, regardless
    *  of how many UTXOs were ultimately picked. Surfaced so the UI can
    *  show "X PRL across N inputs" diagnostics. */
@@ -90,6 +102,10 @@ export interface ComposeOptions {
    *  cache is treated as a hint; if it's empty or doesn't satisfy
    *  the amount, fall back to a live walk. */
   cachedUtxos?: PoolUtxo[];
+  /** Flags of the walk that produced `cachedUtxos`, carried into the
+   *  result when the cache is used (a caller passing a live walk's coins,
+   *  e.g. Send max, must not have its warnings reset). */
+  cachedFrom?: { degraded: boolean; historyIncomplete: number };
   /** Override walk depth. Caller bumps this on retry after a degraded
    *  walk produced E_INSUFFICIENT_FUNDS. Clamped server-side to
    *  MAX_UTXO_WALK_PAGES_HARD. */
@@ -146,6 +162,22 @@ export class UtxoScanIncompleteError extends Error {
   }
 }
 
+/** Nothing spendable was found, but some addresses have more history than
+ *  the walk read (page cap). Their coins can't be used until a deeper walk
+ *  reads the whole history. */
+export class HistoryIncompleteError extends Error {
+  readonly code = "E_HISTORY_INCOMPLETE" as const;
+  constructor(
+    readonly incompleteAddresses: number,
+    readonly addressesScanned: number,
+  ) {
+    super(
+      `E_HISTORY_INCOMPLETE: ${incompleteAddresses} of ${addressesScanned} addresses have more history than was read — search deeper`,
+    );
+    this.name = "HistoryIncompleteError";
+  }
+}
+
 /** The walk read every address and found no coin this wallet can spend
  *  right now. `pendingCount` coins exist but are already being spent by
  *  a recent broadcast from this wallet. */
@@ -189,14 +221,16 @@ export interface SpendableUtxoSet {
   /** Coins the walk returned that a recent broadcast already spends. */
   pending: PoolUtxo[];
   degraded: boolean;
+  /** Page-capped addresses left out of `utxos` (see ComposedPearlTx). */
+  historyIncomplete: number;
   addressesScanned: number;
+  /** When the walk's LAST per-address result was read. */
   fetchedAt: number;
 }
 
 async function listPoolUtxos(
   opts: Pick<ComposeOptions, "pool" | "changePool" | "deriveMore" | "onDiscovered" | "maxPages">,
 ): Promise<SpendableUtxoSet> {
-  const fetchedAt = Date.now();
   // v0.7: pacing comes from the shared Pearl RPC token bucket; a few
   // addresses walk in parallel. With a change branch supplied the walk
   // is the same gap-limit discovery scan the dashboard runs.
@@ -220,20 +254,34 @@ async function listPoolUtxos(
   } else {
     scan = await scanPrlPool(opts.pool, { maxPages: opts.maxPages });
   }
+  // Review clock: starts when the last address was read, not when the
+  // walk began (a paced walk of a big wallet takes minutes).
+  const fetchedAt = scan.finishedAt;
   // Mirror balances.ts tolerance — a single pool address being
   // unavailable shouldn't deny the user spending from the rest; the
   // result is flagged degraded so a shortfall offers a deeper retry.
+  // An address whose history was cut off by the page cap is different:
+  // its set may list coins spent on a page we never read, so none of its
+  // coins are offered at all.
   const out: PoolUtxo[] = [];
+  let historyIncomplete = 0;
   scan.perAddress.forEach((r, i) => {
     if (r.status !== "ok") return;
+    if (r.capped) {
+      historyIncomplete++;
+      return;
+    }
     const ref = scan.refs[i]!;
     for (const u of r.utxos) out.push({ ...u, branch: ref.branch, index: ref.index });
   });
-  const degraded = scan.degraded || scan.failures > 0;
+  const degraded = scan.degraded || scan.failures > 0 || historyIncomplete > 0;
   // Nothing found AND some addresses could not be read: that is an RPC
   // problem, not an empty wallet. Say so instead of E_NO_UTXOS.
   if (out.length === 0 && scan.failures > 0) {
     throw new UtxoScanIncompleteError(scan.failures, scan.pool.length);
+  }
+  if (out.length === 0 && historyIncomplete > 0) {
+    throw new HistoryIncompleteError(historyIncomplete, scan.pool.length);
   }
   // We don't have on-chain confirmation height in the UTXO walk so we
   // can't filter unconfirmed; the sentry-side mempool view already
@@ -245,6 +293,7 @@ async function listPoolUtxos(
     utxos: sortLargestFirst(spendable),
     pending,
     degraded,
+    historyIncomplete,
     addressesScanned: scan.pool.length,
     fetchedAt,
   };
@@ -391,14 +440,18 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
   // cache shows.
   let avail: PoolUtxo[] = [];
   let degraded = false;
+  let historyIncomplete = 0;
   let selection: CoinSelection | null = null;
   const cache = opts.cachedUtxos;
   if (cache && cache.length > 0) {
     const cached = sortLargestFirst(excludePendingSpends(dedupeOutpoints(cache)).spendable);
+    const cachedDegraded = opts.cachedFrom?.degraded ?? false;
     if (cached.length > 0) {
       try {
-        selection = selectCoins(cached, opts.amountGrains, tipGrains, feerate, maxInputs, opts.includeTip, false);
+        selection = selectCoins(cached, opts.amountGrains, tipGrains, feerate, maxInputs, opts.includeTip, cachedDegraded);
         avail = cached;
+        degraded = cachedDegraded;
+        historyIncomplete = opts.cachedFrom?.historyIncomplete ?? 0;
       } catch {
         selection = null;
       }
@@ -409,6 +462,7 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
     const live = await listPoolUtxos(opts);
     avail = live.utxos;
     degraded = live.degraded;
+    historyIncomplete = live.historyIncomplete;
     if (avail.length === 0) {
       throw new NoSpendableCoinsError(live.addressesScanned, live.pending.length, live.degraded);
     }
@@ -447,6 +501,7 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
     tipGrains,
     changeGrains,
     degraded,
+    historyIncomplete,
     spendableGrains: sumGrains(avail),
     spendableUtxoCount: avail.length,
   };
@@ -624,6 +679,9 @@ async function signAndBroadcast(
   composed: ComposedPearlTx,
   network: PearlNetwork,
 ): Promise<SendPearlResult> {
+  // Reservation check #1, before any signing: a coin another broadcast
+  // (this tab or another) already spends is refused, never re-signed.
+  assertNotPending(composed.utxos);
   const req: PearlTxRequest = {
     utxos: composed.utxos.map((u) => ({
       txid: u.txid,
@@ -638,6 +696,8 @@ async function signAndBroadcast(
       amountGrains: o.amountGrains.toString(),
     })),
     network,
+    // The signer refuses a tx paying more than the fee the user reviewed.
+    maxFeeGrains: composed.feeGrains.toString(),
   };
   const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
   const txid = await broadcastRecordingSpends(raw, composed.utxos);
@@ -645,24 +705,38 @@ async function signAndBroadcast(
 }
 
 /**
- * Broadcasts a signed tx and records its inputs as pending spends
- * (services/pending-spends.ts) so no later send or consolidation batch
- * picks them while the walk may still show them. A status-unknown
- * broadcast is recorded too — the tx may well be in the mempool. A
- * definite rejection records nothing.
+ * The one broadcast path for every Pearl spend (Send, consolidation,
+ * offline broadcast). Immediately before submitting, the inputs are
+ * reserved as pending spends of this tx (services/pending-spends.ts) —
+ * refused with PendingSpendConflictError if a different recent broadcast
+ * already spends one of them — so no later send or consolidation batch
+ * picks them while the walk may still show them. Success and a
+ * status-unknown broadcast keep the reservation (the tx may well be in
+ * the mempool); a definite rejection releases it.
  */
 export async function broadcastRecordingSpends(
   raw: string,
   inputs: readonly { txid: string; vout: number }[],
 ): Promise<string> {
+  const localTxid = rawTxId(raw);
+  const added = reservePendingSpends(localTxid, inputs);
   try {
-    const txid = await broadcastPearlTx(raw);
-    recordPendingSpends(txid, inputs);
-    return txid;
+    return await broadcastPearlTx(raw);
   } catch (e) {
-    if (e instanceof BroadcastStatusUnknownError) recordPendingSpends(e.txid, inputs);
+    if (!(e instanceof BroadcastStatusUnknownError)) releasePendingSpends(added, localTxid);
     throw e;
   }
+}
+
+/**
+ * Broadcasts a transaction signed elsewhere (offline signing). Its inputs
+ * are decoded from the raw tx itself and go through the same reservation
+ * as every other broadcast; a raw tx that can't be decoded is refused.
+ */
+export async function broadcastSignedPearlTx(raw: string): Promise<string> {
+  const inputs = rawTxInputs(raw);
+  if (!inputs || !rawTxId(raw)) throw new Error("E_RAW_TX_PARSE: the signed transaction could not be decoded");
+  return broadcastRecordingSpends(raw, inputs);
 }
 
 /**
@@ -679,6 +753,8 @@ export async function broadcastPearlPrecomposed(
   if (now - frozen.composedAt > PEARL_PREVIEW_FRESHNESS_MS) {
     throw new Error("E_PREVIEW_STALE");
   }
+  // signAndBroadcast re-checks the pending list before signing and again
+  // (atomically with recording) right before submission.
   return await signAndBroadcast(frozen.composed, network);
 }
 

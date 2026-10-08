@@ -25,12 +25,15 @@ import AnimatedPayloadQR from "../components/AnimatedPayloadQR";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { cryptoWorker } from "../../crypto/worker-client";
-import { composePearlSend } from "../../services/pearl-tx";
-import { broadcastPearlTx } from "../../services/pearl-rpc";
+import { broadcastSignedPearlTx, composePearlSend } from "../../services/pearl-tx";
+import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
+import { PendingSpendConflictError } from "../../services/pending-spends";
 import type { PearlNetwork } from "../../chains/pearl/network";
 import {
+  checkPearlUnsignedFee,
   decodePayload,
   encodePayload,
+  pearlUnsignedVersion,
   type PearlSignedPayload,
   type PearlUnsignedPayload,
 } from "../../lib/offline-signing/payload";
@@ -69,8 +72,8 @@ export default function OfflineSign() {
   return (
     <Page title="Offline signing">
       <p className="mb-6 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-relaxed text-warn">
-        Experimental. The wire format is v1 and may evolve — keep all
-        machines in your offline-signing flow on matching wallet versions.
+        Experimental. The wire format may evolve — keep all machines in your
+        offline-signing flow on matching wallet versions.
       </p>
       <div className="mb-6 grid grid-cols-3 gap-1 rounded-pb bg-surface-2 p-1">
         {(["compose", "sign", "broadcast"] as const).map((t) => (
@@ -159,18 +162,19 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         amountGrains,
         includeTip: false,
       });
+      const utxos: PearlUnsignedPayload["utxos"] = composed.utxos.map((u) => ({
+        txid: u.txid,
+        vout: u.vout,
+        valueGrains: u.valueGrains.toString(),
+        scriptHex: u.scriptHex,
+        poolIndex: u.index,
+        ...(u.branch === 1 ? { branch: 1 as const } : {}),
+      }));
       const p: PearlUnsignedPayload = {
-        v: 1,
+        v: pearlUnsignedVersion(utxos),
         k: "pearl-unsigned",
         network,
-        utxos: composed.utxos.map((u) => ({
-          txid: u.txid,
-          vout: u.vout,
-          valueGrains: u.valueGrains.toString(),
-          scriptHex: u.scriptHex,
-          poolIndex: u.index,
-          ...(u.branch === 1 ? { branch: 1 as const } : {}),
-        })),
+        utxos,
         outputs: composed.outputs.map((o) => ({
           address: o.address,
           amountGrains: o.amountGrains.toString(),
@@ -267,7 +271,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         outputs.push({ address: changeAddr, amountGrains: changeGrains.toString() });
       }
       const p: PearlUnsignedPayload = {
-        v: 1,
+        v: pearlUnsignedVersion(filledUtxos),
         k: "pearl-unsigned",
         network,
         utxos: filledUtxos,
@@ -403,6 +407,13 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
               onClick={(e) => (e.target as HTMLTextAreaElement).select()}
             />
           </label>
+          {payload.v === 2 && (
+            <p className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-xs leading-relaxed text-warn">
+              This transaction spends coins on change addresses, so the payload uses format
+              v2. The offline signer must run this wallet version (v0.7) or newer; an older
+              signer refuses it with E_PAYLOAD_VERSION instead of signing.
+            </p>
+          )}
           <div className="mt-2 break-all font-mono text-xs leading-relaxed text-text-3">
             {encoded.length.toLocaleString()} chars · {payload.utxos.length} input(s) ·{" "}
             {payload.outputs.length} output(s)
@@ -429,11 +440,16 @@ function SignTab({ network, pool }: SignTabProps) {
   const [signed, setSigned] = useState<PearlSignedPayload | null>(null);
   const [signError, setSignError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Fee the payload really pays, from its inputs and outputs. meta.feeGrains
+  // is watcher-supplied display text and is never what we show as the fee.
+  const feeCheck = useMemo(() => (decoded ? checkPearlUnsignedFee(decoded) : null), [decoded]);
+  const [feeAck, setFeeAck] = useState(false);
 
   function doDecode() {
     setDecodeError(null);
     setSigned(null);
     setSignError(null);
+    setFeeAck(false);
     try {
       const p = decodePayload(inputText);
       if (p.k !== "pearl-unsigned") {
@@ -461,6 +477,9 @@ function SignTab({ network, pool }: SignTabProps) {
       if (status !== "unlocked") {
         throw new Error("Wallet must be unlocked to sign");
       }
+      const fee = checkPearlUnsignedFee(decoded);
+      if (!fee.valid) throw new Error("E_PEARL_FEE: outputs add up to more than the inputs — refusing to sign");
+      if (fee.needsAck && !feeAck) throw new Error("Confirm the network fee above before signing");
       // Payload poolIndex is the HD index within `branch` (absent = 0).
       // The worker derives that key and refuses any input whose script
       // it does not reproduce (E_PEARL_FOREIGN_INPUT).
@@ -475,6 +494,8 @@ function SignTab({ network, pool }: SignTabProps) {
         })),
         outputs: decoded.outputs,
         network,
+        // The signer refuses anything paying more than the fee shown here.
+        maxFeeGrains: fee.feeGrains.toString(),
       };
       const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
       const out: PearlSignedPayload = {
@@ -565,11 +586,28 @@ function SignTab({ network, pool }: SignTabProps) {
                 ))}
               </ul>
             </div>
-            {decoded.meta?.feeGrains && (
+            {feeCheck && feeCheck.valid && (
               <div className="break-all font-mono tabular-nums">
-                <span className="font-sans font-semibold">Fee:</span>{" "}
-                {grainsToPrl(decoded.meta.feeGrains)} PRL
+                <span className="font-sans font-semibold">Network fee (inputs − outputs):</span>{" "}
+                {grainsToPrl(feeCheck.feeGrains)} PRL
               </div>
+            )}
+            {feeCheck && !feeCheck.valid && (
+              <p className="font-semibold text-danger break-words">
+                The outputs add up to more than the inputs. This payload can't be signed.
+              </p>
+            )}
+            {feeCheck?.claimMismatch && feeCheck.claimedFeeGrains !== null && (
+              <p className="rounded-pb border border-danger-line bg-danger-bg p-3 text-danger break-words">
+                ⚠ The watcher's summary claims a fee of {grainsToPrl(feeCheck.claimedFeeGrains)} PRL,
+                but the inputs and outputs pay {grainsToPrl(feeCheck.valid ? feeCheck.feeGrains : 0n)} PRL.
+                Trust the computed fee; the watcher may be compromised.
+              </p>
+            )}
+            {feeCheck?.highFee && (
+              <p className="rounded-pb border border-warn-line bg-warn-bg p-3 text-warn break-words">
+                ⚠ This fee is more than 2% of the coins being spent.
+              </p>
             )}
             {decoded.meta?.summary && (
               <div className="break-all font-mono tabular-nums">
@@ -577,10 +615,20 @@ function SignTab({ network, pool }: SignTabProps) {
               </div>
             )}
           </div>
+          {feeCheck?.needsAck && (
+            <label className="mt-4 flex items-start gap-2 rounded-pb border border-warn-line p-3 text-sm leading-relaxed">
+              <input type="checkbox" className="mt-1" checked={feeAck} onChange={(e) => setFeeAck(e.target.checked)} />
+              <span>
+                I checked the network fee of{" "}
+                <span className="font-mono tabular-nums">{grainsToPrl(feeCheck.feeGrains)} PRL</span> and want to
+                pay it.
+              </span>
+            </label>
+          )}
           <button
             type="button"
             className="btn-primary mt-4 min-w-11"
-            disabled={busy}
+            disabled={busy || !feeCheck?.valid || (feeCheck.needsAck && !feeAck)}
             onClick={doSign}
           >
             {busy ? "Signing…" : "Sign this transaction"}
@@ -647,10 +695,24 @@ function BroadcastTab() {
     setBusy(true);
     setBroadcastError(null);
     try {
-      const id = await broadcastPearlTx(decoded.raw);
+      // Same reservation path as Send and consolidation: the tx's inputs
+      // are decoded from the raw hex and recorded as pending spends.
+      const id = await broadcastSignedPearlTx(decoded.raw);
       setTxid(id);
     } catch (e) {
-      setBroadcastError(e instanceof Error ? e.message : String(e));
+      if (e instanceof BroadcastStatusUnknownError) {
+        setBroadcastError(
+          "Broadcast status unknown — the network didn't confirm receipt. " +
+            (e.txid ? `Check the explorer for txid ${e.txid} ` : "Check the explorer ") +
+            "before trying again. Broadcasting this same payload again is safe.",
+        );
+      } else if (e instanceof PendingSpendConflictError) {
+        setBroadcastError(
+          "A coin in this transaction is already being spent by another transaction this wallet broadcast recently. Not broadcast.",
+        );
+      } else {
+        setBroadcastError(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setBusy(false);
     }

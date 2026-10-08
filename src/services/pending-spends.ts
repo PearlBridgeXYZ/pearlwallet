@@ -10,12 +10,22 @@
 //
 // Entries expire after PENDING_SPEND_TTL_MS. By then the spending tx has
 // either confirmed (the coins are gone from every walk) or was dropped
-// (the coins are spendable again). The Consolidate screen can also clear
-// the list by hand.
+// (the coins are spendable again). Send (after a status-unknown broadcast)
+// and Consolidate can release ONE transaction's coins by hand, after a
+// status check showed the node does not have it.
 //
-// Storage: localStorage when available (survives reloads, so a re-run
-// after a refresh is still protected), else process memory. Contents are
-// public chain data (outpoints + txids), no key material.
+// Storage: an in-process list that every read merges with localStorage
+// (survives reloads, so a re-run after a refresh is still protected).
+// Persisting is best-effort; a failed write never loses the record for
+// this session. Contents are public chain data (outpoints + txids), no
+// key material.
+//
+// Reservation: every broadcast path (Send, consolidation, offline
+// broadcast) goes through reservePendingSpends right before submitting:
+// it refuses when another transaction already spends one of the inputs
+// and records the inputs in the same synchronous step. A definite node
+// rejection releases the reservation; success and "status unknown" keep
+// it.
 
 export const PENDING_SPEND_TTL_MS = 6 * 60 * 60 * 1000;
 export const PENDING_SPENDS_STORAGE_KEY = "pearl-wallet-pending-spends-v1";
@@ -31,6 +41,9 @@ export interface PendingSpend {
   recordedAt: number;
 }
 
+// Canonical in-process copy. Every read merges it with whatever storage
+// holds, so a record whose storage write failed (quota, partitioned or
+// read-only storage) still protects its coins for the rest of the session.
 let memory: PendingSpend[] = [];
 
 function storage(): Storage | null {
@@ -57,9 +70,9 @@ function isEntry(e: unknown): e is PendingSpend {
   );
 }
 
-function load(): PendingSpend[] {
+function readStorage(): PendingSpend[] {
   const s = storage();
-  if (!s) return memory;
+  if (!s) return [];
   try {
     const raw = s.getItem(PENDING_SPENDS_STORAGE_KEY);
     if (!raw) return [];
@@ -70,18 +83,38 @@ function load(): PendingSpend[] {
   }
 }
 
+/** Union by outpoint. On a conflict the later record wins (longer
+ *  protection); a known spending txid is never replaced by null. */
+function merge(a: readonly PendingSpend[], b: readonly PendingSpend[]): PendingSpend[] {
+  const byKey = new Map<string, PendingSpend>();
+  for (const e of [...a, ...b]) {
+    const prev = byKey.get(e.outpoint);
+    if (!prev) {
+      byKey.set(e.outpoint, e);
+      continue;
+    }
+    const later = e.recordedAt >= prev.recordedAt ? e : prev;
+    const other = later === e ? prev : e;
+    byKey.set(e.outpoint, later.spentBy === null && other.spentBy !== null ? { ...later, spentBy: other.spentBy } : later);
+  }
+  return [...byKey.values()];
+}
+
+function load(): PendingSpend[] {
+  return merge(readStorage(), memory).slice(-MAX_ENTRIES);
+}
+
 function save(entries: PendingSpend[]): void {
   const bounded = entries.slice(-MAX_ENTRIES);
+  // Memory first: it is the copy every later read is guaranteed to see.
+  memory = bounded;
   const s = storage();
-  if (!s) {
-    memory = bounded;
-    return;
-  }
+  if (!s) return;
   try {
     s.setItem(PENDING_SPENDS_STORAGE_KEY, JSON.stringify(bounded));
   } catch {
-    // Quota / partitioned storage: keep the protection for this session.
-    memory = bounded;
+    // Quota / partitioned storage: memory keeps the protection for this
+    // session.
   }
 }
 
@@ -138,4 +171,98 @@ export function clearPendingSpends(): void {
   } catch {
     /* ignore */
   }
+}
+
+/** A coin is already being spent by a different recent broadcast. */
+export class PendingSpendConflictError extends Error {
+  readonly code = "E_INPUT_PENDING" as const;
+  constructor(
+    readonly outpoint: string,
+    readonly spentBy: string | null,
+  ) {
+    super(`E_INPUT_PENDING: ${outpoint} is already being spent by ${spentBy ?? "a recent transaction"}`);
+    this.name = "PendingSpendConflictError";
+  }
+}
+
+/** Throws PendingSpendConflictError if any input is already pending,
+ *  unless it is pending for this very transaction (`spentBy`, e.g. a
+ *  re-broadcast of the same signed tx). */
+export function assertNotPending(
+  inputs: readonly { txid: string; vout: number }[],
+  spentBy: string | null = null,
+  now: number = Date.now(),
+): void {
+  const self = spentBy ? spentBy.toLowerCase() : null;
+  const byKey = new Map(live(load(), now).map((e) => [e.outpoint, e] as const));
+  for (const u of inputs) {
+    const e = byKey.get(outpointKey(u));
+    if (e && (self === null || e.spentBy !== self)) throw new PendingSpendConflictError(e.outpoint, e.spentBy);
+  }
+}
+
+/**
+ * Check-and-record in one synchronous step, immediately before a
+ * broadcast: refuses (PendingSpendConflictError) when any input is pending
+ * for another transaction, else records every input as spent by
+ * `spentBy`. Returns the outpoints this call added, for
+ * releasePendingSpends after a definite rejection.
+ */
+export function reservePendingSpends(
+  spentBy: string | null,
+  inputs: readonly { txid: string; vout: number }[],
+  now: number = Date.now(),
+): string[] {
+  const self = spentBy ? spentBy.toLowerCase() : null;
+  const entries = live(load(), now);
+  const byKey = new Map(entries.map((e) => [e.outpoint, e] as const));
+  for (const u of inputs) {
+    const e = byKey.get(outpointKey(u));
+    if (e && (self === null || e.spentBy !== self)) throw new PendingSpendConflictError(e.outpoint, e.spentBy);
+  }
+  const added: string[] = [];
+  for (const u of inputs) {
+    const k = outpointKey(u);
+    if (byKey.has(k)) continue;
+    const entry: PendingSpend = { outpoint: k, spentBy: self, recordedAt: now };
+    byKey.set(k, entry);
+    entries.push(entry);
+    added.push(k);
+  }
+  save(entries);
+  return added;
+}
+
+/** Undoes a reservation after the node definitely rejected the tx. Only
+ *  the outpoints that reservation added, and only while they still name
+ *  the same spending tx, are removed. */
+export function releasePendingSpends(outpoints: readonly string[], spentBy: string | null): void {
+  if (outpoints.length === 0) return;
+  const self = spentBy ? spentBy.toLowerCase() : null;
+  const drop = new Set(outpoints);
+  // Removal must reach memory and storage alike (load() merges both).
+  const kept = load().filter((e) => !(drop.has(e.outpoint) && e.spentBy === self));
+  save(kept);
+}
+
+/** Pending broadcasts grouped by spending txid (null = unknown txid). */
+export function pendingTransactions(now: number = Date.now()): { spentBy: string | null; coins: number; recordedAt: number }[] {
+  const groups = new Map<string | null, { spentBy: string | null; coins: number; recordedAt: number }>();
+  for (const e of live(load(), now)) {
+    const g = groups.get(e.spentBy);
+    if (g) {
+      g.coins++;
+      if (e.recordedAt > g.recordedAt) g.recordedAt = e.recordedAt;
+    } else {
+      groups.set(e.spentBy, { spentBy: e.spentBy, coins: 1, recordedAt: e.recordedAt });
+    }
+  }
+  return [...groups.values()].sort((a, b) => b.recordedAt - a.recordedAt);
+}
+
+/** Forgets the coins of ONE pending transaction (after a status check
+ *  showed the node does not have it). */
+export function forgetPendingTransaction(spentBy: string | null): void {
+  const self = spentBy ? spentBy.toLowerCase() : null;
+  save(load().filter((e) => e.spentBy !== self));
 }

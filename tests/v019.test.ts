@@ -322,7 +322,11 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
     }
   });
 
-  it("propagates degraded:true from the UTXO walk", async () => {
+  it("propagates degraded:true from the UTXO walk; a page-capped address never funds the send", async () => {
+    // v0.7 review S3: a page-capped walk reads oldest-first, so its set may
+    // still list coins spent on a page it never read. Such an address's
+    // coins are left out entirely; the flags still propagate.
+    const TXID_OK = "cd".repeat(32);
     vi.spyOn(pearlRpc, "fetchPrlUtxos").mockImplementation(async (addr) => {
       if (addr === POOL[0]) {
         return {
@@ -331,7 +335,11 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
           droppedNoScript: 0,
         };
       }
-      return { utxos: [], degraded: false, droppedNoScript: 0 };
+      return {
+        utxos: [{ txid: TXID_OK, vout: 1, valueGrains: 500_000_000n, scriptHex: "5120" + "00".repeat(32) }],
+        degraded: false,
+        droppedNoScript: 0,
+      };
     });
     const c = await composePearlSend({
       network: "mainnet",
@@ -341,6 +349,42 @@ describe("v0.1.9 / composePearlSend — coin selection + fee + change", () => {
       includeTip: false,
     });
     expect(c.degraded).toBe(true);
+    expect(c.historyIncomplete).toBe(1);
+    expect(c.utxos.map((u) => u.txid)).toEqual([TXID_OK]);
+    expect(c.spendableGrains).toBe(500_000_000n);
+  });
+
+  it("only page-capped addresses hold coins → E_HISTORY_INCOMPLETE, never a transaction", async () => {
+    vi.spyOn(pearlRpc, "fetchPrlUtxos").mockImplementation(async (addr) => {
+      if (addr === POOL[0]) {
+        return {
+          utxos: [{ txid: TXID_A, vout: 0, valueGrains: 1_000_000_000n, scriptHex: "5120" + "00".repeat(32) }],
+          degraded: true,
+          droppedNoScript: 0,
+        };
+      }
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
+    });
+    await expect(
+      composePearlSend({ network: "mainnet", pool: POOL, destination: DEST, amountGrains: 100_000_000n, includeTip: false }),
+    ).rejects.toThrow(/E_HISTORY_INCOMPLETE/);
+  });
+
+  it("vouts dropped for a missing script flag degraded but the rest of a complete history stays spendable", async () => {
+    vi.spyOn(pearlRpc, "fetchPrlUtxos").mockImplementation(async (addr) => {
+      if (addr === POOL[0]) {
+        return {
+          utxos: [{ txid: TXID_A, vout: 0, valueGrains: 1_000_000_000n, scriptHex: "5120" + "00".repeat(32) }],
+          degraded: false,
+          droppedNoScript: 1,
+        };
+      }
+      return { utxos: [], degraded: false, droppedNoScript: 0 };
+    });
+    const c = await composePearlSend({ network: "mainnet", pool: POOL, destination: DEST, amountGrains: 100_000_000n, includeTip: false });
+    expect(c.degraded).toBe(true);
+    expect(c.historyIncomplete).toBe(0);
+    expect(c.utxos[0]!.txid).toBe(TXID_A);
   });
 
   it("throws E_INSUFFICIENT_FUNDS when no UTXO combo covers amount+fee", async () => {

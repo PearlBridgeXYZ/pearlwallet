@@ -25,6 +25,19 @@
 
 export const PAYLOAD_VERSION = 1 as const;
 
+/** v0.7: an unsigned Pearl payload with any change-branch (branch 1)
+ *  input is version 2. Signers before v0.7 accept only v=1 and ignore the
+ *  `branch` field — they would sign such an input with the wrong key — so
+ *  the bump makes them refuse with E_PAYLOAD_VERSION instead. Payloads
+ *  with only branch-0 inputs stay v=1 and byte-identical to earlier ones;
+ *  current signers accept both. */
+export const PEARL_UNSIGNED_BRANCH_VERSION = 2 as const;
+
+/** Version an unsigned Pearl payload with these inputs must carry. */
+export function pearlUnsignedVersion(utxos: readonly { branch?: 0 | 1 }[]): 1 | 2 {
+  return utxos.some((u) => u.branch === 1) ? PEARL_UNSIGNED_BRANCH_VERSION : PAYLOAD_VERSION;
+}
+
 export type PayloadKind =
   | "pearl-unsigned"
   | "pearl-signed"
@@ -34,7 +47,8 @@ export type PayloadKind =
 // ── Pearl ────────────────────────────────────────────────────────────────
 
 export interface PearlUnsignedPayload {
-  v: 1;
+  /** 1, or 2 when any input has branch 1 (see pearlUnsignedVersion). */
+  v: 1 | 2;
   k: "pearl-unsigned";
   /** "mainnet" | "testnet" — must match the signer's loaded network. */
   network: "mainnet" | "testnet";
@@ -50,9 +64,8 @@ export interface PearlUnsignedPayload {
     poolIndex: number;
     /** v0.7: HD branch — 0 external (default when absent), 1 internal/
      *  change. Omitted for branch 0 so such payloads stay byte-identical
-     *  to earlier ones. An older signer ignores this field and would sign
-     *  a branch-1 input with the wrong key; the node rejects that tx, no
-     *  funds move. */
+     *  to earlier ones. Any branch-1 input makes the payload v=2, which
+     *  older signers (which ignore this field) refuse outright. */
     branch?: 0 | 1;
   }>;
   outputs: Array<{
@@ -190,7 +203,9 @@ export function validatePayload(json: unknown): OfflinePayload {
     throw new Error("E_PAYLOAD_SHAPE: payload must be an object");
   }
   const o = json as Record<string, unknown>;
-  if (o.v !== PAYLOAD_VERSION) {
+  const okVersion =
+    o.v === PAYLOAD_VERSION || (o.k === "pearl-unsigned" && o.v === PEARL_UNSIGNED_BRANCH_VERSION);
+  if (!okVersion) {
     throw new Error(`E_PAYLOAD_VERSION: expected v=${PAYLOAD_VERSION}, got v=${String(o.v)}`);
   }
   switch (o.k) {
@@ -279,8 +294,13 @@ function validatePearlUnsigned(o: Record<string, unknown>): PearlUnsignedPayload
     }
     return { address: x.address, amountGrains: x.amountGrains };
   });
+  // A branch-1 input must come in a v=2 payload (the version is what makes
+  // pre-v0.7 signers refuse it); a v=2 payload may carry any inputs.
+  if (o.v === PAYLOAD_VERSION && utxos.some((u) => u.branch === 1)) {
+    throw new Error(`E_PAYLOAD_VERSION: change-branch inputs need v=${PEARL_UNSIGNED_BRANCH_VERSION}`);
+  }
   const result: PearlUnsignedPayload = {
-    v: 1,
+    v: o.v === PEARL_UNSIGNED_BRANCH_VERSION ? PEARL_UNSIGNED_BRANCH_VERSION : PAYLOAD_VERSION,
     k: "pearl-unsigned",
     network: o.network,
     utxos,
@@ -363,5 +383,59 @@ function validateEthSigned(o: Record<string, unknown>): EthSignedPayload {
     k: "eth-signed",
     chainId: o.chainId,
     raw: o.raw.toLowerCase(),
+  };
+}
+
+// ── Signer-side fee check ────────────────────────────────────────────────
+
+/** Fee share (numerator / denominator of the inputs) above which the
+ *  offline signer asks for an explicit acknowledgement: 2 %. */
+export const OFFLINE_FEE_ACK_NUM = 2n;
+export const OFFLINE_FEE_ACK_DEN = 100n;
+
+export interface PearlUnsignedFeeCheck {
+  inputGrains: bigint;
+  outputGrains: bigint;
+  /** sum(inputs) − sum(outputs): what the network really collects. Only
+   *  meaningful when `valid`. */
+  feeGrains: bigint;
+  /** False when outputs ≥ inputs — such a tx can't be signed. */
+  valid: boolean;
+  /** The payload's meta.feeGrains, if any (display only, untrusted). */
+  claimedFeeGrains: bigint | null;
+  /** meta.feeGrains present and different from the real fee. */
+  claimMismatch: boolean;
+  /** Fee above OFFLINE_FEE_ACK_NUM/DEN of the inputs. */
+  highFee: boolean;
+  /** The user must explicitly acknowledge the fee before signing. */
+  needsAck: boolean;
+}
+
+/**
+ * The fee an unsigned payload really pays, computed from its inputs and
+ * outputs (the only authoritative fields — meta is watcher-supplied and
+ * may lie). Input values are bound into the taproot signature, so if they
+ * are wrong the signature is invalid and nothing moves; if they are right
+ * this is exactly the fee the network collects.
+ */
+export function checkPearlUnsignedFee(p: Pick<PearlUnsignedPayload, "utxos" | "outputs" | "meta">): PearlUnsignedFeeCheck {
+  let inputGrains = 0n;
+  for (const u of p.utxos) inputGrains += BigInt(u.valueGrains);
+  let outputGrains = 0n;
+  for (const o of p.outputs) outputGrains += BigInt(o.amountGrains);
+  const feeGrains = inputGrains - outputGrains;
+  const valid = feeGrains > 0n;
+  const claimedFeeGrains = p.meta?.feeGrains !== undefined ? BigInt(p.meta.feeGrains) : null;
+  const claimMismatch = claimedFeeGrains !== null && claimedFeeGrains !== feeGrains;
+  const highFee = valid && feeGrains * OFFLINE_FEE_ACK_DEN > inputGrains * OFFLINE_FEE_ACK_NUM;
+  return {
+    inputGrains,
+    outputGrains,
+    feeGrains,
+    valid,
+    claimedFeeGrains,
+    claimMismatch,
+    highFee,
+    needsAck: valid && (highFee || claimMismatch),
   };
 }

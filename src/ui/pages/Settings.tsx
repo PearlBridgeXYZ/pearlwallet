@@ -23,6 +23,11 @@ export default function Settings() {
   const wipe = useWallet((s) => s.wipe);
   const exportMnemonic = useWallet((s) => s.exportMnemonic);
   const changePassword = useWallet((s) => s.changePassword);
+  const trackedExternal = useWallet((s) => s.addresses?.pearlPool.length ?? 0);
+  const trackedInternal = useWallet((s) => s.addresses?.pearlChange?.length ?? 0);
+  const resetPearlAddresses = useWallet((s) => s.resetPearlAddresses);
+  const [confirmAddrReset, setConfirmAddrReset] = useState(false);
+  const [addrResetStatus, setAddrResetStatus] = useState<string | null>(null);
   const pearlRpcOverride = useUI((s) => s.pearlRpcOverride);
   const setPearlRpcOverride = useUI((s) => s.setPearlRpcOverride);
   const ethRpcOverride = useUI((s) => s.ethRpcOverride);
@@ -190,7 +195,7 @@ export default function Settings() {
     } catch (e) {
       if (e instanceof Error && e.message === "E_RPC_OVERRIDE_NOT_ALLOWED") {
         setRpcStatus(
-          "That host isn't on the wallet's Pearl RPC allowlist. Use one of: rpc.pearlbridge.xyz, pearlbridge.xyz, or a pearl-sentry-{fsn1,nbg1,hel1}-1.pearlbridge.xyz host.",
+          "That host isn't on the wallet's Pearl RPC allowlist. Use rpc.pearlbridge.xyz.",
         );
       } else {
         setRpcStatus(e instanceof Error ? e.message : "Failed to save RPC override.");
@@ -605,6 +610,46 @@ export default function Settings() {
           Combine small coins
         </Link>
       </section>
+
+      {status === "unlocked" && (
+        <section className="card mb-6">
+          <h2 className="border-b border-line pb-3 text-lg font-semibold">Tracked addresses</h2>
+          <p className="mt-3 text-sm leading-7 text-text-2">
+            Balance scans read <span className="font-mono tabular-nums">{trackedExternal}</span> receive and{" "}
+            <span className="font-mono tabular-nums">{trackedInternal}</span> change addresses. The lists grow
+            when a scan finds used addresses near their end.
+          </p>
+          <p className="mt-2 text-sm leading-7 text-text-2">
+            If the counts grew far beyond the addresses you have used (for example after a faulty
+            RPC endpoint), reset them to the first 20 of each. Addresses past that are found again
+            only when used addresses lead a scan to them, so don't reset if you gave someone a
+            receive address beyond the first 20.
+          </p>
+          <label className="mt-3 flex items-start gap-2 text-sm leading-relaxed">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={confirmAddrReset}
+              onChange={(e) => setConfirmAddrReset(e.target.checked)}
+            />
+            <span>I understand.</span>
+          </label>
+          <button
+            type="button"
+            className="btn-secondary tap mt-3 inline-flex"
+            disabled={!confirmAddrReset || (trackedExternal <= 20 && trackedInternal <= 20)}
+            onClick={() => {
+              void resetPearlAddresses().then((ok) => {
+                setConfirmAddrReset(false);
+                setAddrResetStatus(ok ? "Address lists reset. The next scan starts from there." : "Couldn't reset the address lists.");
+              });
+            }}
+          >
+            Reset tracked addresses
+          </button>
+          {addrResetStatus && <p role="status" className="mt-2 text-xs text-text-3">{addrResetStatus}</p>}
+        </section>
+      )}
 
       <section className="card mb-6">
         <h2 className="border-b border-line pb-3 text-lg font-semibold">Optional developer tip</h2>

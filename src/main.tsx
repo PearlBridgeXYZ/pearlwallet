@@ -4,6 +4,7 @@ import { BrowserRouter, HashRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import App from "./App";
 import { routerKindFor } from "./lib/router-kind";
+import { onBalanceMemoryClear } from "./state/balance-memory";
 import "./styles.css";
 
 const queryClient = new QueryClient({
@@ -14,6 +15,13 @@ const queryClient = new QueryClient({
       retry: 1,
     },
   },
+});
+
+// Lock / wipe / wallet switch: drop every cached query result (balances,
+// coin sets, activity, previews) with the rest of the session's memory.
+onBalanceMemoryClear(() => {
+  void queryClient.cancelQueries();
+  queryClient.clear();
 });
 
 // Runtime choice (not a build flag) so the web build and tests are unaffected:

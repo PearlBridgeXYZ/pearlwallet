@@ -14,6 +14,7 @@ import {
   composePearlSendDeepRetry,
   computeMaxSendable,
   loadSpendableUtxos,
+  HistoryIncompleteError,
   InsufficientFundsError,
   NoSpendableCoinsError,
   TooManyInputsError,
@@ -26,6 +27,8 @@ import {
 import type { PrlPoolScan } from "../../services/balances";
 import { BroadcastStatusUnknownError, MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
+import { PendingSpendConflictError } from "../../services/pending-spends";
+import PendingTxCheck from "../components/PendingTxCheck";
 
 type FeeTier = "low" | "normal" | "high";
 
@@ -97,7 +100,11 @@ export default function SendPRL() {
   const [amount, setAmount] = useState("");
   const [sendMax, setSendMax] = useState(false);
   const [tier, setTier] = useState<FeeTier>("normal");
-  const [stage, setStage] = useState<"compose" | "preview" | "sent">("compose");
+  // "unknown": a broadcast whose outcome could not be determined. The
+  // preview is gone (no re-quote, no second Send) until the user checks
+  // that transaction's status.
+  const [stage, setStage] = useState<"compose" | "preview" | "sent" | "unknown">("compose");
+  const [unknownTxid, setUnknownTxid] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [insufficient, setInsufficient] = useState<InsufficientFundsError | null>(null);
   const [txid, setTxid] = useState<string | null>(null);
@@ -148,6 +155,9 @@ export default function SendPRL() {
         // fee tier and tip choice, then compose exactly that amount over
         // the same coin set (no change output).
         let utxos = cachedUtxos && cachedUtxos.length > 0 && !deepWalk ? cachedUtxos : null;
+        // Warnings of the walk the coins came from travel with them (the
+        // dashboard cache is only ever a complete scan).
+        let from = { degraded: false, historyIncomplete: 0 };
         if (!utxos) {
           const live = await loadSpendableUtxos({
             pool,
@@ -160,6 +170,7 @@ export default function SendPRL() {
             throw new NoSpendableCoinsError(live.addressesScanned, live.pending.length, live.degraded);
           }
           utxos = live.utxos;
+          from = { degraded: live.degraded, historyIncomplete: live.historyIncomplete };
         }
         const max = computeMaxSendable({
           utxos,
@@ -180,6 +191,7 @@ export default function SendPRL() {
           feerateSatPerVbyte: FEERATE_BY_TIER[tier],
           includeTip: tipThisTx,
           cachedUtxos: utxos,
+          cachedFrom: from,
         });
         return { ...composed, composedAt: Date.now(), max: max as MaxSendable | null };
       }
@@ -220,6 +232,8 @@ export default function SendPRL() {
   const noCoins = previewQ.isError && previewQ.error instanceof NoSpendableCoinsError ? previewQ.error : null;
   const scanIncomplete =
     previewQ.isError && previewQ.error instanceof UtxoScanIncompleteError ? previewQ.error : null;
+  const historyIncomplete =
+    previewQ.isError && previewQ.error instanceof HistoryIncompleteError ? previewQ.error : null;
 
   // Rescan: walk the wallet live at the deepest page depth, ignoring the
   // dashboard's cached coins.
@@ -306,12 +320,13 @@ export default function SendPRL() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (e instanceof BroadcastStatusUnknownError) {
-        // The tx may already be in the mempool — never call this a failure.
-        setError(
-          `Broadcast status unknown — the network didn't confirm receipt. ` +
-            (e.txid ? `Check the explorer for txid ${e.txid} ` : "Check the explorer ") +
-            `before trying again.`,
-        );
+        // The tx may already be in the mempool — never call this a failure,
+        // and never leave a live preview that could send a second payment.
+        setUnknownTxid(e.txid);
+        setStage("unknown");
+      } else if (e instanceof PendingSpendConflictError) {
+        setError("A coin in this preview is already being spent by another transaction from this wallet — refreshing…");
+        previewQ.refetch();
       } else if (msg === "E_PREVIEW_STALE") {
         setError("UTXO selection expired — refreshing…");
         previewQ.refetch();
@@ -346,6 +361,40 @@ export default function SendPRL() {
               View on explorer →
             </a>
           )}
+          <div className="mt-4 flex gap-2">
+            <button onClick={() => navigate("/dashboard")} className="btn-primary flex-1 min-w-11">
+              Back to dashboard
+            </button>
+          </div>
+        </div>
+      </Page>
+    );
+  }
+
+  if (stage === "unknown") {
+    return (
+      <Page title="Send PRL">
+        <div className="card">
+          <h2 className="text-lg font-semibold tracking-tight">Broadcast status unknown</h2>
+          <p className="mt-2 text-sm leading-relaxed text-text-2">
+            The network didn't confirm receipt. The transaction may already be on its way, so this
+            send can't be repeated until you check it. Its coins stay reserved meanwhile.
+          </p>
+          <div className="mt-3 rounded-pb border border-line bg-surface-2 p-3">
+            <PendingTxCheck
+              txid={unknownTxid}
+              explorerUrl={unknownTxid ? pearlTxExplorerUrl(pearlNetwork, unknownTxid) : undefined}
+              onFound={() => {
+                setTxid(unknownTxid);
+                setStage("sent");
+              }}
+              onReleased={() => {
+                setUnknownTxid(null);
+                setValidated(null);
+                setStage("compose");
+              }}
+            />
+          </div>
           <div className="mt-4 flex gap-2">
             <button onClick={() => navigate("/dashboard")} className="btn-primary flex-1 min-w-11">
               Back to dashboard
@@ -517,10 +566,33 @@ export default function SendPRL() {
             </div>
           )}
 
-          {previewQ.isError && !insufficient && !tooMany && !noCoins && !scanIncomplete && (
+          {historyIncomplete && (
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
+              <h3 className="text-base font-semibold">History incomplete</h3>
+              <p className="mt-1">
+                {historyIncomplete.incompleteAddresses} of {historyIncomplete.addressesScanned} addresses have more
+                history than was read. Their coins can't be used until the whole history is read.
+              </p>
+              <button className="mt-1 inline-flex min-h-11 items-center underline underline-offset-4" onClick={rescan} disabled={previewQ.isFetching}>
+                Search deeper
+              </button>
+            </div>
+          )}
+
+          {previewQ.isError && !insufficient && !tooMany && !noCoins && !scanIncomplete && !historyIncomplete && (
             <p className="mt-3 rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger break-words [overflow-wrap:anywhere]">
               Couldn't compose: {(previewQ.error as Error).message}
             </p>
+          )}
+          {composed && composed.historyIncomplete > 0 && !insufficient && (
+            <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
+              {composed.historyIncomplete} address{composed.historyIncomplete === 1 ? " has" : "es have"} more
+              history than was read; {composed.historyIncomplete === 1 ? "its" : "their"} coins are not used in
+              this send.{" "}
+              <button className="inline-flex min-h-11 items-center underline underline-offset-4" onClick={rescan} disabled={previewQ.isFetching}>
+                Search deeper
+              </button>
+            </div>
           )}
           {composed?.degraded && !insufficient && (
             <div className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-4 text-sm leading-7 text-warn">
@@ -530,6 +602,19 @@ export default function SendPRL() {
             </div>
           )}
 
+          {composed && !composeFresh && (
+            <p className="mt-3 text-xs leading-6 text-warn">
+              This preview has expired.{" "}
+              <button
+                className="inline-flex min-h-11 items-center underline underline-offset-4"
+                onClick={() => void previewQ.refetch()}
+                disabled={previewQ.isFetching}
+              >
+                Rescan
+              </button>{" "}
+              to review it again.
+            </p>
+          )}
           {composed && composeFresh && (
             <p className="mt-3 text-xs leading-6 text-text-3">
               Preview fresh for <span className="font-mono tabular-nums">{secondsToStale}</span>s
@@ -576,7 +661,7 @@ export default function SendPRL() {
               Back
             </button>
             <button
-              disabled={!composed || sending || !!insufficient || previewQ.isError}
+              disabled={!composed || !composeFresh || sending || !!insufficient || previewQ.isError}
               onClick={broadcast}
               className="btn-primary flex-1 min-w-11"
             >

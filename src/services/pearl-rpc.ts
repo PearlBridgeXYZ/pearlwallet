@@ -9,6 +9,7 @@ import { hexToBytes } from "@noble/hashes/utils";
 import { PEARL_RPC_POOL, pearlParams } from "../chains/pearl/network";
 import { useUI } from "../state/ui-store";
 import { TokenBucket, sleep, type RpcPriority } from "./rpc-limiter";
+import { onBalanceMemoryClear } from "../state/balance-memory";
 
 interface RpcResult<T> {
   jsonrpc?: string;
@@ -205,11 +206,40 @@ export class PearlRpcHttpError extends Error {
   constructor(
     readonly status: number,
     readonly retryAfterMs: number | null,
+    /** True when the response is the reverse proxy's own rate-limit page
+     *  (nginx limit_req answers 503 with its stock error page): the
+     *  request was refused at the edge and never forwarded to the node. */
+    readonly edgeLimited: boolean = false,
   ) {
     super(`rpc http ${status}`);
     this.name = "PearlRpcHttpError";
   }
 }
+
+/** A 2xx response whose body is not a usable JSON-RPC answer (invalid or
+ *  truncated JSON, not an object, null result). The request DID reach a
+ *  server that answered "OK" — for a broadcast the outcome is unknown,
+ *  never a plain failure. */
+export class PearlRpcMalformedResponseError extends Error {
+  constructor(readonly detail: string) {
+    super(detail === "null result" ? "rpc null result" : `rpc malformed response: ${detail}`);
+    this.name = "PearlRpcMalformedResponseError";
+  }
+}
+
+// nginx's stock 503 page ("503 Service Temporarily Unavailable" … "nginx"),
+// which is what limit_req returns. An upstream (node) 503 is proxied with
+// the node's own body and does not match.
+const NGINX_LIMIT_PAGE_TITLE_RE = /<title>\s*503 Service Temporarily Unavailable\s*<\/title>/i;
+const NGINX_SIGNATURE_RE = /<center>\s*nginx(\/[0-9.]+)?\s*<\/center>/i;
+
+/** True when `body` is nginx's own 503 error page (edge rate limit). */
+export function isEdgeRateLimitPage(body: string): boolean {
+  return NGINX_LIMIT_PAGE_TITLE_RE.test(body) && NGINX_SIGNATURE_RE.test(body);
+}
+
+/** Largest error body we read to classify a 503. */
+const MAX_ERROR_BODY_CHARS = 4_096;
 
 /** The client gave up waiting for a response. The request may still have
  *  reached the node — callers that are not idempotent must treat this as
@@ -242,7 +272,9 @@ export function parseRetryAfterMs(value: string | null, now: number = Date.now()
  *   • `PearlRpcHttpError` 5xx / 408 / 429 — endpoint speaking, ill. Transient.
  *   • `PearlRpcHttpError` (other 4xx) — request malformed/disallowed. Hard.
  *   • `Error("rpc N: msg")` — chain-level JSON-RPC error. Hard (endpoint is fine).
- *   • `Error("rpc null result")` — protocol violation. Hard.
+ *   • `PearlRpcMalformedResponseError` — 2xx with an unusable body
+ *     (invalid/truncated JSON, null result). Hard for reads; a broadcast
+ *     treats it as "status unknown".
  */
 async function fetchOnce<T>(
   url: string,
@@ -275,21 +307,37 @@ async function fetchOnce<T>(
       throw err instanceof TypeError ? err : new TypeError(String((err as Error)?.message ?? err));
     }
     if (!res.ok) {
-      throw new PearlRpcHttpError(res.status, parseRetryAfterMs(res.headers.get("retry-after")));
+      let edgeLimited = false;
+      if (res.status === 503) {
+        try {
+          edgeLimited = isEdgeRateLimitPage((await res.text()).slice(0, MAX_ERROR_BODY_CHARS));
+        } catch {
+          /* unreadable body: not identifiable, stay conservative */
+        }
+      }
+      throw new PearlRpcHttpError(res.status, parseRetryAfterMs(res.headers.get("retry-after")), edgeLimited);
+    }
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      if (timedOut) throw new PearlRpcTimeoutError(timeoutMs);
+      if (signal?.aborted) throw err;
+      throw new PearlRpcMalformedResponseError("unreadable body");
     }
     let body: RpcResult<T>;
     try {
-      body = (await res.json()) as RpcResult<T>;
-    } catch (err) {
-      if (timedOut) throw new PearlRpcTimeoutError(timeoutMs);
-      throw err;
+      body = JSON.parse(text) as RpcResult<T>;
+    } catch {
+      throw new PearlRpcMalformedResponseError("invalid JSON");
     }
+    if (!body || typeof body !== "object") throw new PearlRpcMalformedResponseError("not an object");
     if (body.error) {
       // Chain-level error (-5 zero-activity, -32601 method-not-found).
       // Endpoint is fine; surface directly so caller can swallow as needed.
       throw new Error(`rpc ${body.error.code}: ${body.error.message}`);
     }
-    if (body.result === null || body.result === undefined) throw new Error("rpc null result");
+    if (body.result === null || body.result === undefined) throw new PearlRpcMalformedResponseError("null result");
     return body.result;
   } finally {
     clearTimeout(timer);
@@ -510,9 +558,20 @@ export function getFreshAddressHistory(address: string, maxAgeMs: number): Addre
   return h;
 }
 
+/** Drops every cached address history (lock / wipe / wallet switch). */
+export function clearAddressHistory(): void {
+  historyCache.clear();
+}
+onBalanceMemoryClear(clearAddressHistory);
+
 /** Test hook. */
 export function _clearAddressHistoryForTests(): void {
   historyCache.clear();
+}
+
+/** Test hook: number of cached address histories. */
+export function _addressHistorySizeForTests(): number {
+  return historyCache.size;
 }
 
 export interface PrlUtxo {
@@ -695,19 +754,72 @@ export function isAlreadyKnownBroadcastError(err: unknown): boolean {
   return err instanceof Error && /^rpc -?\d+:/.test(err.message) && ALREADY_KNOWN_RE.test(err.message);
 }
 
-/** Local txid of a raw tx (non-witness double-SHA256), or null if it
- *  can't be parsed. Used to report "already known" as success and to
- *  give the user an explorer handle when the outcome is unknown. */
-export function rawTxId(rawHex: string): string | null {
+function parseRawTx(rawHex: string): btc.Transaction | null {
   try {
-    const tx = btc.Transaction.fromRaw(hexToBytes(rawHex), {
+    return btc.Transaction.fromRaw(hexToBytes(rawHex), {
       allowUnknownOutputs: true,
       allowUnknownInputs: true,
       disableScriptCheck: true,
     });
+  } catch {
+    return null;
+  }
+}
+
+/** Local txid of a raw tx (non-witness double-SHA256), or null if it
+ *  can't be parsed. Used to report "already known" as success and to
+ *  give the user an explorer handle when the outcome is unknown. */
+export function rawTxId(rawHex: string): string | null {
+  const tx = parseRawTx(rawHex);
+  if (!tx) return null;
+  try {
     return tx.id;
   } catch {
     return null;
+  }
+}
+
+/** Outpoints a raw tx spends, or null if it can't be parsed. */
+export function rawTxInputs(rawHex: string): { txid: string; vout: number }[] | null {
+  const tx = parseRawTx(rawHex);
+  if (!tx || tx.inputsLength === 0) return null;
+  const out: { txid: string; vout: number }[] = [];
+  for (let i = 0; i < tx.inputsLength; i++) {
+    const inp = tx.getInput(i);
+    if (!inp.txid || inp.index === undefined) return null;
+    let hex = "";
+    for (const b of inp.txid) hex += b.toString(16).padStart(2, "0");
+    out.push({ txid: hex, vout: inp.index });
+  }
+  return out;
+}
+
+export type PearlTxProbe = "found" | "absent" | "unknown";
+
+// btcd: "No information available about transaction"; Core-style: "No such
+// mempool or blockchain transaction". Both are code -5.
+const NO_TX_INFO_RE = /^rpc -5:.*(no information available about transaction|no such mempool (or blockchain )?transaction)/i;
+
+/**
+ * Asks the node whether it holds `txid` (mempool or chain) via
+ * getrawtransaction. "found" only when the returned raw tx really hashes
+ * to `txid`; "absent" only on the node's explicit "no such transaction";
+ * anything else (transport failure, odd answer) is "unknown".
+ */
+export async function probePearlTx(txid: string | null, opts: { signal?: AbortSignal } = {}): Promise<PearlTxProbe> {
+  if (!txid || !/^[0-9a-f]{64}$/i.test(txid)) return "unknown";
+  const want = txid.toLowerCase();
+  try {
+    const raw = await call<unknown>("getrawtransaction", [want, 0], {
+      priority: "high",
+      signal: opts.signal,
+    });
+    if (typeof raw === "string" && /^[0-9a-f]+$/i.test(raw) && rawTxId(raw) === want) return "found";
+    return "unknown";
+  } catch (err) {
+    if (opts.signal?.aborted) throw err;
+    if (err instanceof Error && NO_TX_INFO_RE.test(err.message)) return "absent";
+    return "unknown";
   }
 }
 
@@ -720,10 +832,16 @@ export function rawTxId(rawHex: string): string | null {
  *   • node returns txid                         → success
  *   • node says it already has this transaction → success (local txid)
  *   • node rejects on the FIRST contact          → failure (thrown as-is)
+ *   • node rejects AFTER an earlier attempt that may have reached it →
+ *     the local txid is probed (getrawtransaction): found → success,
+ *     absent → the rejection stands (plain failure), else
+ *     BroadcastStatusUnknownError
+ *   • 2xx with an unusable body (invalid/truncated JSON, null result) →
+ *     probed: found → success, else BroadcastStatusUnknownError
  *   • every attempt failed transiently (and at least one may have been
- *     delivered), or the node rejected AFTER an earlier attempt that may
- *     have reached it                            → BroadcastStatusUnknownError
- *   • only edge 429s (never forwarded)           → failure
+ *     delivered)                                 → BroadcastStatusUnknownError
+ *   • only edge refusals (429, nginx rate-limit 503 page; never
+ *     forwarded)                                 → failure
  * A client timeout is never reported as a plain failure.
  */
 export async function broadcastPearlTx(rawHex: string): Promise<string> {
@@ -735,10 +853,11 @@ export async function broadcastPearlTx(rawHex: string): Promise<string> {
       timeoutMs: tuning.broadcastTimeoutMs,
       retryBudgetMs: tuning.broadcastRetryBudgetMs,
       onAttemptError: (err) => {
-        // 429 means the edge refused before forwarding. Everything else
-        // transient (timeout, network drop, 5xx) may have been delivered.
-        if (err instanceof PearlRpcHttpError && err.status === 429) return;
-        if (isRetryableSameEndpoint(err)) maybeReachedNode = true;
+        // 429 and the edge's own rate-limit page mean the request was
+        // refused before forwarding. Everything else transient (timeout,
+        // network drop, other 5xx) may have been delivered.
+        if (err instanceof PearlRpcHttpError && (err.status === 429 || err.edgeLimited)) return;
+        if (isRetryableSameEndpoint(err) || err instanceof PearlRpcMalformedResponseError) maybeReachedNode = true;
       },
     });
   } catch (err) {
@@ -746,15 +865,23 @@ export async function broadcastPearlTx(rawHex: string): Promise<string> {
       if (localTxid) return localTxid;
       throw new BroadcastStatusUnknownError(null, err);
     }
+    if (err instanceof PearlRpcMalformedResponseError) {
+      // A server answered 2xx: the node may well have accepted the tx.
+      if ((await probePearlTx(localTxid)) === "found") return localTxid!;
+      throw new BroadcastStatusUnknownError(localTxid, err);
+    }
     if (isChainLevelError(err) || (err instanceof PearlRpcHttpError && !isTransientHttpStatus(err.status))) {
       // Definitive rejection. If an earlier attempt may already have
       // delivered the tx, the rejection could be about our own tx (e.g.
-      // inputs now spent by it) — outcome unknown, not failed.
-      if (maybeReachedNode) throw new BroadcastStatusUnknownError(localTxid, err);
-      throw err;
+      // inputs now spent by it): ask the node whether it holds the tx.
+      if (!maybeReachedNode) throw err;
+      const probe = await probePearlTx(localTxid);
+      if (probe === "found") return localTxid!;
+      if (probe === "absent") throw err;
+      throw new BroadcastStatusUnknownError(localTxid, err);
     }
     // Transport never produced a definitive answer. If no attempt can
-    // have been delivered (only edge 429s), it is a plain failure.
+    // have been delivered (only edge refusals), it is a plain failure.
     if (!maybeReachedNode) throw err;
     throw new BroadcastStatusUnknownError(localTxid, err);
   }

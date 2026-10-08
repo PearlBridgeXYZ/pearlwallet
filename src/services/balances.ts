@@ -77,7 +77,19 @@ export interface PoolUtxoRecord extends PrlUtxo {
 /** Outcome of one pool address in a scan. `used` = the address has any
  *  transaction history (drives the discovery gap limit). */
 export type PoolAddressResult =
-  | { status: "ok"; grains: bigint; degraded: boolean; utxos: PrlUtxo[]; used: boolean }
+  | {
+      status: "ok";
+      grains: bigint;
+      degraded: boolean;
+      utxos: PrlUtxo[];
+      used: boolean;
+      /** The walk stopped at a page cap before the end of the address's
+       *  history. Its UTXO set may still list coins that a later, unread
+       *  page spends, so it must never fund a transaction. (`degraded` is
+       *  also set by vouts dropped for a missing script, which leaves the
+       *  rest of the set valid.) Absent = false. */
+      capped?: boolean;
+    }
   | { status: "error"; error: string };
 
 export interface PrlPoolScanProgress {
@@ -109,7 +121,8 @@ export interface PrlPoolScan {
   source: "live" | "partial" | "error";
   /** Spendable set for Send. Present ONLY when this single scan was
    *  complete (no failures, no page-cap degradation). Partial / failed
-   *  scans set it to null so Send performs its own live walk. */
+   *  scans set it to null so Send performs its own live walk.
+   *  `fetchedAt` = finishedAt (the scan's last read). */
   spendable: { utxos: PoolUtxoRecord[]; fetchedAt: number } | null;
   startedAt: number;
   finishedAt: number;
@@ -163,6 +176,7 @@ export async function walkPoolAddresses(
           degraded: r.degraded || r.droppedNoScript > 0,
           utxos: r.utxos,
           used: r.used,
+          capped: r.degraded,
         };
       } catch (err) {
         if (opts.signal?.aborted) throw err;
@@ -200,6 +214,7 @@ export function summarizePoolScan(
   // bust — the visible balance would be too suspect to show.
   const source: PrlPoolScan["source"] =
     failures > refs.length / 2 ? "error" : failures > 0 || degraded ? "partial" : "live";
+  const finishedAt = Date.now();
   return {
     pool: refs.map((r) => r.address),
     refs: refs.map((r) => ({ ...r })),
@@ -208,11 +223,14 @@ export function summarizePoolScan(
     failures,
     degraded,
     source,
-    // fetchedAt = scan START (conservative: the oldest data in the set is
-    // at most this old), so Send's freshness window is never overstated.
-    spendable: source === "live" ? { utxos, fetchedAt: startedAt } : null,
+    // fetchedAt = when the last per-address result was read. A paced walk
+    // of a large wallet takes minutes (≈1 req/s); stamping the start would
+    // expire the set before the user could review it. The set is a
+    // complete snapshot as of this moment; a coin spent elsewhere since
+    // the earlier reads only makes the node reject the tx (no funds move).
+    spendable: source === "live" ? { utxos, fetchedAt: finishedAt } : null,
     startedAt,
-    finishedAt: Date.now(),
+    finishedAt,
   };
 }
 
@@ -296,7 +314,6 @@ export async function fetchBalances(
 ): Promise<Balances> {
   const pool = Array.isArray(pearlAddrs) ? pearlAddrs : [pearlAddrs];
   const ethEnabled = opts.ethEnabled ?? true;
-  const prlUtxosFetchedAt = Date.now();
 
   const [prlR, wprlR, ethR, priceR] = await Promise.allSettled([
     fetchPoolBalances(pool),
@@ -304,6 +321,8 @@ export async function fetchBalances(
     ethEnabled ? fetchEthBalanceWei(ethAddr as `0x${string}`, "mainnet") : Promise.resolve(0n),
     fetchPrlPriceUsd(),
   ]);
+  // After the walk (see PrlPoolScan.spendable.fetchedAt).
+  const prlUtxosFetchedAt = Date.now();
 
   let prl = 0n;
   let prlSource: Balances["prlSource"] = "live";

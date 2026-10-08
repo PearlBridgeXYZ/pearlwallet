@@ -2,7 +2,7 @@ import { create } from "zustand";
 import type { PearlNetwork } from "../chains/pearl/network";
 import type { EthNetwork } from "../chains/ethereum/network";
 import { cryptoWorker } from "../crypto/worker-client";
-import { MAX_ADDRESSES_PER_BRANCH, type HdBranch } from "../crypto/hd";
+import { MAX_ADDRESSES_PER_BRANCH, RECEIVE_GAP_LIMIT, type HdBranch } from "../crypto/hd";
 import { monotonicNow } from "../lib/monotonic";
 import { clearBalanceMemory } from "./balance-memory";
 import {
@@ -97,6 +97,11 @@ interface WalletState {
    *  unlocked and only as a prefix-extension of the current lists (so a
    *  scan that raced a wallet switch can never write foreign addresses). */
   extendPearlAddresses(next: { external: readonly string[]; internal: readonly string[] }): Promise<boolean>;
+  /** Shrinks the tracked single-sig address lists back to the first
+   *  RECEIVE_GAP_LIMIT of each branch (same addresses, a prefix) and
+   *  persists that; the next scan rediscovers from there. For a list
+   *  grown by a misbehaving RPC. */
+  resetPearlAddresses(): Promise<boolean>;
 }
 
 // Cross-tab notification when the keystore blob is rewritten (currently:
@@ -523,6 +528,24 @@ export const useWallet = create<WalletState>((set, get) => ({
       rec.publicData.pearlChangePool = [...int];
       await saveKeystore(rec);
       set({ addresses: { ...addresses, pearlPool: [...ext], pearlChange: [...int] } });
+      return true;
+    });
+  },
+
+  async resetPearlAddresses() {
+    return walletLock(async () => {
+      const { status, addresses } = get();
+      if (status !== "unlocked" || !addresses) return false;
+      const ext = addresses.pearlPool.slice(0, RECEIVE_GAP_LIMIT);
+      const int = (addresses.pearlChange ?? []).slice(0, RECEIVE_GAP_LIMIT);
+      const rec = await loadKeystore();
+      if (!rec || rec.publicData.pearlAddress !== addresses.pearlPool[0]) return false;
+      rec.publicData.pearlAddressPool = [...ext];
+      rec.publicData.pearlChangePool = [...int];
+      await saveKeystore(rec);
+      // Scan baselines and cached scans describe the longer lists.
+      clearBalanceMemory();
+      set({ addresses: { ...addresses, pearlPool: ext, pearlChange: int } });
       return true;
     });
   },

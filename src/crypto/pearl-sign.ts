@@ -40,6 +40,10 @@ export interface PearlTxRequest {
   utxos: PearlUtxoSpec[];
   outputs: PearlTxOutput[];
   network: PearlNetwork;
+  /** Fee ceiling (decimal grains) — the fee the user reviewed. When set,
+   *  the signer refuses (E_PEARL_FEE_ABOVE_LIMIT) a tx whose real fee,
+   *  sum(inputs) − sum(outputs), exceeds it. */
+  maxFeeGrains?: string;
 }
 
 /** Max inputs per signing request (bounds key derivations per call). */
@@ -65,6 +69,14 @@ export function p2trScriptForInternalKey(xOnlyInternal: Uint8Array): Uint8Array 
   out[1] = 0x20;
   out.set(bip86Tweak(xOnlyInternal), 2);
   return out;
+}
+
+/** sum(inputs) − sum(outputs) of a shape-checked request (may be ≤ 0). */
+export function pearlTxFeeGrains(r: { utxos: { valueGrains: string }[]; outputs: { amountGrains: string }[] }): bigint {
+  let fee = 0n;
+  for (const u of r.utxos) fee += BigInt(u.valueGrains);
+  for (const o of r.outputs) fee -= BigInt(o.amountGrains);
+  return fee;
 }
 
 /**
@@ -117,6 +129,15 @@ export function signPearlTxWithSeed(seed: Uint8Array, r: PearlTxRequest): { raw:
       throw new Error("E_PEARL_OUTPUT_SHAPE");
     }
     if (BigInt(o.amountGrains) <= 0n) throw new Error("E_PEARL_OUTPUT_VALUE");
+  }
+  // Fee bound. The input values are committed in the taproot sighash, so
+  // a lie about them only yields an invalid signature; the fee computed
+  // here is the fee the network would really collect.
+  const fee = pearlTxFeeGrains(r);
+  if (fee <= 0n) throw new Error("E_PEARL_FEE");
+  if (r.maxFeeGrains !== undefined) {
+    if (typeof r.maxFeeGrains !== "string" || !/^[0-9]+$/.test(r.maxFeeGrains)) throw new Error("E_PEARL_FEE_LIMIT_SHAPE");
+    if (fee > BigInt(r.maxFeeGrains)) throw new Error("E_PEARL_FEE_ABOVE_LIMIT");
   }
 
   const toWipe: HDKey[] = [];

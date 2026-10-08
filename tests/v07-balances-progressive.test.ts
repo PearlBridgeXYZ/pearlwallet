@@ -78,7 +78,9 @@ describe("scanPrlPool", () => {
     expect(scan.spendable).not.toBeNull();
     expect(scan.spendable!.utxos.map((u) => u.index).sort()).toEqual([0, 1, 2]);
     expect(scan.spendable!.utxos.every((u) => u.branch === 0)).toBe(true);
-    expect(scan.spendable!.fetchedAt).toBe(scan.startedAt);
+    // Review S2: the review clock starts when the LAST address was read.
+    expect(scan.spendable!.fetchedAt).toBe(scan.finishedAt);
+    expect(scan.finishedAt).toBeGreaterThanOrEqual(scan.startedAt);
   });
 
   it("partial scan: sum of readable addresses, source 'partial', NO spendable set", async () => {

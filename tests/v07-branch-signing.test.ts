@@ -29,7 +29,12 @@ import { vaultDescriptorFromPubkeys } from "../src/chains/pearl/multisig";
 import * as workerClient from "../src/crypto/worker-client";
 import { sendPearl } from "../src/services/pearl-tx";
 import { rawTxId } from "../src/services/pearl-rpc";
-import { decodePayload, encodePayload, type PearlUnsignedPayload } from "../src/lib/offline-signing/payload";
+import {
+  decodePayload,
+  encodePayload,
+  pearlUnsignedVersion,
+  type PearlUnsignedPayload,
+} from "../src/lib/offline-signing/payload";
 import { parseManualUtxos } from "../src/lib/offline-signing/manual-utxo";
 import { useUI } from "../src/state/ui-store";
 import type { HdBranch } from "../src/crypto/hd";
@@ -236,7 +241,7 @@ describe("end-to-end compose + sign: one branch-0 and one branch-1 UTXO", () => 
 
 describe("offline signing — branch field", () => {
   const base: PearlUnsignedPayload = {
-    v: 1,
+    v: 2,
     k: "pearl-unsigned",
     network: "mainnet",
     utxos: [
@@ -248,8 +253,29 @@ describe("offline signing — branch field", () => {
 
   it("round-trips branch 1 and omits branch 0", () => {
     const back = decodePayload(encodePayload(base)) as PearlUnsignedPayload;
+    expect(back.v).toBe(2);
     expect(back.utxos[0]!.branch).toBeUndefined();
     expect(back.utxos[1]!.branch).toBe(1);
+  });
+
+  it("review S10: any branch-1 input makes the payload v=2; branch-0-only payloads stay v=1", () => {
+    expect(pearlUnsignedVersion(base.utxos)).toBe(2);
+    expect(pearlUnsignedVersion([base.utxos[0]!])).toBe(1);
+    // A v=1 payload carrying a branch-1 input is refused (a pre-v0.7 signer
+    // would have ignored `branch` and signed with the wrong key).
+    expect(() => decodePayload(encodePayload({ ...base, v: 1 }))).toThrow(/E_PAYLOAD_VERSION/);
+    // New signers keep accepting v=1 branch-0 payloads byte-for-byte.
+    const v1: PearlUnsignedPayload = { ...base, v: 1, utxos: [base.utxos[0]!] };
+    const enc = encodePayload(v1);
+    expect(encodePayload(decodePayload(enc) as PearlUnsignedPayload)).toBe(enc);
+    // What a pre-v0.7 signer does with a v=2 payload: its version check
+    // (`o.v !== 1` → E_PAYLOAD_VERSION) refuses before reading any input.
+    const wire = JSON.parse(Buffer.from(encodePayload(base), "base64url").toString("utf8")) as { v: number };
+    expect(wire.v).not.toBe(1);
+    // Other payload kinds stay v=1 only.
+    expect(() => decodePayload(encodePayload({ v: 2, k: "pearl-signed", network: "mainnet", raw: "00" } as never))).toThrow(
+      /E_PAYLOAD_VERSION/,
+    );
   });
 
   it("rejects an invalid branch", () => {

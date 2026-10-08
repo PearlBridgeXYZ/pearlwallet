@@ -9,11 +9,12 @@ import { loadSpendableUtxos, PEARL_PREVIEW_FRESHNESS_MS, type PoolUtxo } from ".
 import {
   broadcastConsolidationBatch,
   composeConsolidation,
-  verifyBatchStillSpendable,
+  recheckConsolidationBatch,
   type ConsolidationBatch,
   type ConsolidationPlan,
 } from "../../services/pearl-consolidate";
-import { clearPendingSpends, excludePendingSpends } from "../../services/pending-spends";
+import { excludePendingSpends, pendingTransactions, PendingSpendConflictError } from "../../services/pending-spends";
+import PendingTxCheck from "../components/PendingTxCheck";
 import type { PrlPoolScan } from "../../services/balances";
 import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
@@ -35,7 +36,8 @@ interface CoinSnapshot {
   utxos: PoolUtxo[];
   pendingCount: number;
   degraded: boolean;
-  /** When the coins were read — the plan's review clock starts here. */
+  /** When the LAST coins were read (end of the walk) — the plan's review
+   *  clock starts here. */
   fetchedAt: number;
 }
 
@@ -56,7 +58,14 @@ function describeError(e: unknown): string {
   }
   const msg = e instanceof Error ? e.message : String(e);
   if (msg === "E_PREVIEW_STALE") return "This plan is older than two minutes. Rescan and review it again.";
-  if (msg === "E_CONSOLIDATION_INPUTS_CHANGED" || msg === "E_CONSOLIDATION_INPUT_PENDING") {
+  if (msg === "E_CONSOLIDATION_RECHECK_INCOMPLETE") {
+    return "Couldn't re-read every address holding this batch's coins. Rescan and try again — finished batches stay done.";
+  }
+  if (
+    msg === "E_CONSOLIDATION_INPUTS_CHANGED" ||
+    msg === "E_CONSOLIDATION_INPUT_PENDING" ||
+    e instanceof PendingSpendConflictError
+  ) {
     return "Some coins in this batch changed since you reviewed the plan. Rescan and review the new plan.";
   }
   if (msg === "E_LOCKED") return "The wallet locked. Unlock it and run this again — finished batches stay done.";
@@ -163,6 +172,8 @@ export default function Consolidate() {
           utxos: coins.utxos,
           destination: { address: pool[0]!, branch: 0, index: 0 },
           feerateSatPerVbyte: FEERATE_BY_TIER[tier],
+          // The snapshot already split off coins of pending broadcasts.
+          pendingAlreadyExcluded: coins.pendingCount,
         }),
         error: null,
       };
@@ -206,16 +217,20 @@ export default function Consolidate() {
       for (; i < batches.length; i++) {
         const batch = batches[i]!;
         // Batch 1 was reviewed against the coins read at plan time. Each
-        // later batch is checked against a fresh scan first: every coin
-        // must still be there, unchanged and not already being spent —
-        // then it is signed exactly as reviewed, or not at all.
+        // later batch is checked first by re-reading only the addresses
+        // that hold its coins: every coin must still be there, unchanged
+        // and not already being spent — then it is signed exactly as
+        // reviewed, or not at all. Its review clock restarts when that
+        // re-read finishes.
         let verifiedAt = coins.fetchedAt;
         if (i > 0) {
           st[i] = { state: "checking" };
           show();
-          const live = await loadSpendableUtxos({ pool, changePool, deriveMore, onDiscovered });
-          verifyBatchStillSpendable(batch, live.utxos);
-          verifiedAt = live.fetchedAt;
+          const book = useWallet.getState().addresses;
+          verifiedAt = await recheckConsolidationBatch(batch, {
+            external: book?.pearlPool ?? pool,
+            internal: book?.pearlChange ?? changePool ?? [],
+          });
         }
         st[i] = { state: "signing" };
         show();
@@ -355,19 +370,24 @@ export default function Consolidate() {
                 {plan.pendingExcluded > 0 && (
                   <li>
                     {plan.pendingExcluded} coin{plan.pendingExcluded === 1 ? "" : "s"} skipped — already being spent
-                    by a transaction this wallet broadcast recently.{" "}
+                    by a transaction this wallet broadcast recently. Check a transaction below; its coins can be
+                    released only if the network doesn't have it.
                     {!running && (
-                      <button
-                        className="inline-flex min-h-11 items-center underline underline-offset-4"
-                        onClick={() => {
-                          clearPendingSpends();
-                          rescan();
-                        }}
-                      >
-                        Forget pending transactions
-                      </button>
-                    )}{" "}
-                    (only if those transactions failed or were dropped)
+                      <ul className="mt-2 space-y-3 text-text-2">
+                        {pendingTransactions().map((t) => (
+                          <li key={t.spentBy ?? "unknown"} className="border-t border-warn-line pt-2">
+                            <div>
+                              {t.coins} coin{t.coins === 1 ? "" : "s"}
+                            </div>
+                            <PendingTxCheck
+                              txid={t.spentBy}
+                              explorerUrl={t.spentBy ? explorer(t.spentBy) : undefined}
+                              onReleased={rescan}
+                            />
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </li>
                 )}
               </ul>

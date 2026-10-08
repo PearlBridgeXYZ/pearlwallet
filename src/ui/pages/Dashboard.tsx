@@ -99,7 +99,17 @@ export default function Dashboard() {
               </div>
               <div className="mt-1 font-mono text-xs tabular-nums text-text-3">{usdOf(b.prl.value)}</div>
               {(b.prl.status === "partial" || b.prl.stale) && (
-                <div className="mt-1 text-xs text-warn">Some addresses couldn't be read — retrying.</div>
+                <div className="mt-1 text-xs text-warn">
+                  Some addresses couldn't be read completely; the balance may be low.{" "}
+                  <button
+                    type="button"
+                    onClick={() => b.refetch()}
+                    disabled={b.scan.running}
+                    className="inline-flex min-h-11 min-w-11 items-center underline decoration-line underline-offset-4 hover:decoration-accent"
+                  >
+                    Rescan
+                  </button>
+                </div>
               )}
               {b.prl.value !== null && b.scan.running && b.scan.total > 0 && (
                 <div role="status" className="mt-2 text-xs text-text-3">Scanning addresses {b.scan.done} / {b.scan.total}</div>

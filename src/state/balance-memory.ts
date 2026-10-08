@@ -10,6 +10,8 @@
 //     `refresh`)
 //
 // Nothing here is persisted and nothing here reaches coin selection.
+// Registered hooks (onBalanceMemoryClear) clear the session's other caches
+// at the same moment.
 
 export interface ScanProgress {
   done: number;
@@ -69,13 +71,33 @@ export function setScanBaseline(key: string, b: ScanBaseline): void {
   baselineByPool.set(key, b);
 }
 
+// Other per-session caches (the react-query cache, the RPC layer's raw
+// address-history cache) register here so lock / wipe / switch clears
+// them in the same step.
+const clearHooks = new Set<() => void>();
+
+/** Registers `fn` to run on every clearBalanceMemory. Returns an
+ *  unregister function. */
+export function onBalanceMemoryClear(fn: () => void): () => void {
+  clearHooks.add(fn);
+  return () => clearHooks.delete(fn);
+}
+
 /** Forget remembered per-address balances, scan progress and scan
- *  baselines. Called on lock, wipe and wallet switch. */
+ *  baselines, and run every registered clear hook (query cache, RPC
+ *  history cache). Called on lock, wipe and wallet switch. */
 export function clearBalanceMemory(): void {
   epoch++;
   lastGoodByAddress.clear();
   progressByPool.clear();
   baselineByPool.clear();
+  for (const fn of clearHooks) {
+    try {
+      fn();
+    } catch {
+      /* one failing hook must not keep the others from clearing */
+    }
+  }
   for (const l of progressListeners) l();
 }
 

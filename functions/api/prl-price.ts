@@ -38,7 +38,15 @@ const OTC_URL = "https://api.pearl-otc.com/offers";
 const COINGECKO_URL =
   "https://api.coingecko.com/api/v3/simple/price?ids=pearl-2,wrapped-pearl&vs_currencies=usd";
 const COINGECKO_IDS = ["pearl-2", "wrapped-pearl"] as const;
-const UPSTREAM_TIMEOUT_MS = 8_000;
+/** Per-upstream timeout (CoinGecko). */
+export const UPSTREAM_TIMEOUT_MS = 8_000;
+/** OTC gets less so a slow order book still leaves the fallback time. */
+export const OTC_TIMEOUT_MS = 5_000;
+/** End-to-end budget for OTC + CoinGecko together: the fallback only
+ *  gets what the first call left, so the function always answers inside
+ *  this budget — below the client's PRICE_FETCH_TIMEOUT_MS
+ *  (src/services/prices.ts; a test pins the relation). */
+export const UPSTREAM_TOTAL_BUDGET_MS = 9_000;
 const CACHE_TTL_MS = 30_000;
 const ERROR_CACHE_TTL_MS = 5_000;
 
@@ -91,9 +99,15 @@ function computePrice(offers: Offer[]): PriceResult | null {
   return { usd_per_prl: minAsk, source: "lowest_ask", n_active_asks: asks.length };
 }
 
-async function fetchJson(url: string): Promise<{ ok: boolean; status: number; json: unknown }> {
+async function fetchJson(
+  url: string,
+  deadline: number,
+  maxMs: number = UPSTREAM_TIMEOUT_MS,
+): Promise<{ ok: boolean; status: number; json: unknown }> {
+  const timeoutMs = Math.min(maxMs, deadline - Date.now());
+  if (timeoutMs <= 0) throw new Error("upstream budget exhausted");
   const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), UPSTREAM_TIMEOUT_MS);
+  const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const r = await fetch(url, {
       headers: { "user-agent": "pearlwallet-price/1", accept: "application/json" },
@@ -109,8 +123,8 @@ async function fetchJson(url: string): Promise<{ ok: boolean; status: number; js
 
 // Primary: OTC order book. Returns a price or null (no usable asks);
 // throws on transport/HTTP error.
-async function fetchOtcPrice(): Promise<PriceResult | null> {
-  const r = await fetchJson(OTC_URL);
+async function fetchOtcPrice(deadline: number): Promise<PriceResult | null> {
+  const r = await fetchJson(OTC_URL, deadline, OTC_TIMEOUT_MS);
   if (!r.ok) throw new Error(`otc http ${r.status}`);
   if (!Array.isArray(r.json)) throw new Error("otc not array");
   return computePrice(r.json as Offer[]);
@@ -118,8 +132,8 @@ async function fetchOtcPrice(): Promise<PriceResult | null> {
 
 // Fallback: CoinGecko simple-price, native id first then WPRL. Returns a
 // price or null; throws on transport/HTTP error.
-async function fetchCoingeckoPrice(): Promise<PriceResult | null> {
-  const r = await fetchJson(COINGECKO_URL);
+async function fetchCoingeckoPrice(deadline: number): Promise<PriceResult | null> {
+  const r = await fetchJson(COINGECKO_URL, deadline);
   if (!r.ok) throw new Error(`coingecko http ${r.status}`);
   const body = (r.json ?? {}) as Record<string, { usd?: unknown } | undefined>;
   for (const id of COINGECKO_IDS) {
@@ -139,15 +153,16 @@ type Upstream = { status: number; body: PriceResult | { error: string } };
 
 // OTC → CoinGecko. First usable price wins.
 async function fetchUpstream(): Promise<Upstream> {
+  const deadline = Date.now() + UPSTREAM_TOTAL_BUDGET_MS;
   let otcErr: string | null = null;
   try {
-    const otc = await fetchOtcPrice();
+    const otc = await fetchOtcPrice(deadline);
     if (otc) return { status: 200, body: otc };
   } catch (e) {
     otcErr = errText(e);
   }
   try {
-    const cg = await fetchCoingeckoPrice();
+    const cg = await fetchCoingeckoPrice(deadline);
     if (cg) return { status: 200, body: cg };
   } catch (e) {
     return {

@@ -14,6 +14,7 @@ import {
   PRL_SCAN_REFETCH_MS,
   PRL_FULL_RESCAN_MS,
   PRL_REFRESH_WINDOW,
+  PRL_REFRESH_WINDOW_EXTERNAL,
 } from "../src/ui/hooks/useWalletBalances";
 import type { ScanBaseline } from "../src/state/balance-memory";
 import { useUI } from "../src/state/ui-store";
@@ -98,10 +99,13 @@ afterEach(() => {
 });
 
 describe("refresh cadence", () => {
-  it("PRL refetch every 120 s; a full walk at least every 10 min; window 5", () => {
+  it("PRL refetch every 120 s; a full walk at least every 10 min; window: gap limit external, 5 change", () => {
     expect(PRL_SCAN_REFETCH_MS).toBe(120_000);
     expect(PRL_FULL_RESCAN_MS).toBe(600_000);
     expect(PRL_REFRESH_WINDOW).toBe(5);
+    // Review S12: Receive offers every external address on the list, which
+    // discovery keeps at last used + gap limit — so all of them are walked.
+    expect(PRL_REFRESH_WINDOW_EXTERNAL).toBe(20);
   });
 });
 
@@ -115,7 +119,7 @@ describe("planPrlScan / nextScanBaseline", () => {
     expect(planPrlScan(base, base.fullAt + PRL_FULL_RESCAN_MS - 1, false)).toEqual({
       lastUsed: [2, -1],
       knownUnused: base.knownUnused,
-      window: PRL_REFRESH_WINDOW,
+      window: [PRL_REFRESH_WINDOW_EXTERNAL, PRL_REFRESH_WINDOW],
     });
   });
 
@@ -156,11 +160,12 @@ describe("scanPrlWallet refresh mode", () => {
     searched.length = 0;
 
     const r = await scanPrlWallet(full.discovered, { deriveMore, refresh: refreshOf(baseline) });
-    // Walked: external 0..7 (last used 2 + window 5), internal 0..6 (1 + 5).
-    expect(new Set(searched)).toEqual(new Set([...list(0, 8), ...list(1, 7)]));
-    expect(searched).toHaveLength(15);
-    expect(r.skipped).toBe(30);
-    expect(r.pool).toHaveLength(15);
+    // Walked: every external address 0..22 (last used 2 + gap window 20),
+    // internal 0..6 (1 + 5). Skipped: internal 7..21.
+    expect(new Set(searched)).toEqual(new Set([...list(0, 23), ...list(1, 7)]));
+    expect(searched).toHaveLength(30);
+    expect(r.skipped).toBe(15);
+    expect(r.pool).toHaveLength(30);
     expect(r.grains).toBe(full.grains);
     expect(r.source).toBe("live");
     expect(r.spendable!.utxos.map((u) => [u.branch, u.index]).sort()).toEqual(
@@ -215,14 +220,24 @@ describe("scanPrlWallet refresh mode", () => {
     expect(full.discovered.internal).toEqual(list(1, 36));
   });
 
+  it("review S12: a payment to any external address Receive offers is seen by the next refresh", async () => {
+    const { baseline } = await fullScan();
+    // Receive can show any of external 0..19; pay the far end of the list.
+    history[name(0, 19)] = [fund(name(0, 19), 5)];
+    const r = await scanPrlWallet(SET, { deriveMore, refresh: refreshOf(baseline) });
+    expect(r.pool).toContain(name(0, 19));
+    expect(r.grains).toBe(500_000_000n);
+  });
+
   it("addresses added after the baseline (persisted discovery) are always walked", async () => {
     const { baseline } = await fullScan();
     const grown = { external: list(0, 26), internal: SET.internal };
     searched.length = 0;
     const r = await scanPrlWallet(grown, { deriveMore, refresh: refreshOf(baseline) });
     for (let i = 20; i < 26; i++) expect(searched).toContain(name(0, i));
-    // Skipped: external 5..19 and internal 5..19 (last used -1, window 5).
-    expect(r.skipped).toBe(15 + 15);
+    // Skipped: internal 5..19 only (last used -1, change window 5); the
+    // external window is the gap limit, so nothing external is skipped.
+    expect(r.skipped).toBe(15);
   });
 
   it("a read failure in refresh mode does not trigger a full walk and leaves the scan partial", async () => {
@@ -245,8 +260,8 @@ describe("scanPrlWallet refresh mode", () => {
       refresh: refreshOf(baseline),
       onProgress: (p) => totals.push(p.total),
     });
-    expect(r.pool).toHaveLength(10); // ext 0..4, int 0..4 (last used -1, window 5)
-    expect(new Set(totals)).toEqual(new Set([10]));
+    expect(r.pool).toHaveLength(25); // ext 0..19, int 0..4 (last used -1, windows 20 / 5)
+    expect(new Set(totals)).toEqual(new Set([25]));
   });
 
   it("rejects a bad window", async () => {
