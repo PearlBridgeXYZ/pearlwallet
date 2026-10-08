@@ -24,14 +24,16 @@
 // against those invariants and against the pending list, then signed by
 // the worker's signPearlConsolidation, which independently refuses any
 // output that is not this wallet's key at (branch, index) and any fee
-// above 2 %. Right before submission the inputs are reserved as pending
-// spends (refused if another broadcast took one meanwhile), so a re-run
-// never plans them again. Later batches are re-checked first by
+// above 2 %. Right before submission the batch is recorded as a broadcast
+// (services/pending-spends.ts; refused if another broadcast took a coin
+// meanwhile or one has an unknown status), so a re-run never plans its
+// coins again. Later batches are re-checked first by
 // recheckConsolidationBatch, which re-reads only their own addresses.
 
 import {
-  broadcastRecordingSpends,
+  broadcastRecorded,
   DUST_LIMIT_GRAINS,
+  inputAddresses,
   MAX_SEND_INPUTS,
   p2trKeyPathVsize,
   PEARL_PREVIEW_FRESHNESS_MS,
@@ -39,7 +41,7 @@ import {
   type ComposedPearlTx,
   type PoolUtxo,
 } from "./pearl-tx";
-import { assertNotPending, excludePendingSpends, outpointKey, pendingOutpoints } from "./pending-spends";
+import { excludePendingSpends, outpointKey, PendingSpendConflictError, pendingOutpoints } from "./pending-spends";
 import { walkPoolAddresses, type WalletAddressRef } from "./balances";
 import type { PearlNetwork } from "../chains/pearl/network";
 import type { HdBranch } from "../crypto/hd";
@@ -368,9 +370,9 @@ export interface ConsolidationBroadcast {
  * Signs (worker: signPearlConsolidation) and broadcasts one batch exactly
  * as reviewed. Refuses a batch verified more than
  * PEARL_PREVIEW_FRESHNESS_MS ago (E_PREVIEW_STALE), a batch breaking any
- * invariant, and a batch spending a coin of a pending broadcast
- * (E_CONSOLIDATION_INPUT_PENDING). Records its inputs as pending on
- * broadcast.
+ * invariant, a batch spending a coin of a recorded broadcast
+ * (E_CONSOLIDATION_INPUT_PENDING), and any batch while another broadcast's
+ * status is unknown (BroadcastRefusedError "unresolved").
  */
 export async function broadcastConsolidationBatch(
   frozen: FrozenConsolidationBatch,
@@ -380,13 +382,6 @@ export async function broadcastConsolidationBatch(
   if (now - frozen.verifiedAt > PEARL_PREVIEW_FRESHNESS_MS) throw new Error("E_PREVIEW_STALE");
   const b = frozen.batch;
   assertConsolidationBatch(b);
-  // Reservation check #1 (before signing); broadcastRecordingSpends
-  // re-checks atomically with recording right before submission.
-  try {
-    assertNotPending(b.utxos, null, now);
-  } catch {
-    throw new Error("E_CONSOLIDATION_INPUT_PENDING");
-  }
   const req: PearlConsolidationRequest = {
     utxos: b.utxos.map((u) => ({
       txid: u.txid,
@@ -400,9 +395,28 @@ export async function broadcastConsolidationBatch(
     destination: { branch: b.destination.branch, index: b.destination.index },
     network,
   };
-  const { raw } = await cryptoWorker.call<"signPearlConsolidation", { raw: string }>("signPearlConsolidation", {
-    req,
-  });
-  const txid = await broadcastRecordingSpends(raw, b.utxos);
-  return { txid, batch: b };
+  // Gate (an "unknown" broadcast blocks every consolidation; a coin taken
+  // by another broadcast refuses the batch), sign, record, submit — one
+  // locked step (broadcastRecorded).
+  try {
+    const txid = await broadcastRecorded(
+      {
+        kind: "consolidation",
+        inputs: b.utxos,
+        addresses: inputAddresses(b.utxos),
+        destination: b.output.address,
+        amountGrains: b.output.amountGrains,
+      },
+      async () => {
+        const { raw } = await cryptoWorker.call<"signPearlConsolidation", { raw: string }>("signPearlConsolidation", {
+          req,
+        });
+        return raw;
+      },
+    );
+    return { txid, batch: b };
+  } catch (e) {
+    if (e instanceof PendingSpendConflictError) throw new Error("E_CONSOLIDATION_INPUT_PENDING");
+    throw e;
+  }
 }

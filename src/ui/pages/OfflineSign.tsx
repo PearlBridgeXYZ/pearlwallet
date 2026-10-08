@@ -21,6 +21,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
+import { refusalMessage } from "../components/PendingBroadcasts";
 import AnimatedPayloadQR from "../components/AnimatedPayloadQR";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
@@ -695,22 +696,24 @@ function BroadcastTab() {
     setBusy(true);
     setBroadcastError(null);
     try {
-      // Same reservation path as Send and consolidation: the tx's inputs
-      // are decoded from the raw hex and recorded as pending spends.
-      const id = await broadcastSignedPearlTx(decoded.raw);
+      // Same recorded path as Send and consolidation: inputs, destination
+      // and amount are decoded from the raw hex and recorded first.
+      const id = await broadcastSignedPearlTx(decoded.raw, { kind: "offline" });
       setTxid(id);
     } catch (e) {
       if (e instanceof BroadcastStatusUnknownError) {
         setBroadcastError(
           "Broadcast status unknown — the network didn't confirm receipt. " +
             (e.txid ? `Check the explorer for txid ${e.txid} ` : "Check the explorer ") +
-            "before trying again. Broadcasting this same payload again is safe. It stays listed on the Dashboard and the Send screen until checked.",
+            "before trying again. Broadcasting this same payload again is safe. It stays listed in the banner at the top until checked.",
         );
       } else if (e instanceof PendingSpendConflictError) {
         setBroadcastError(
           "A coin in this transaction is already being spent by another transaction this wallet broadcast recently. Not broadcast. " +
-            "If that transaction's status is unknown, check it in the panel on the Dashboard or the Send screen — its coins can be released there only if the network doesn't have it.",
+            "If that transaction's status is unknown, check it in the banner at the top — it can be released there only if the network doesn't have it and its coins haven't moved.",
         );
+      } else if (refusalMessage(e)) {
+        setBroadcastError(refusalMessage(e));
       } else {
         setBroadcastError(e instanceof Error ? e.message : String(e));
       }

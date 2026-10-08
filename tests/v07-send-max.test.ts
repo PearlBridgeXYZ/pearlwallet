@@ -21,7 +21,8 @@ import {
 } from "../src/services/pearl-tx";
 import { MAX_PEARL_SIGN_INPUTS } from "../src/crypto/pearl-sign";
 import { computeTipGrains, tipAddressFor, TIP_MIN_GRAINS } from "../src/chains/pearl/tip";
-import { clearPendingSpends, recordPendingSpends } from "../src/services/pending-spends";
+import { clearPendingSpends } from "../src/services/pending-spends";
+import { addRecord, useMemoryStorage } from "./helpers/broadcast-env";
 
 const POOL = ["prl1pdummy0", "prl1pdummy1"];
 const DEST = "prl1pdest0000";
@@ -65,6 +66,7 @@ const keys = (us: { txid: string; vout: number }[]) => us.map((u) => `${u.txid}:
 beforeEach(() => {
   vi.restoreAllMocks();
   clearPendingSpends();
+  useMemoryStorage();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -370,7 +372,7 @@ describe("composePearlSend — fee accounting and diagnostics", () => {
 
   it("coins of a pending broadcast are never selected (cache or live)", async () => {
     const utxos = coins([5n * PRL, 3n * PRL]);
-    recordPendingSpends("f".repeat(64), [utxos[0]!]);
+    addRecord("f".repeat(64), [utxos[0]!]);
     serve(utxos);
     const c = await composePearlSend({
       network: "mainnet",
@@ -382,7 +384,7 @@ describe("composePearlSend — fee accounting and diagnostics", () => {
     });
     expect(keys(c.utxos)).toEqual(keys([utxos[1]!]));
     // Everything pending → E_NO_UTXOS with the pending count.
-    recordPendingSpends("e".repeat(64), [utxos[1]!]);
+    addRecord("e".repeat(64), [utxos[1]!]);
     const err = await composePearlSend({ network: "mainnet", pool: POOL, destination: DEST, amountGrains: PRL, includeTip: false }).catch(
       (e: unknown) => e,
     );

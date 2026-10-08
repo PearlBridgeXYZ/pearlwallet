@@ -27,9 +27,8 @@ import {
 import type { PrlPoolScan } from "../../services/balances";
 import { BroadcastStatusUnknownError, MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
-import { needsPayTwiceAck, payTwiceRisk, PendingSpendConflictError } from "../../services/pending-spends";
-import PendingTxCheck from "../components/PendingTxCheck";
-import PendingBroadcasts, { PendingPersistenceWarning } from "../components/PendingBroadcasts";
+import { PendingSpendConflictError, unresolvedBroadcasts } from "../../services/pending-spends";
+import { refusalMessage } from "../components/PendingBroadcasts";
 import { usePendingSpendsVersion } from "../hooks/usePendingSpends";
 
 type FeeTier = "low" | "normal" | "high";
@@ -98,13 +97,14 @@ export default function SendPRL() {
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
 
   const [destination, setDestination] = useState("");
-  // An earlier payment to this destination (any letter case) is still
-  // unresolved — in flight or "status unknown" — or a reserved broadcast's
-  // destination was never recorded: paying again needs this explicit
-  // acknowledgement.
-  const [payTwiceAck, setPayTwiceAck] = useState(false);
+  // While any earlier broadcast's status is unknown it may already have
+  // paid (any address), so sending needs the user's explicit "may pay
+  // twice" acknowledgement — of exactly the broadcasts shown when it was
+  // given (the service refuses any other).
+  const [ackTxids, setAckTxids] = useState<string[] | null>(null);
   usePendingSpendsVersion();
-  const payTwice = payTwiceRisk(destination);
+  const unresolved = unresolvedBroadcasts();
+  const acked = unresolved.every((r) => ackTxids?.includes(r.txid));
   const [amount, setAmount] = useState("");
   const [sendMax, setSendMax] = useState(false);
   const [tier, setTier] = useState<FeeTier>("normal");
@@ -303,11 +303,11 @@ export default function SendPRL() {
     if (!validPearl(destination, pearlNetwork)) {
       return { ok: false, reason: "That doesn't look like a valid Pearl address." };
     }
-    if (needsPayTwiceAck(destination) && !payTwiceAck) {
+    if (!acked) {
       return {
         ok: false,
         reason:
-          "An earlier payment that may go to this address has an unknown status. Check it above, or confirm that you accept paying twice.",
+          "An earlier broadcast has an unknown status. Check it in the banner above, or confirm that you accept paying twice.",
       };
     }
     if (sendMax) {
@@ -329,11 +329,11 @@ export default function SendPRL() {
     if (!validated) return;
     const q = previewQ.data;
     if (!q) return;
-    // Re-checked at click time: a payment to this address may have ended
-    // "status unknown" (another tab) since the review.
-    if (needsPayTwiceAck(validated.dest) && !payTwiceAck) {
+    // Re-checked at click time (another tab may have broadcast since the
+    // review); the service checks again inside the broadcast lock.
+    if (!acked) {
       setError(
-        "An earlier payment that may go to this address has an unknown status. Go back and check it, or confirm that you accept paying twice.",
+        "An earlier broadcast has an unknown status. Go back and check it, or confirm that you accept paying twice.",
       );
       return;
     }
@@ -344,6 +344,8 @@ export default function SendPRL() {
       const { txid: hash } = await broadcastPearlPrecomposed(
         { composed: c, composedAt },
         pearlNetwork,
+        Date.now(),
+        ackTxids ?? [],
       );
       setTxid(hash);
       setStage("sent");
@@ -357,6 +359,8 @@ export default function SendPRL() {
       } else if (e instanceof PendingSpendConflictError) {
         setError("A coin in this preview is already being spent by another transaction from this wallet — refreshing…");
         previewQ.refetch();
+      } else if (refusalMessage(e)) {
+        setError(refusalMessage(e));
       } else if (msg === "E_PREVIEW_STALE") {
         setError("UTXO selection expired — refreshing…");
         previewQ.refetch();
@@ -381,7 +385,6 @@ export default function SendPRL() {
           <p className="mt-2 text-xs text-text-3 leading-relaxed break-words">
             Confirming on chain — this can take a few minutes.
           </p>
-          <PendingPersistenceWarning className="mt-3" />
           {txid && (
             <a
               href={pearlTxExplorerUrl(pearlNetwork, txid)}
@@ -408,25 +411,15 @@ export default function SendPRL() {
         <div className="card">
           <h2 className="text-lg font-semibold tracking-tight">Broadcast status unknown</h2>
           <p className="mt-2 text-sm leading-relaxed text-text-2">
-            The network didn't confirm receipt. The transaction may already be on its way, so this
-            send can't be repeated until you check it. Its coins stay reserved meanwhile.
+            The network didn't confirm receipt. The transaction may already be on its way, so its
+            coins stay reserved and any new payment needs your explicit go-ahead until it's resolved.
+            Check it in the banner above — it stays there on every screen.
           </p>
-          <PendingPersistenceWarning className="mt-3" />
-          <div className="mt-3 rounded-pb border border-line bg-surface-2 p-3">
-            <PendingTxCheck
-              txid={unknownTxid}
-              explorerUrl={unknownTxid ? pearlTxExplorerUrl(pearlNetwork, unknownTxid) : undefined}
-              onFound={() => {
-                setTxid(unknownTxid);
-                setStage("sent");
-              }}
-              onReleased={() => {
-                setUnknownTxid(null);
-                setValidated(null);
-                setStage("compose");
-              }}
-            />
-          </div>
+          {unknownTxid && (
+            <p className="mt-2 text-sm text-text-3 leading-relaxed break-words">
+              Txid: <span className="break-all font-mono min-w-0 tabular-nums">{unknownTxid}</span>
+            </p>
+          )}
           <div className="mt-4 flex gap-2">
             <button onClick={() => navigate("/dashboard")} className="btn-primary flex-1 min-w-11">
               Back to dashboard
@@ -707,7 +700,6 @@ export default function SendPRL() {
 
   return (
     <Page title="Send PRL">
-      <PendingBroadcasts network={pearlNetwork} className="mb-4" />
       <div className="card flex flex-col gap-5 shadow-slabsm sm:shadow-slab">
         <label className="block">
           <span className="label">Destination address</span>
@@ -720,29 +712,32 @@ export default function SendPRL() {
             spellCheck={false}
             onChange={(e) => {
               setDestination(e.target.value);
-              setPayTwiceAck(false);
             }}
           />
         </label>
-        {(payTwice.sameDestination.length > 0 || payTwice.unknownDestination > 0) && (
+        {unresolved.length > 0 && (
           <div role="alert" className="rounded-pb border border-danger-line bg-danger-bg p-4 text-sm leading-7 text-danger">
             <p className="font-medium">
-              {payTwice.sameDestination.length > 0
-                ? "An earlier payment to this address may already be on its way."
-                : "An earlier payment whose address this wallet couldn't record may already be on its way."}
+              {unresolved.length === 1
+                ? "An earlier broadcast may already be on its way."
+                : `${unresolved.length} earlier broadcasts may already be on their way.`}
             </p>
             <p className="mt-1">
-              Its broadcast status is unknown. Check it in the panel above first — sending now could pay this
-              address twice.
+              The network didn't confirm receipt
+              {unresolved.some((r) => r.destination && r.destination === destination.trim().toLowerCase())
+                ? ", and one of them pays this same address"
+                : ""}
+              . Check {unresolved.length === 1 ? "it" : "them"} in the banner above first — sending now could pay
+              twice.
             </p>
             <label className="mt-2 flex items-start gap-2">
               <input
                 type="checkbox"
                 className="mt-2"
-                checked={payTwiceAck}
-                onChange={(e) => setPayTwiceAck(e.target.checked)}
+                checked={acked}
+                onChange={(e) => setAckTxids(e.target.checked ? unresolved.map((r) => r.txid) : null)}
               />
-              <span>I understand this may pay this address twice. Send anyway.</span>
+              <span>I understand this may pay twice. Send anyway.</span>
             </label>
           </div>
         )}

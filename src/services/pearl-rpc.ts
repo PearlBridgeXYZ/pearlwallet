@@ -5,8 +5,9 @@
 // UTXO set keyed by `${txid}:${vout}`.
 
 import * as btc from "@scure/btc-signer";
-import { hexToBytes } from "@noble/hashes/utils";
+import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { PEARL_RPC_POOL, pearlParams } from "../chains/pearl/network";
+import { encodeTaprootAddress } from "../chains/pearl/address";
 import { useUI } from "../state/ui-store";
 import { TokenBucket, sleep, type RpcPriority } from "./rpc-limiter";
 import { memoryEpoch, onBalanceMemoryClear } from "../state/balance-memory";
@@ -826,6 +827,42 @@ export function rawTxInputs(rawHex: string): { txid: string; vout: number }[] | 
     out.push({ txid: hex, vout: inp.index });
   }
   return out;
+}
+
+/** Pearl address of a P2TR output script (hex); null for any other script. */
+export function p2trScriptAddress(scriptHex: string): string | null {
+  if (!/^5120[0-9a-f]{64}$/i.test(scriptHex)) return null;
+  try {
+    return encodeTaprootAddress(hexToBytes(scriptHex.slice(4).toLowerCase()), pearlParams());
+  } catch {
+    return null;
+  }
+}
+
+/** Outputs of a raw tx (address null for a non-P2TR script), or null if
+ *  it can't be parsed. */
+export function rawTxOutputs(rawHex: string): { address: string | null; amountGrains: bigint }[] | null {
+  const tx = parseRawTx(rawHex);
+  if (!tx || tx.outputsLength === 0) return null;
+  const out: { address: string | null; amountGrains: bigint }[] = [];
+  for (let i = 0; i < tx.outputsLength; i++) {
+    const o = tx.getOutput(i);
+    if (!o.script || o.amount === undefined) return null;
+    out.push({ address: p2trScriptAddress(bytesToHex(o.script)), amountGrains: o.amount });
+  }
+  return out;
+}
+
+/** The node's copy of `txid`, only if it really hashes to `txid`; null
+ *  for anything else (absent, odd answer, transport failure). */
+export async function fetchVerifiedRawTx(txid: string): Promise<string | null> {
+  const want = txid.toLowerCase();
+  try {
+    const raw = await call<unknown>("getrawtransaction", [want, 0], { priority: "high" });
+    return typeof raw === "string" && /^[0-9a-f]+$/i.test(raw) && rawTxId(raw) === want ? raw : null;
+  } catch {
+    return null;
+  }
 }
 
 export type PearlTxProbe = "found" | "absent" | "unknown";

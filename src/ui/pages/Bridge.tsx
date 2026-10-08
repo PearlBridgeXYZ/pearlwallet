@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
+import { refusalMessage } from "../components/PendingBroadcasts";
 import { useWallet } from "../../state/wallet-store";
 import { db, type BridgeCrossingRecord } from "../../storage/db";
 import { bridgeConfig } from "../../services/bridge";
@@ -453,7 +454,7 @@ function WrapCard(props: {
         return;
       }
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(refusalMessage(e) ?? (e as Error).message);
     } finally {
       setBusy(false);
     }

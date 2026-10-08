@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import Page from "../components/Page";
+import { refusalMessage } from "../components/PendingBroadcasts";
 import { useUI } from "../../state/ui-store";
 import { useWallet } from "../../state/wallet-store";
 import {
@@ -101,7 +102,7 @@ export default function VaultPendingTxDetail() {
       const updated = await broadcastPendingTx({ vault, pending });
       setPending(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(refusalMessage(e) ?? (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }

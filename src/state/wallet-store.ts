@@ -5,7 +5,7 @@ import { cryptoWorker } from "../crypto/worker-client";
 import { MAX_ADDRESSES_PER_BRANCH, RECEIVE_GAP_LIMIT, type HdBranch } from "../crypto/hd";
 import { monotonicNow } from "../lib/monotonic";
 import { clearBalanceMemory } from "./balance-memory";
-import { clearPendingSpends, clearPendingSpendsMemory } from "../services/pending-spends";
+import { clearPendingSpends } from "../services/pending-spends";
 import {
   db,
   loadKeystore,
@@ -283,10 +283,6 @@ export const useWallet = create<WalletState>((set, get) => ({
             } else if (ev.data.type === "wiped") {
               cryptoWorker.reset();
               clearBalanceMemory();
-              // The wiping tab removed the pending-spend keys; drop this
-              // tab's in-memory copies so its next write can't put the old
-              // wallet's records back.
-              clearPendingSpendsMemory();
               set({ status: "no-wallet", addresses: null, blob: null });
             }
           });
@@ -465,10 +461,9 @@ export const useWallet = create<WalletState>((set, get) => ({
       cryptoWorker.reset();
       await wipeKeystore();
       clearBalanceMemory();
-      // Reservations, releases, intents and submission attempts — memory
-      // and storage (wipeKeystore removed the keys; the module's copies
-      // would otherwise be written back by the next reservation). Lock
-      // keeps them on purpose: a lock must not forget a pending broadcast.
+      // Broadcast records (wipeKeystore removed the key too; this also
+      // re-renders the banner). Lock keeps them on purpose: a lock must not
+      // forget a broadcast whose fate is unknown.
       clearPendingSpends();
       broadcastKeystoreEvent({ type: "wiped" });
       set({ status: "no-wallet", addresses: null, blob: null });

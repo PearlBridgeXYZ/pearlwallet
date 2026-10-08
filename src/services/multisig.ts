@@ -43,7 +43,7 @@ import {
   type PrlUtxo,
 } from "./pearl-rpc";
 import { broadcastSignedPearlTx, HistoryIncompleteError } from "./pearl-tx";
-import { excludePendingSpends, PendingSpendConflictError } from "./pending-spends";
+import { BroadcastRefusedError, excludePendingSpends } from "./pending-spends";
 import type {
   PearlMultisigComposePsbtRequest,
   PearlMultisigUtxoSpec,
@@ -782,13 +782,14 @@ export function finalizeVaultPsbt(psbtBase64: string): { rawHex: string } {
 }
 
 /**
- * Broadcasts a finalized vault transaction through the same reservation
- * path as every other Pearl spend: its inputs (decoded from the raw tx)
- * are reserved first, refused if another recent broadcast spends one of
- * them, and released only on a definite rejection.
+ * Broadcasts a finalized vault transaction through the same recorded path
+ * as every other Pearl spend (services/pending-spends.ts): its inputs,
+ * destination and amount are decoded from the raw tx and recorded before
+ * submission; refused while another broadcast's status is unknown or if a
+ * coin is already spent by a recorded broadcast.
  */
-export async function broadcastVaultTx(rawHex: string): Promise<string> {
-  return broadcastSignedPearlTx(rawHex);
+export async function broadcastVaultTx(rawHex: string, vaultAddress: string | null): Promise<string> {
+  return broadcastSignedPearlTx(rawHex, { kind: "vault", addresses: vaultAddress ? [vaultAddress] : [] });
 }
 
 // ---------------------------------------------------------------------------
@@ -914,15 +915,16 @@ export async function broadcastPendingTx(opts: {
   const { rawHex } = finalizeVaultPsbt(opts.pending.psbtBase64);
   let txid: string;
   try {
-    txid = await broadcastSignedPearlTx(rawHex);
+    txid = await broadcastVaultTx(rawHex, opts.vault.pearlAddress);
   } catch (err) {
     // Outcome unknown (timeout / dropped connection): the tx may be in the
     // mempool. Leave the record as-is so the user can check the explorer
     // or re-broadcast (idempotent) — never mark it failed.
     if (err instanceof BroadcastStatusUnknownError) throw err;
-    // Refused before submission (a coin is already being spent by another
-    // recent broadcast): nothing was sent, the draft stays as it is.
-    if (err instanceof PendingSpendConflictError) throw err;
+    // Refused before submission (another broadcast's status is unknown, a
+    // coin is already spent by one, the record couldn't be saved, another
+    // tab is broadcasting): nothing was sent, the draft stays as it is.
+    if (err instanceof BroadcastRefusedError) throw err;
     const failed: VaultPendingTxRecord = {
       ...opts.pending,
       status: "failed",

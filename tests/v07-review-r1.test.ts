@@ -8,8 +8,9 @@
 //   S4  malformed / null HTTP-200 broadcast answers → status unknown
 //   S5  edge-limit 503 is "not delivered"; a definitive rejection after a
 //       maybe-delivered attempt is resolved by probing the txid
-//   S6  pending-spends memory is always merged on read
-//   S7  one reservation path for Send, consolidation and offline broadcast
+//   S6  (superseded: the broadcast record now fails closed instead of
+//       keeping an in-memory copy — tests/v07-pending-spends.test.ts)
+//   S7  one recorded path for Send, consolidation and offline broadcast
 //   S15 price budget fits inside the client timeout
 //   S16 lock / wipe / switch clears the RPC history cache and hooks
 
@@ -34,24 +35,17 @@ import {
 } from "../src/services/pearl-rpc";
 import {
   broadcastPearlPrecomposed,
-  broadcastRecordingSpends,
   broadcastSignedPearlTx,
   composePearlSend,
   loadSpendableUtxos,
   type ComposedPearlTx,
 } from "../src/services/pearl-tx";
 import {
-  assertNotPending,
+  broadcastRecords,
   clearPendingSpends,
-  forgetPendingTransaction,
   pendingOutpoints,
-  pendingTransactions,
-  recordPendingSpends,
-  releasePendingSpends,
-  reservePendingSpends,
-  PendingSpendConflictError,
-  PENDING_SPENDS_STORAGE_KEY,
 } from "../src/services/pending-spends";
+import { addRecord, useMemoryStorage } from "./helpers/broadcast-env";
 import {
   broadcastConsolidationBatch,
   composeConsolidation,
@@ -78,6 +72,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   useUI.getState().setPearlRpcOverride("");
   clearPendingSpends();
+  useMemoryStorage();
 });
 afterEach(() => {
   clearPendingSpends();
@@ -120,6 +115,8 @@ function stubRpc(handler: Handler) {
 }
 const ok = (result: unknown) => new Response(JSON.stringify({ result, error: null }));
 const rpcErr = (code: number, message: string) => new Response(JSON.stringify({ result: null, error: { code, message } }));
+/** A signed tx through the one recorded broadcast path. */
+const broadcastRecordingSpends = (raw: string, _ins?: unknown) => broadcastSignedPearlTx(raw, { kind: "offline" });
 const NGINX_503 =
   "<html>\r\n<head><title>503 Service Temporarily Unavailable</title></head>\r\n<body>\r\n<center><h1>503 Service Temporarily Unavailable</h1></center>\r\n<hr><center>nginx/1.24.0</center>\r\n</body>\r\n</html>\r\n";
 
@@ -252,7 +249,7 @@ describe("S2 — review clocks start when the walk finished", () => {
     capped = true;
     await expect(recheckConsolidationBatch(plan.batches[0]!, book)).rejects.toThrow("E_CONSOLIDATION_RECHECK_INCOMPLETE");
     capped = false;
-    recordPendingSpends("f".repeat(64), [coins[1]!]);
+    addRecord("f".repeat(64), [coins[1]!]);
     await expect(recheckConsolidationBatch(plan.batches[0]!, book)).rejects.toThrow("E_CONSOLIDATION_INPUTS_CHANGED");
   });
 
@@ -386,7 +383,8 @@ describe("S5 — edge 503s and definitive rejections after a maybe-delivered att
       return ++n === 1 ? new Response("busy", { status: 503 }) : rpcErr(-26, "bad-txns-inputs-missingorspent");
     });
     await expect(broadcastRecordingSpends(raw, ins)).resolves.toBe(txid);
-    expect(pendingTransactions()).toEqual([expect.objectContaining({ spentBy: txid, coins: 2 })]);
+    expect(broadcastRecords()).toEqual([expect.objectContaining({ txid, state: "accepted" })]);
+    expect(pendingOutpoints().size).toBe(2);
   });
 
   it("plain 503 then -26, probe can't tell → status unknown, inputs reserved", async () => {
@@ -410,91 +408,13 @@ describe("S5 — edge 503s and definitive rejections after a maybe-delivered att
   });
 });
 
-// ─── S6 ──────────────────────────────────────────────────────────────────
-
-function installStorage(opts: { failSet?: boolean; failGet?: boolean } = {}) {
-  const map = new Map<string, string>();
-  const storage = {
-    get length() {
-      return map.size;
-    },
-    clear: () => map.clear(),
-    getItem: (k: string) => {
-      if (opts.failGet) throw new Error("SecurityError");
-      return map.has(k) ? map.get(k)! : null;
-    },
-    setItem: (k: string, v: string) => {
-      if (opts.failSet) throw new Error("QuotaExceededError");
-      map.set(k, String(v));
-    },
-    removeItem: (k: string) => void map.delete(k),
-    key: (i: number) => Array.from(map.keys())[i] ?? null,
-  } as Storage;
-  (globalThis as unknown as { localStorage: Storage }).localStorage = storage;
-  return map;
-}
-const OP = (n: number) => ({ txid: n.toString(16).padStart(64, "0"), vout: 0 });
-
-describe("S6 — the in-memory pending list is always read", () => {
-  it("storage unavailable: records survive in memory", () => {
-    recordPendingSpends(null, [OP(1)]);
-    expect(pendingOutpoints().has(`${OP(1).txid}:0`)).toBe(true);
-  });
-
-  it("storage readable but full: a failed write is still enforced, and older stored entries still count", () => {
-    const map = installStorage();
-    recordPendingSpends("a".repeat(64), [OP(1)]);
-    expect(map.get(PENDING_SPENDS_STORAGE_KEY)).toContain(OP(1).txid);
-    // Now the quota is exhausted.
-    (globalThis as unknown as { localStorage: Storage }).localStorage.setItem = () => {
-      throw new Error("QuotaExceededError");
-    };
-    recordPendingSpends("b".repeat(64), [OP(2)]);
-    expect(map.get(PENDING_SPENDS_STORAGE_KEY)).not.toContain(OP(2).txid);
-    const p = pendingOutpoints();
-    expect(p.has(`${OP(1).txid}:0`)).toBe(true);
-    expect(p.has(`${OP(2).txid}:0`)).toBe(true);
-  });
-
-  it("storage read errors: memory still protects", () => {
-    installStorage({ failGet: true });
-    recordPendingSpends(null, [OP(3)]);
-    expect(pendingOutpoints().has(`${OP(3).txid}:0`)).toBe(true);
-  });
-
-  it("another tab's stored entries are merged with this tab's memory", () => {
-    const map = installStorage();
-    recordPendingSpends("a".repeat(64), [OP(1)]);
-    map.set(
-      PENDING_SPENDS_STORAGE_KEY,
-      JSON.stringify([{ outpoint: `${OP(9).txid}:0`, spentBy: "c".repeat(64), recordedAt: Date.now() }]),
-    );
-    const p = pendingOutpoints();
-    expect(p.has(`${OP(1).txid}:0`)).toBe(true);
-    expect(p.has(`${OP(9).txid}:0`)).toBe(true);
-  });
-});
-
 // ─── S7 ──────────────────────────────────────────────────────────────────
 
-describe("S7 — one reservation path for every broadcast", () => {
-  it("reservation refuses inputs pending for another tx, allows the same tx again, release undoes it", () => {
-    reservePendingSpends("a".repeat(64), [OP(1)]);
-    expect(() => reservePendingSpends("b".repeat(64), [OP(1), OP(2)])).toThrow(PendingSpendConflictError);
-    expect(pendingOutpoints().has(`${OP(2).txid}:0`)).toBe(false); // nothing half-recorded
-    expect(() => assertNotPending([OP(1)], "a".repeat(64))).not.toThrow();
-    const added = reservePendingSpends("b".repeat(64), [OP(2)]);
-    releasePendingSpends(added, "b".repeat(64));
-    expect(pendingOutpoints().has(`${OP(2).txid}:0`)).toBe(false);
-    expect(pendingOutpoints().has(`${OP(1).txid}:0`)).toBe(true);
-    forgetPendingTransaction("a".repeat(64));
-    expect(pendingOutpoints().size).toBe(0);
-  });
-
+describe("S7 — one recorded path for every broadcast", () => {
   it("Send: a frozen preview whose coin became pending is refused before signing", async () => {
     const call = vi.spyOn(workerClient.cryptoWorker, "call");
     const coin = { txid: "01".padStart(64, "0"), vout: 0, valueGrains: 60_000n, scriptHex: scriptOf(0, 1), branch: 0 as const, index: 1 };
-    recordPendingSpends("e".repeat(64), [coin]);
+    addRecord("e".repeat(64), [coin]);
     const composed: ComposedPearlTx = {
       utxos: [coin],
       outputs: [{ address: DEST, amountGrains: 59_000n }],
@@ -523,14 +443,15 @@ describe("S7 — one reservation path for every broadcast", () => {
     const plan = composeConsolidation({ utxos: coins, destination: { address: "e0", branch: 0, index: 0 } });
     const { raw } = signedFixture(7);
     vi.spyOn(workerClient.cryptoWorker, "call").mockImplementation((async () => {
-      // Another tab broadcasts a tx spending coin 2 while we sign.
-      recordPendingSpends("9".repeat(64), [coins[1]!]);
+      // A record of coin 2 appears while we sign (written around the lock):
+      // the check repeated before recording still refuses.
+      addRecord("9".repeat(64), [coins[1]!]);
       return { raw };
     }) as never);
     const calls = stubRpc(() => ok("x"));
     await expect(
       broadcastConsolidationBatch({ batch: plan.batches[0]!, verifiedAt: Date.now() }, "mainnet"),
-    ).rejects.toBeInstanceOf(PendingSpendConflictError);
+    ).rejects.toThrow("E_CONSOLIDATION_INPUT_PENDING");
     expect(calls).not.toContain("sendrawtransaction");
   });
 
@@ -538,17 +459,20 @@ describe("S7 — one reservation path for every broadcast", () => {
     const { raw, ins, txid } = signedFixture(11);
     expect(rawTxInputs(raw)).toEqual(ins.map((u) => ({ txid: u.txid, vout: u.vout })));
     stubRpc((m, p) => (m === "sendrawtransaction" ? ok(rawTxId(p[0] as string)) : rpcErr(-32601, "nope")));
-    await expect(broadcastSignedPearlTx(raw)).resolves.toBe(txid);
-    expect(pendingTransactions()).toEqual([expect.objectContaining({ spentBy: txid, coins: 2 })]);
+    await expect(broadcastSignedPearlTx(raw, { kind: "offline" })).resolves.toBe(txid);
+    expect(broadcastRecords()).toEqual([
+      expect.objectContaining({ txid, kind: "offline", destination: DEST.toLowerCase(), amountGrains: "100000", state: "accepted" }),
+    ]);
+    expect(pendingOutpoints().size).toBe(2);
     // The same signed tx may be re-broadcast (idempotent)…
-    await expect(broadcastSignedPearlTx(raw)).resolves.toBe(txid);
-    await expect(broadcastSignedPearlTx("zz")).rejects.toThrow("E_RAW_TX_PARSE");
+    await expect(broadcastSignedPearlTx(raw, { kind: "offline" })).resolves.toBe(txid);
+    await expect(broadcastSignedPearlTx("zz", { kind: "offline" })).rejects.toThrow("E_RAW_TX_PARSE");
   });
 
   it("offline broadcast: a definite rejection records nothing", async () => {
     const { raw } = signedFixture(13);
     stubRpc(() => rpcErr(-26, "min relay fee not met"));
-    await expect(broadcastSignedPearlTx(raw)).rejects.toThrow(/rpc -26/);
+    await expect(broadcastSignedPearlTx(raw, { kind: "offline" })).rejects.toThrow(/rpc -26/);
     expect(pendingOutpoints().size).toBe(0);
   });
 });

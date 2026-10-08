@@ -40,7 +40,8 @@ import {
   type ConsolidationDestination,
   type ConsolidationPlan,
 } from "../src/services/pearl-consolidate";
-import { clearPendingSpends, pendingOutpoints, recordPendingSpends } from "../src/services/pending-spends";
+import { clearPendingSpends, pendingOutpoints } from "../src/services/pending-spends";
+import { addRecord, useMemoryStorage } from "./helpers/broadcast-env";
 import { useUI } from "../src/state/ui-store";
 
 const MNEMONIC =
@@ -73,6 +74,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.restoreAllMocks();
   clearPendingSpends();
+  useMemoryStorage();
   useUI.getState().setPearlRpcOverride("");
 });
 afterEach(() => {
@@ -239,7 +241,7 @@ describe("composeConsolidation — batch planning", () => {
 
   it("excludes coins of pending broadcasts and duplicates", () => {
     const utxos = coins(Array.from({ length: 10 }, () => PRL));
-    recordPendingSpends("d".repeat(64), utxos.slice(0, 4));
+    addRecord("d".repeat(64), utxos.slice(0, 4));
     const plan = composeConsolidation({ utxos: [...utxos, { ...utxos[5]! }], destination: DEST });
     expect(plan.pendingExcluded).toBe(4);
     expect(plan.utxoCount).toBe(6);
@@ -274,7 +276,7 @@ describe("assertConsolidationBatch — tampering is caught", () => {
     expect(() =>
       verifyBatchStillSpendable(b, fresh.map((u, i) => (i === 0 ? { ...u, valueGrains: u.valueGrains + 1n } : u))),
     ).toThrow("E_CONSOLIDATION_INPUTS_CHANGED");
-    recordPendingSpends("c".repeat(64), [fresh[2]!]);
+    addRecord("c".repeat(64), [fresh[2]!]);
     expect(() => verifyBatchStillSpendable(b, fresh)).toThrow("E_CONSOLIDATION_INPUTS_CHANGED");
   });
 });

@@ -13,8 +13,9 @@ import {
   type ConsolidationBatch,
   type ConsolidationPlan,
 } from "../../services/pearl-consolidate";
-import { excludePendingSpends, pendingTransactions, PendingSpendConflictError } from "../../services/pending-spends";
-import PendingTxCheck from "../components/PendingTxCheck";
+import { excludePendingSpends, PendingSpendConflictError, unresolvedBroadcasts } from "../../services/pending-spends";
+import { refusalMessage } from "../components/PendingBroadcasts";
+import { usePendingSpendsVersion } from "../hooks/usePendingSpends";
 import type { PrlPoolScan, WalletAddressRef } from "../../services/balances";
 import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
@@ -59,6 +60,8 @@ function describeError(e: unknown): string {
       "before running this again."
     );
   }
+  const refused = e instanceof PendingSpendConflictError ? null : refusalMessage(e);
+  if (refused) return refused;
   const msg = e instanceof Error ? e.message : String(e);
   if (msg === "E_PREVIEW_STALE") return "This plan is older than two minutes. Rescan and review it again.";
   if (msg === "E_CONSOLIDATION_RECHECK_INCOMPLETE") {
@@ -198,6 +201,10 @@ export default function Consolidate() {
   }, [coins, tier, pool]);
   // While running (and after), show the plan exactly as confirmed.
   const plan = frozen ?? planned?.plan ?? null;
+  // A broadcast with an unknown status holds every new consolidation (the
+  // service refuses it too); it is checked in the banner.
+  usePendingSpendsVersion();
+  const held = unresolvedBroadcasts().length > 0;
 
   // Review countdown (same window as Send's frozen preview).
   const [, setTick] = useState(0);
@@ -388,24 +395,7 @@ export default function Consolidate() {
                 {plan.pendingExcluded > 0 && (
                   <li>
                     {plan.pendingExcluded} coin{plan.pendingExcluded === 1 ? "" : "s"} skipped — already being spent
-                    by a transaction this wallet broadcast recently. Check a transaction below; its coins can be
-                    released only if the network doesn't have it.
-                    {!running && (
-                      <ul className="mt-2 space-y-3 text-text-2">
-                        {pendingTransactions().map((t) => (
-                          <li key={t.spentBy ?? "unknown"} className="border-t border-warn-line pt-2">
-                            <div>
-                              {t.coins} coin{t.coins === 1 ? "" : "s"}
-                            </div>
-                            <PendingTxCheck
-                              txid={t.spentBy}
-                              explorerUrl={t.spentBy ? explorer(t.spentBy) : undefined}
-                              onReleased={rescan}
-                            />
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                    by a transaction this wallet broadcast recently.
                   </li>
                 )}
               </ul>
@@ -422,6 +412,11 @@ export default function Consolidate() {
                 {plan.batches.some((b) => b.utxos.length > 100) && (
                   <p className="mt-3 border-l-2 border-warn-line pl-3 text-sm leading-7 text-warn">
                     Signing a large batch can take several seconds. Keep this page open while the batches are signed and sent.
+                  </p>
+                )}
+                {held && (
+                  <p role="alert" className="mt-3 border-l-2 border-warn-line pl-3 text-sm leading-7 text-warn">
+                    Combining waits until the broadcast with an unknown status (banner at the top) is checked.
                   </p>
                 )}
                 <p className="mt-3 text-sm font-semibold text-warn">This cannot be undone.</p>
@@ -444,7 +439,7 @@ export default function Consolidate() {
                 <button
                   onClick={() => void run()}
                   className="btn-primary flex-1 min-w-11"
-                  disabled={running || !fresh || plan.batches.length === 0 || coinsQ.isFetching}
+                  disabled={running || held || !fresh || plan.batches.length === 0 || coinsQ.isFetching}
                 >
                   {running
                     ? "Combining…"

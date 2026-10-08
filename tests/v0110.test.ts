@@ -2,7 +2,7 @@
 // Highs: O2-H-1 ≡ M2-H-2 (preview→broadcast re-quote drift) and O1-H-1
 // (hostile ETH RPC inflating baseFee).
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   MAX_BASE_FEE_WEI,
   PREVIEW_FRESHNESS_MS,
@@ -20,6 +20,7 @@ import * as ethRpc from "../src/chains/ethereum/rpc";
 import * as pearlRpc from "../src/services/pearl-rpc";
 import * as workerClient from "../src/crypto/worker-client";
 import * as bridge from "../src/services/bridge";
+import { useMemoryStorage } from "./helpers/broadcast-env";
 
 // ─── O1-H-1: suggestGas clamps an absurd baseFeePerGas ────────────────────
 
@@ -209,6 +210,9 @@ describe("v0.1.11 / broadcastPearlPrecomposed", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
   function frozen(): ComposedPearlTx {
     return {
@@ -241,6 +245,9 @@ describe("v0.1.11 / broadcastPearlPrecomposed", () => {
       .spyOn(pearlRpc, "broadcastPearlTx")
       .mockResolvedValue("txidabc");
     vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: "rawhex" });
+    // The broadcast is recorded under its txid before submission.
+    vi.spyOn(pearlRpc, "rawTxId").mockReturnValue("ab".repeat(32));
+    useMemoryStorage();
 
     const res = await broadcastPearlPrecomposed(
       { composed: frozen(), composedAt: Date.now() },

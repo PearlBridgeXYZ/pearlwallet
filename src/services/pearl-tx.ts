@@ -6,21 +6,23 @@ import {
   broadcastPearlTx,
   BroadcastStatusUnknownError,
   MAX_UTXO_WALK_PAGES_HARD,
+  p2trScriptAddress,
   rawTxId,
   rawTxInputs,
+  rawTxOutputs,
 } from "./pearl-rpc";
 import { scanPrlPool, type PoolUtxoRecord, type PrlPoolScan, type WalletAddressRef } from "./balances";
 import { scanPrlWallet, type DeriveMoreAddresses } from "./discovery";
 import {
-  assertNotPending,
-  beginBroadcast,
+  assertBroadcastAllowed,
   excludePendingSpends,
-  finishSubmission,
   outpointKey,
-  renewSubmissionLease,
-  SUBMISSION_LEASE_RENEW_MS,
-  withPendingSpendsLock,
+  recordBroadcast,
+  settleBroadcast,
+  withBroadcastLock,
+  type BroadcastPlan,
 } from "./pending-spends";
+import { notePoolScan } from "./broadcast-status";
 import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
 import type { PearlNetwork } from "../chains/pearl/network";
 import { cryptoWorker } from "../crypto/worker-client";
@@ -263,6 +265,8 @@ async function listPoolUtxos(
   } else {
     scan = await scanPrlPool(opts.pool, { maxPages: opts.maxPages, signal: opts.signal });
   }
+  // A complete read of an address settles broadcast records it proves spent.
+  notePoolScan(scan);
   // Review clock: starts when the last address was read, not when the
   // walk began (a paced walk of a big wallet takes minutes).
   const fetchedAt = scan.finishedAt;
@@ -685,13 +689,17 @@ export const PEARL_PREVIEW_FRESHNESS_MS = 120_000;
  *  fresh compose so the user clicks Send against fresh coins. */
 export const PEARL_PREVIEW_REFRESH_AT_MS = 100_000;
 
+/** Addresses holding `utxos` (empty when any script isn't P2TR). */
+export function inputAddresses(utxos: readonly { scriptHex: string }[]): string[] {
+  const out = utxos.map((u) => p2trScriptAddress(u.scriptHex));
+  return out.every((a): a is string => a !== null) ? [...new Set(out)] : [];
+}
+
 async function signAndBroadcast(
   composed: ComposedPearlTx,
   network: PearlNetwork,
+  acknowledged: readonly string[] = [],
 ): Promise<SendPearlResult> {
-  // Reservation check #1, before any signing: a coin another broadcast
-  // (this tab or another) already spends is refused, never re-signed.
-  assertNotPending(composed.utxos);
   const req: PearlTxRequest = {
     utxos: composed.utxos.map((u) => ({
       txid: u.txid,
@@ -709,72 +717,78 @@ async function signAndBroadcast(
     // The signer refuses a tx paying more than the fee the user reviewed.
     maxFeeGrains: composed.feeGrains.toString(),
   };
-  const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
-  const txid = await broadcastRecordingSpends(raw, composed.utxos, {
+  const plan: BroadcastPlan = {
+    kind: "payment",
+    inputs: composed.utxos,
+    addresses: inputAddresses(composed.utxos),
     destination: composed.outputs[0]?.address ?? null,
     amountGrains: composed.amountGrains,
+    acknowledged,
+  };
+  const txid = await broadcastRecorded(plan, async () => {
+    const { raw } = await cryptoWorker.call<"signPearlTx", { raw: string }>("signPearlTx", { req });
+    return raw;
   });
   return { txid, composed };
 }
 
 /**
  * The one broadcast path for every Pearl spend (Send, consolidation,
- * offline broadcast, vault broadcast). Immediately before submitting, in
- * one step inside the cross-tab lock (services/pending-spends.ts,
- * beginBroadcast), the inputs are reserved as pending spends of this tx —
- * refused with PendingSpendConflictError if a different recent broadcast
- * already spends one of them — and the payment intent and an in-flight
- * submission attempt are recorded. So a reload or closed tab while the
- * node is still being asked leaves a visible, checkable entry, and no
- * later send or consolidation batch picks the coins while the walk may
- * still show them. The attempt's lease is renewed while waiting.
- *
- * The outcome is recorded in one locked step that re-reads every attempt
- * of the tx (finishSubmission): success resolves the intent and keeps the
- * reservation; "status unknown" keeps both open; a definite rejection
- * releases the coins only if no attempt of the same tx (any tab) is still
- * in flight, succeeded or ended unknown.
+ * offline, vault), all inside the wallet's broadcast lock
+ * (services/pending-spends.ts):
+ *   1. the gate — refused (nothing signed or sent) while another broadcast
+ *      is "unknown" and not acknowledged, or if a coin is already spent by
+ *      a recorded broadcast;
+ *   2. sign (`tx` is a signer, or the already-signed raw hex);
+ *   3. record the tx as "unknown" — refused if that can't be saved;
+ *   4. submit; then accepted → "accepted", status unknown → stays
+ *      "unknown", definite rejection → the record this attempt made goes.
+ * Holding the lock throughout means no other tab can release these coins
+ * or broadcast until the outcome is saved, however long this tab stalls.
  */
-export async function broadcastRecordingSpends(
-  raw: string,
-  inputs: readonly { txid: string; vout: number }[],
-  intent?: { destination: string | null; amountGrains: bigint | null },
-): Promise<string> {
-  const localTxid = rawTxId(raw);
-  const { attemptId } = await withPendingSpendsLock(() => beginBroadcast(localTxid, inputs, intent ?? null));
-  const lease = setInterval(() => {
-    withPendingSpendsLock(() => renewSubmissionLease(attemptId)).catch(() => {
-      /* an unrenewed lease only makes the attempt count as "unknown" */
-    });
-  }, SUBMISSION_LEASE_RENEW_MS);
-  let outcome: "accepted" | "unknown" | "rejected" = "rejected";
-  try {
-    const txid = await broadcastPearlTx(raw);
-    outcome = "accepted";
-    return txid;
-  } catch (e) {
-    if (e instanceof BroadcastStatusUnknownError) outcome = "unknown";
-    throw e;
-  } finally {
-    clearInterval(lease);
+export async function broadcastRecorded(plan: BroadcastPlan, tx: string | (() => Promise<string>)): Promise<string> {
+  return withBroadcastLock(async () => {
+    assertBroadcastAllowed(plan, typeof tx === "string" ? rawTxId(tx) : null);
+    const raw = typeof tx === "string" ? tx : await tx();
+    const txid = rawTxId(raw);
+    if (!txid) throw new Error("E_RAW_TX_PARSE: the signed transaction could not be decoded");
+    const created = recordBroadcast(txid, plan);
+    let outcome: "accepted" | "unknown" | "rejected" = "rejected";
     try {
-      await withPendingSpendsLock(() => finishSubmission(attemptId, outcome));
-    } catch {
-      /* the attempt's lease runs out and it counts as "status unknown":
-         the reservation stays until it expires (fail closed) */
+      const sent = await broadcastPearlTx(raw);
+      outcome = "accepted";
+      return sent;
+    } catch (e) {
+      if (e instanceof BroadcastStatusUnknownError) outcome = "unknown";
+      throw e;
+    } finally {
+      settleBroadcast(txid, outcome, created);
     }
-  }
+  });
 }
 
 /**
- * Broadcasts a transaction signed elsewhere (offline signing). Its inputs
- * are decoded from the raw tx itself and go through the same reservation
- * as every other broadcast; a raw tx that can't be decoded is refused.
+ * Broadcasts a transaction signed elsewhere (offline signing, a vault).
+ * Inputs, destination (outputs[0]) and amount are decoded from the raw tx
+ * itself; a raw tx that can't be decoded is refused.
  */
-export async function broadcastSignedPearlTx(raw: string): Promise<string> {
+export async function broadcastSignedPearlTx(
+  raw: string,
+  opts: { kind: "offline" | "vault"; addresses?: readonly string[] },
+): Promise<string> {
   const inputs = rawTxInputs(raw);
-  if (!inputs || !rawTxId(raw)) throw new Error("E_RAW_TX_PARSE: the signed transaction could not be decoded");
-  return broadcastRecordingSpends(raw, inputs);
+  const outputs = rawTxOutputs(raw);
+  if (!inputs || !outputs || !rawTxId(raw)) throw new Error("E_RAW_TX_PARSE: the signed transaction could not be decoded");
+  return broadcastRecorded(
+    {
+      kind: opts.kind,
+      inputs,
+      addresses: opts.addresses,
+      destination: outputs[0]?.address ?? null,
+      amountGrains: outputs[0]?.amountGrains ?? null,
+    },
+    raw,
+  );
 }
 
 /**
@@ -787,13 +801,13 @@ export async function broadcastPearlPrecomposed(
   frozen: FrozenPearlTx,
   network: PearlNetwork,
   now: number = Date.now(),
+  /** "unknown" broadcasts the user explicitly accepted may pay twice. */
+  acknowledged: readonly string[] = [],
 ): Promise<SendPearlResult> {
   if (now - frozen.composedAt > PEARL_PREVIEW_FRESHNESS_MS) {
     throw new Error("E_PREVIEW_STALE");
   }
-  // signAndBroadcast re-checks the pending list before signing and again
-  // (atomically with recording) right before submission.
-  return await signAndBroadcast(frozen.composed, network);
+  return await signAndBroadcast(frozen.composed, network, acknowledged);
 }
 
 export async function sendPearl(opts: ComposeOptions): Promise<SendPearlResult> {

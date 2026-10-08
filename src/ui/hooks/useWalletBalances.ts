@@ -53,6 +53,7 @@ import {
   type PrlPoolScanProgress,
 } from "../../services/balances";
 import { fetchPrlPriceUsd } from "../../services/prices";
+import { notePoolScan } from "../../services/broadcast-status";
 import {
   scanPrlWallet,
   type DeriveMoreAddresses,
@@ -354,13 +355,19 @@ export function useWalletBalances({
         setProgress(poolKey, { done: p.done, total: p.total, running: true });
       };
       try {
-        if (!int) return await scanPrlPool(ext, { signal, onProgress });
+        if (!int) {
+          const pooled = await scanPrlPool(ext, { signal, onProgress });
+          notePoolScan(pooled);
+          return pooled;
+        }
         const refresh = planPrlScan(getScanBaseline(poolKey), Date.now(), forceFull.current, ext.length);
         forceFull.current = false;
         const scan = await scanPrlWallet(
           { external: ext, internal: int },
           { signal, onProgress, deriveMore: cur.deriveMore, ...(refresh ? { refresh } : {}) },
         );
+        // Complete reads settle broadcast records they prove spent.
+        notePoolScan(scan);
         const baseline = nextScanBaseline(getScanBaseline(poolKey), scan);
         if (baseline && current()) setScanBaseline(poolKey, baseline);
         if (

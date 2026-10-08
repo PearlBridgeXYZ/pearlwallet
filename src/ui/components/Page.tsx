@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import TopBar from "./TopBar";
+import PendingBroadcasts from "./PendingBroadcasts";
 
 interface PageProps {
   children: ReactNode;
@@ -18,6 +19,8 @@ export default function Page({ children, chrome = true, title }: PageProps) {
         className="shell-width page-main"
         style={{ paddingBottom: "max(2rem, env(safe-area-inset-bottom))" }}
       >
+        {/* Broadcasts with an unknown status: visible on every screen. */}
+        {chrome && <PendingBroadcasts />}
         {title && <h1 className="page-title">{title}</h1>}
         {children}
       </main>

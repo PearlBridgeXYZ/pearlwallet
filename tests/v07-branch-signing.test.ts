@@ -38,6 +38,7 @@ import {
 import { parseManualUtxos } from "../src/lib/offline-signing/manual-utxo";
 import { useUI } from "../src/state/ui-store";
 import type { HdBranch } from "../src/crypto/hd";
+import { useMemoryStorage } from "./helpers/broadcast-env";
 
 const MNEMONIC =
   "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
@@ -54,6 +55,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.restoreAllMocks();
   useUI.getState().setPearlRpcOverride("");
+  useMemoryStorage();
 });
 afterEach(() => {
   vi.unstubAllGlobals();

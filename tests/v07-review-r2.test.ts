@@ -1,17 +1,18 @@
 // v0.7 review round 2 — regression tests for the confirmed findings:
 //
 //   R2-1  rejection classes after a maybe-delivered attempt; re-probe
-//         before "absent"; manual release needs two checks 30 s apart or
-//         an explorer acknowledgement, never while in flight
+//         before "absent" (the manual release rules are now tested in
+//         tests/v07-pending-spends.test.ts)
 //   R2-2  broadcast acknowledgement must be this tx's txid; malformed
 //         JSON-RPC error objects are "malformed", not chain rejections
-//   R2-3  release tombstones beat stale copies (second tab, failed write)
-//   R2-4  vault broadcasts go through the reservation path; vault coin
+//   R2-3  (superseded: no tombstones — one stored list, written only under
+//         the broadcast lock)
+//   R2-4  vault broadcasts go through the recorded path; vault coin
 //         selection excludes pending coins and refuses capped history
-//   R2-5  status-unknown payment intents persist and surface
+//   R2-5  status-unknown payments persist and surface
 //   R2-6  a body-read network drop on a read is retried
-//   R2-8  reservation runs inside the cross-tab Web Lock when available
-//   R2-9  overlapping submissions of the same tx
+//   R2-8  every broadcast runs inside the cross-tab Web Lock
+//   R2-9  overlapping submissions of the same tx are serialised
 //   R2-10 consolidation re-check uses the plan's own address refs
 //   R2-11 refresh window reaches the end of an inflated external list
 //   R2-12 in-flight reads don't repopulate the history cache after clear
@@ -41,36 +42,22 @@ import {
 } from "../src/services/pearl-rpc";
 import {
   broadcastPearlPrecomposed,
-  broadcastRecordingSpends,
+  broadcastSignedPearlTx,
   loadSpendableUtxos,
   HistoryIncompleteError,
   type ComposedPearlTx,
 } from "../src/services/pearl-tx";
 import {
-  beginSubmission,
+  broadcastRecords,
   clearPendingSpends,
-  finishSubmission,
-  forgetPendingTransaction,
-  manualReleaseState,
-  notePendingTxProbe,
   pendingOutpoints,
-  pendingTransactions,
-  recordPendingSpends,
-  releasePendingSpends,
-  reservePendingSpends,
-  subscribePendingSpends,
-  unresolvedIntentsTo,
-  unresolvedPendingTransactions,
-  withPendingSpendsLock,
+  unresolvedBroadcasts,
+  withBroadcastLock,
+  BroadcastRefusedError,
   PendingSpendConflictError,
-  SubmissionInFlightError,
-  PENDING_RELEASE_RECHECK_MS,
-  PENDING_RELEASES_STORAGE_KEY,
-  PENDING_SPENDS_STORAGE_KEY,
-  _pendingMemorySnapshotForTests,
-  _resetPendingMemoryForTests,
-  _restorePendingMemoryForTests,
 } from "../src/services/pending-spends";
+import { checkBroadcast } from "../src/services/broadcast-status";
+import { addRecord, useFakeLocks, useMemoryStorage } from "./helpers/broadcast-env";
 import { composeConsolidation, recheckConsolidationBatch } from "../src/services/pearl-consolidate";
 import {
   broadcastPendingTx,
@@ -100,6 +87,7 @@ beforeEach(() => {
   vi.restoreAllMocks();
   useUI.getState().setPearlRpcOverride("");
   clearPendingSpends();
+  useMemoryStorage();
 });
 afterEach(() => {
   clearPendingSpends();
@@ -152,27 +140,8 @@ function deferred<T>() {
 }
 const flush = () => new Promise((r) => setTimeout(r, 5));
 
-function installStorage(opts: { failSet?: boolean } = {}) {
-  const map = new Map<string, string>();
-  const state = { failSet: !!opts.failSet };
-  const storage = {
-    get length() {
-      return map.size;
-    },
-    clear: () => map.clear(),
-    getItem: (k: string) => (map.has(k) ? map.get(k)! : null),
-    setItem: (k: string, v: string) => {
-      if (state.failSet) throw new Error("QuotaExceededError");
-      map.set(k, String(v));
-    },
-    removeItem: (k: string) => void map.delete(k),
-    key: (i: number) => Array.from(map.keys())[i] ?? null,
-  } as Storage;
-  (globalThis as unknown as { localStorage: Storage }).localStorage = storage;
-  return { map, state };
-}
-const OP = (n: number) => ({ txid: n.toString(16).padStart(64, "0"), vout: 0 });
-const key = (n: number) => `${OP(n).txid}:0`;
+/** A signed tx through the one recorded broadcast path. */
+const broadcastRecordingSpends = (raw: string, _ins?: unknown) => broadcastSignedPearlTx(raw, { kind: "offline" });
 
 // ─── R2-1 ────────────────────────────────────────────────────────────────
 
@@ -247,7 +216,8 @@ describe("R2-1 — rejection classes after a possibly delivered attempt", () => 
       return ++n === 1 ? BUSY() : rpcErr(-26, "min relay fee not met");
     });
     await expect(broadcastRecordingSpends(raw, ins)).resolves.toBe(txid);
-    expect(pendingTransactions()).toEqual([expect.objectContaining({ spentBy: txid, coins: 2 })]);
+    expect(broadcastRecords()).toEqual([expect.objectContaining({ txid, state: "accepted" })]);
+    expect(pendingOutpoints().size).toBe(2);
   });
 
   it("deterministic reason but the re-probe can't tell → status unknown", async () => {
@@ -268,44 +238,6 @@ describe("R2-1 — rejection classes after a possibly delivered attempt", () => 
     const err = await broadcastRecordingSpends(raw, ins).catch((e: unknown) => e);
     expect(err).not.toBeInstanceOf(BroadcastStatusUnknownError);
     expect(calls).not.toContain("getrawtransaction");
-    expect(pendingOutpoints().size).toBe(0);
-  });
-});
-
-describe("R2-1 — manual release gate (PendingTxCheck)", () => {
-  const T = "ab".repeat(32);
-
-  it("needs a check first; one 'absent' is not enough; a second one ≥30 s later is", () => {
-    const t0 = 1_000_000;
-    expect(manualReleaseState(T, false, t0)).toEqual({ state: "check" });
-    notePendingTxProbe(T, "absent", t0);
-    expect(manualReleaseState(T, false, t0 + 1)).toEqual({ state: "recheck", waitMs: PENDING_RELEASE_RECHECK_MS - 1 });
-    notePendingTxProbe(T, "absent", t0 + PENDING_RELEASE_RECHECK_MS - 1);
-    expect(manualReleaseState(T, false, t0 + PENDING_RELEASE_RECHECK_MS - 1).state).toBe("recheck");
-    notePendingTxProbe(T, "unknown", t0 + PENDING_RELEASE_RECHECK_MS);
-    expect(manualReleaseState(T, false, t0 + PENDING_RELEASE_RECHECK_MS).state).toBe("recheck");
-    notePendingTxProbe(T, "absent", t0 + PENDING_RELEASE_RECHECK_MS);
-    expect(manualReleaseState(T, false, t0 + PENDING_RELEASE_RECHECK_MS)).toEqual({ state: "ready" });
-  });
-
-  it("one 'absent' plus the explorer acknowledgement is enough; a 'found' resets the checks", () => {
-    expect(manualReleaseState(T, true)).toEqual({ state: "check" }); // ack alone never releases
-    notePendingTxProbe(T, "absent");
-    expect(manualReleaseState(T, true)).toEqual({ state: "ready" });
-    notePendingTxProbe(T, "found");
-    expect(manualReleaseState(T, true)).toEqual({ state: "check" });
-  });
-
-  it("hidden while a submission of that tx is in flight; forget refuses too", () => {
-    recordPendingSpends(T, [OP(1)]);
-    notePendingTxProbe(T, "absent");
-    const attempt = beginSubmission(T, []);
-    expect(manualReleaseState(T, true)).toEqual({ state: "in-flight" });
-    expect(() => forgetPendingTransaction(T)).toThrow(SubmissionInFlightError);
-    expect(pendingOutpoints().has(key(1))).toBe(true);
-    finishSubmission(attempt, "rejected");
-    expect(manualReleaseState(T, true)).toEqual({ state: "ready" });
-    expect(forgetPendingTransaction(T)).toBe(true);
     expect(pendingOutpoints().size).toBe(0);
   });
 });
@@ -364,79 +296,6 @@ describe("R2-2 — the broadcast acknowledgement must name this transaction", ()
   }
 });
 
-// ─── R2-3 ────────────────────────────────────────────────────────────────
-
-describe("R2-3 — releases are tombstones that beat stale copies", () => {
-  it("two tabs: a tab still holding the record in memory can't resurrect a release", () => {
-    const { map } = installStorage();
-    const T = "a".repeat(64);
-    reservePendingSpends(T, [OP(1), OP(2)]);
-    // Tab B loaded the same records into memory.
-    const tabB = _pendingMemorySnapshotForTests();
-    // Tab A releases (definite rejection).
-    releasePendingSpends([key(1), key(2)], T);
-    const tabA = _pendingMemorySnapshotForTests();
-    expect(map.get(PENDING_RELEASES_STORAGE_KEY)).toContain(OP(1).txid);
-    // Switch to tab B: its memory still lists T's coins.
-    _restorePendingMemoryForTests(tabB);
-    expect(pendingOutpoints().size).toBe(0);
-    // B's next write must not put them back.
-    recordPendingSpends("b".repeat(64), [OP(3)]);
-    expect(map.get(PENDING_SPENDS_STORAGE_KEY)).not.toContain(OP(1).txid);
-    _restorePendingMemoryForTests(tabA);
-    expect([...pendingOutpoints()]).toEqual([key(3)]);
-  });
-
-  it("write failure: the release holds in this tab and is reported as not durable", () => {
-    const { map, state } = installStorage();
-    const T = "a".repeat(64);
-    reservePendingSpends(T, [OP(1)]);
-    expect(map.get(PENDING_SPENDS_STORAGE_KEY)).toContain(OP(1).txid);
-    state.failSet = true;
-    expect(releasePendingSpends([key(1)], T)).toBe(false);
-    // Storage still has the record; the in-memory tombstone wins on read.
-    expect(map.get(PENDING_SPENDS_STORAGE_KEY)).toContain(OP(1).txid);
-    expect(pendingOutpoints().size).toBe(0);
-    expect(pendingOutpoints().size).toBe(0);
-    // forget reports the same.
-    reservePendingSpends("c".repeat(64), [OP(5)]);
-    expect(forgetPendingTransaction("c".repeat(64))).toBe(false);
-    expect(pendingOutpoints().size).toBe(0);
-    state.failSet = false;
-    expect(releasePendingSpends([key(9)], T)).toBe(true);
-  });
-
-  it("a later reservation of the same coin (even within the same millisecond) is not hidden by the tombstone", () => {
-    installStorage();
-    const T = "a".repeat(64);
-    const now = 5_000_000;
-    reservePendingSpends(T, [OP(1)], now);
-    releasePendingSpends([key(1)], T, now);
-    expect(pendingOutpoints(now).size).toBe(0);
-    expect(reservePendingSpends(T, [OP(1)], now)).toEqual([key(1)]);
-    expect(pendingOutpoints(now).has(key(1))).toBe(true);
-    // A different tx's record is never covered by T's tombstone.
-    releasePendingSpends([key(1)], "f".repeat(64), now + 1);
-    expect(pendingOutpoints(now + 1).has(key(1))).toBe(true);
-  });
-
-  it("other tabs hear about a release over BroadcastChannel even when storage failed", async () => {
-    const T = "a".repeat(64);
-    reservePendingSpends(T, [OP(1)]);
-    const tabB = _pendingMemorySnapshotForTests();
-    // Tab A's message, as tab B's channel would receive it.
-    const unsub = subscribePendingSpends(() => {});
-    const other = new BroadcastChannel("pearl-pending-spends");
-    _restorePendingMemoryForTests(tabB);
-    expect(pendingOutpoints().has(key(1))).toBe(true);
-    other.postMessage({ releases: [{ outpoint: key(1), spentBy: T, releasedAt: Date.now() + 1 }] });
-    for (let i = 0; i < 50 && pendingOutpoints().has(key(1)); i++) await flush();
-    expect(pendingOutpoints().has(key(1))).toBe(false);
-    other.close();
-    unsub();
-  });
-});
-
 // ─── R2-4 ────────────────────────────────────────────────────────────────
 
 interface Cosigner {
@@ -487,25 +346,27 @@ function signedVaultPsbt(rec: VaultRecord, cs: Cosigner[], amount: bigint, sum: 
 }
 const PREV_OUTPOINT = { txid: hex(PREV), vout: 0 };
 
-describe("R2-4 — vault broadcasts use the reservation path", () => {
-  it("broadcastVaultTx reserves the decoded inputs; a coin pending for another tx is refused unsent", async () => {
+describe("R2-4 — vault broadcasts use the recorded path", () => {
+  it("broadcastVaultTx records the decoded inputs; a coin pending for another tx is refused unsent", async () => {
     const cs = cosigners();
     const rec = vaultRecord(cs);
     const { rawHex } = finalizeVaultPsbt(signedVaultPsbt(rec, cs, 90_000n, 100_000n));
     const txid = rawTxId(rawHex)!;
     const calls = stubRpc((m, p) => (m === "sendrawtransaction" ? ok(rawTxId(p[0] as string)) : NO_TX()));
-    await expect(broadcastVaultTx(rawHex)).resolves.toBe(txid);
-    expect(pendingTransactions()).toEqual([expect.objectContaining({ spentBy: txid, coins: 1 })]);
+    await expect(broadcastVaultTx(rawHex, rec.pearlAddress)).resolves.toBe(txid);
+    expect(broadcastRecords()).toEqual([
+      expect.objectContaining({ txid, kind: "vault", addresses: [rec.pearlAddress], destination: rec.pearlAddress, state: "accepted" }),
+    ]);
     expect(pendingOutpoints().has(`${PREV_OUTPOINT.txid}:0`)).toBe(true);
 
     clearPendingSpends();
     calls.length = 0;
-    recordPendingSpends("e".repeat(64), [PREV_OUTPOINT]);
-    await expect(broadcastVaultTx(rawHex)).rejects.toBeInstanceOf(PendingSpendConflictError);
+    addRecord("e".repeat(64), [PREV_OUTPOINT]);
+    await expect(broadcastVaultTx(rawHex, rec.pearlAddress)).rejects.toBeInstanceOf(PendingSpendConflictError);
     expect(calls).not.toContain("sendrawtransaction");
   });
 
-  it("broadcastPendingTx goes through the reservation; a conflict leaves the draft untouched", async () => {
+  it("broadcastPendingTx goes through the recorded path; a conflict leaves the draft untouched", async () => {
     const cs = cosigners();
     const rec = vaultRecord(cs);
     const psbt = signedVaultPsbt(rec, cs, 90_000n, 100_000n);
@@ -520,7 +381,7 @@ describe("R2-4 — vault broadcasts use the reservation path", () => {
       preview: { destination: rec.pearlAddress, amountGrains: "90000", feeGrains: "10000", changeGrains: "0", inputCount: 1 },
     };
     const put = vi.spyOn(db.vaultPendingTxs, "put").mockResolvedValue("p1" as never);
-    recordPendingSpends("e".repeat(64), [PREV_OUTPOINT]);
+    addRecord("e".repeat(64), [PREV_OUTPOINT]);
     const calls = stubRpc((m, p) => (m === "sendrawtransaction" ? ok(rawTxId(p[0] as string)) : NO_TX()));
     await expect(broadcastPendingTx({ vault: rec, pending })).rejects.toBeInstanceOf(PendingSpendConflictError);
     expect(calls).not.toContain("sendrawtransaction");
@@ -529,7 +390,7 @@ describe("R2-4 — vault broadcasts use the reservation path", () => {
     clearPendingSpends();
     const done = await broadcastPendingTx({ vault: rec, pending });
     expect(done.status).toBe("broadcast");
-    expect(pendingTransactions()).toEqual([expect.objectContaining({ spentBy: done.txid, coins: 1 })]);
+    expect(broadcastRecords()).toEqual([expect.objectContaining({ txid: done.txid, kind: "vault", state: "accepted" })]);
   });
 });
 
@@ -550,13 +411,13 @@ describe("R2-4 — vault coin selection", () => {
   it("excludes coins a recent broadcast already spends", async () => {
     const rec = vaultRecord(cosigners());
     stubVault(rec.pearlAddress, [credit(rec.pearlAddress, 1, 5), credit(rec.pearlAddress, 2, 1)]);
-    recordPendingSpends("e".repeat(64), [{ txid: (1).toString(16).padStart(64, "0"), vout: 0 }]);
+    addRecord("e".repeat(64), [{ txid: (1).toString(16).padStart(64, "0"), vout: 0 }]);
     vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ psbtBase64: "psbt" } as never);
     const c = await composeVaultSend({ vault: rec, destination: DEST, amountGrains: 50_000_000n });
     expect(c.utxos.map((u) => u.txid)).toEqual([(2).toString(16).padStart(64, "0")]);
     expect(c.pendingExcluded).toBe(1);
     // Every coin pending → nothing to spend.
-    recordPendingSpends("e".repeat(64), [{ txid: (2).toString(16).padStart(64, "0"), vout: 0 }]);
+    addRecord("d".repeat(64), [{ txid: (2).toString(16).padStart(64, "0"), vout: 0 }]);
     await expect(composeVaultSend({ vault: rec, destination: DEST, amountGrains: 1_000n })).rejects.toThrow(/E_NO_UTXOS/);
   });
 
@@ -590,8 +451,7 @@ describe("R2-5 — status-unknown payments stay visible after leaving Send", () 
     };
   }
 
-  it("records {txid, destination, amount} with the reservation; resolution clears it", async () => {
-    installStorage();
+  it("records {txid, destination, amount, kind} before submission; a found check resolves it", async () => {
     const { raw, ins, txid } = signedFixture(21);
     vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw } as never);
     stubRpc(() => {
@@ -600,46 +460,18 @@ describe("R2-5 — status-unknown payments stay visible after leaving Send", () 
     await expect(
       broadcastPearlPrecomposed({ composed: composedFrom(ins), composedAt: Date.now() }, "mainnet"),
     ).rejects.toBeInstanceOf(BroadcastStatusUnknownError);
-    const open = unresolvedPendingTransactions();
-    expect(open).toEqual([
-      expect.objectContaining({
-        spentBy: txid,
-        coins: 2,
-        intent: expect.objectContaining({ txid, destination: DEST, amountGrains: "100000", resolvedAt: null }),
-      }),
+    // Stored (a reload reads the same list — there is no other copy).
+    expect(unresolvedBroadcasts()).toEqual([
+      expect.objectContaining({ txid, kind: "payment", destination: DEST.toLowerCase(), amountGrains: "100000", state: "unknown" }),
     ]);
-    expect(unresolvedIntentsTo(DEST)).toHaveLength(1);
-    expect(unresolvedIntentsTo(` ${DEST} `)).toHaveLength(1);
-    expect(unresolvedIntentsTo("prl1pother")).toHaveLength(0);
-
-    // A reload (fresh memory) still sees it.
-    _resetPendingMemoryForTests();
-    expect(unresolvedIntentsTo(DEST)).toHaveLength(1);
-
-    // The node turns out to hold it: resolved, coins stay reserved.
-    notePendingTxProbe(txid, "found");
-    expect(unresolvedIntentsTo(DEST)).toHaveLength(0);
-    expect(unresolvedPendingTransactions()).toEqual([]);
     expect(pendingOutpoints().size).toBe(2);
-  });
 
-  it("releasing the coins resolves the intent", async () => {
-    const { raw, ins, txid } = signedFixture(23);
-    stubRpc(() => {
-      throw new TypeError("network connection lost");
-    });
-    await expect(broadcastRecordingSpends(raw, ins, { destination: DEST, amountGrains: 5n })).rejects.toBeInstanceOf(
-      BroadcastStatusUnknownError,
-    );
-    expect(unresolvedIntentsTo(DEST)).toHaveLength(1);
-    expect(forgetPendingTransaction(txid)).toBe(true);
-    expect(unresolvedIntentsTo(DEST)).toHaveLength(0);
-    expect(pendingOutpoints().size).toBe(0);
-  });
-
-  it("coins recorded without a txid are listed as unresolved too", () => {
-    recordPendingSpends(null, [OP(1)]);
-    expect(unresolvedPendingTransactions()).toEqual([expect.objectContaining({ spentBy: null, intent: null })]);
+    // The node turns out to hold it: accepted, coins stay reserved.
+    stubRpc((m) => (m === "getrawtransaction" ? ok(raw) : NO_TX()));
+    await expect(checkBroadcast(txid)).resolves.toBe("found");
+    expect(unresolvedBroadcasts()).toEqual([]);
+    expect(broadcastRecords()).toEqual([expect.objectContaining({ txid, state: "accepted" })]);
+    expect(pendingOutpoints().size).toBe(2);
   });
 });
 
@@ -680,51 +512,33 @@ describe("R2-6 — a network drop while reading a 2xx body is transient for read
 
 // ─── R2-8 ────────────────────────────────────────────────────────────────
 
-describe("R2-8 — reservations run inside the cross-tab lock", () => {
-  it("uses navigator.locks 'pearl-pending-spends' for reserve and release", async () => {
-    const names: string[] = [];
-    vi.stubGlobal("navigator", {
-      locks: {
-        request: vi.fn(async (name: string, _o: unknown, cb: () => unknown) => {
-          names.push(name);
-          return cb();
-        }),
-      },
-    });
+describe("R2-8 — every broadcast runs inside the cross-tab lock", () => {
+  it("one 'pearl-wallet-broadcast' lock per broadcast, held until the outcome is saved", async () => {
+    const locks = useFakeLocks();
     const { raw, ins } = signedFixture(41);
-    stubRpc(() => rpcErr(-26, "min relay fee not met"));
+    let heldDuringSend = false;
+    stubRpc(() => {
+      heldDuringSend = locks.isHeld("pearl-wallet-broadcast");
+      return rpcErr(-26, "min relay fee not met");
+    });
     await expect(broadcastRecordingSpends(raw, ins)).rejects.toThrow(/min relay fee/);
-    expect(names).toEqual(["pearl-pending-spends", "pearl-pending-spends"]);
+    expect(locks.requests).toEqual(["pearl-wallet-broadcast"]);
+    expect(heldDuringSend).toBe(true);
     expect(pendingOutpoints().size).toBe(0);
   });
 
-  it("serialises overlapping critical sections and propagates a conflict", async () => {
-    let tail: Promise<unknown> = Promise.resolve();
-    vi.stubGlobal("navigator", {
-      locks: {
-        request: (_n: string, _o: unknown, cb: () => unknown) => {
-          const run = tail.then(() => cb());
-          tail = run.catch(() => undefined);
-          return run;
-        },
-      },
-    });
-    const a = withPendingSpendsLock(() => reservePendingSpends("a".repeat(64), [OP(1)]));
-    const b = withPendingSpendsLock(() => reservePendingSpends("b".repeat(64), [OP(1)]));
-    await expect(a).resolves.toEqual([key(1)]);
-    await expect(b).rejects.toBeInstanceOf(PendingSpendConflictError);
-  });
-
-  it("falls back to the direct path when the lock can't be granted", async () => {
+  it("a lock that can't be granted refuses; nothing runs (fail closed)", async () => {
     vi.stubGlobal("navigator", { locks: { request: async () => Promise.reject(new Error("SecurityError")) } });
-    await expect(withPendingSpendsLock(() => reservePendingSpends("a".repeat(64), [OP(1)]))).resolves.toEqual([key(1)]);
-    expect(pendingOutpoints().has(key(1))).toBe(true);
+    const ran = vi.fn(async () => 1);
+    await expect(withBroadcastLock(ran)).rejects.toMatchObject({ reason: "busy" });
+    await expect(withBroadcastLock(ran)).rejects.toBeInstanceOf(BroadcastRefusedError);
+    expect(ran).not.toHaveBeenCalled();
   });
 });
 
 // ─── R2-9 ────────────────────────────────────────────────────────────────
 
-describe("R2-9 — overlapping submissions of the same transaction", () => {
+describe("R2-9 — overlapping submissions of the same transaction are serialised", () => {
   function controlled(raw: string) {
     const answers = [deferred<Response>(), deferred<Response>()];
     let n = 0;
@@ -759,17 +573,19 @@ describe("R2-9 — overlapping submissions of the same transaction", () => {
     expect(pendingOutpoints().size).toBe(2);
   });
 
-  it("both rejected: released once the last attempt ends", async () => {
+  it("the second waits for the first; both rejected → released", async () => {
     const { raw, ins } = signedFixture(55);
     const { answers } = controlled(raw);
     const a = broadcastRecordingSpends(raw, ins).catch((e: unknown) => e);
     const b = broadcastRecordingSpends(raw, ins).catch((e: unknown) => e);
     await flush();
+    // Only the first has been submitted.
     answers[1]!.resolve(rpcErr(-26, "min relay fee not met"));
-    await b;
+    await flush();
     expect(pendingOutpoints().size).toBe(2);
     answers[0]!.resolve(rpcErr(-26, "min relay fee not met"));
     await a;
+    await b;
     expect(pendingOutpoints().size).toBe(0);
   });
 });

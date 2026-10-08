@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Page from "../components/Page";
+import { refusalMessage } from "../components/PendingBroadcasts";
 import { useUI } from "../../state/ui-store";
 import { useWallet } from "../../state/wallet-store";
 import {
@@ -377,10 +378,11 @@ export default function SignMultisigPsbt() {
     setError(null);
     try {
       const { rawHex } = finalizeVaultPsbt(psbtCurrent);
-      const txid = await broadcastVaultTx(rawHex);
+      const vaultAddress = analysis?.match.kind === "matched" ? analysis.match.vault.pearlAddress : null;
+      const txid = await broadcastVaultTx(rawHex, vaultAddress);
       setBroadcastTxid(txid);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(refusalMessage(e) ?? (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }

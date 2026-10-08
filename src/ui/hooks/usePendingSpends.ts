@@ -1,6 +1,5 @@
-// Re-renders the caller whenever the pending-spend list changes (this tab
-// or another one): reservations, releases, payment intents, in-flight
-// submissions and status checks.
+// Re-renders the caller whenever the broadcast records change (this tab or
+// another one).
 
 import { useSyncExternalStore } from "react";
 import { pendingSpendsVersion, subscribePendingSpends } from "../../services/pending-spends";
