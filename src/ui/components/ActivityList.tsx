@@ -55,7 +55,7 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
   if (!addresses) return null;
 
   if (activityQ.isLoading || (!enabled && !activityQ.data)) {
-    return <p role="status" className="border-b border-line py-5 text-sm text-text-3">Scanning Pearl + Eth for recent activity…</p>;
+    return <p role="status" className="border-b border-line py-5 text-sm text-text-3">Scanning Pearl and Ethereum for recent activity…</p>;
   }
 
   if (activityQ.isError) {

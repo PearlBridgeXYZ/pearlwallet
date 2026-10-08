@@ -76,7 +76,7 @@
   .mono { @apply font-mono; }
   .shell-width {
     width: 100%;
-    max-width: 1120px;
+    max-width: 1280px;
     margin-inline: auto;
     padding-left: max(1.25rem, env(safe-area-inset-left));
     padding-right: max(1.25rem, env(safe-area-inset-right));

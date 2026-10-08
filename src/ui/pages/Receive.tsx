@@ -159,7 +159,7 @@ export default function Receive() {
         )}
         {tab === "prl" && pearlPool.length > 1 ? (
           <div className="mt-3 text-xs text-text-3">
-            Receive address #{prlIndex} of {pearlPool.length - 1}
+            Receive address #{prlIndex} · one of {pearlPool.length} addresses in this wallet
           </div>
         ) : null}
         <div className="mt-3 w-full break-all border-y border-line py-4 text-center font-mono text-sm leading-6">{addr}</div>

@@ -470,10 +470,10 @@ function WrapCard(props: {
         </p>
       </div>
 
-      <label className="text-sm leading-relaxed">
-        Amount (PRL)
+      <label className="block">
+        <span className="label">Amount (PRL)</span>
         <input
-          className="input mt-2 w-full font-mono tabular-nums"
+          className="input w-full font-mono tabular-nums placeholder:font-sans"
           inputMode="decimal"
           placeholder="0.0"
           value={amount}
@@ -517,7 +517,7 @@ function WrapCard(props: {
       <button
         onClick={() => void wrap()}
         disabled={!quote || !depositAddr || busy || status?.paused === true}
-        className="btn-primary disabled:opacity-50 min-w-11"
+        className="btn-primary min-w-11"
       >
         {busy ? "Sending…" : quote ? `Wrap ${grainsToPrlString(quote.amount)} PRL` : "Wrap"}
       </button>
@@ -707,10 +707,10 @@ function UnwrapCard(props: {
         </p>
       </div>
 
-      <label className="text-sm leading-relaxed">
-        Amount (WPRL)
+      <label className="block">
+        <span className="label">Amount (WPRL)</span>
         <input
-          className="input mt-2 w-full font-mono tabular-nums"
+          className="input w-full font-mono tabular-nums placeholder:font-sans"
           inputMode="decimal"
           placeholder="0.0"
           value={amount}
@@ -739,7 +739,7 @@ function UnwrapCard(props: {
       <button
         onClick={() => void unwrap()}
         disabled={!quote || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false}
-        className="btn-primary disabled:opacity-50 min-w-11"
+        className="btn-primary min-w-11"
       >
         {busy === "approving"
           ? "Approving…"

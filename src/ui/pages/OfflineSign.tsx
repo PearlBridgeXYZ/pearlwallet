@@ -355,19 +355,19 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
 
       <div className="card">
         <h2 className="text-sm font-semibold leading-relaxed tracking-tight">Destination</h2>
-        <label className="mt-3 block text-xs text-text-3 leading-relaxed">
-          Address
+        <label className="mt-3 block">
+          <span className="label">Address</span>
           <input
-            className="input mono mt-1 w-full break-all min-w-0 tabular-nums"
-            placeholder="prl1q…"
+            className="input mono w-full break-all min-w-0 tabular-nums"
+            placeholder="prl1p…"
             value={destination}
             onChange={(e) => setDestination(e.target.value)}
           />
         </label>
-        <label className="mt-3 block text-xs text-text-3 leading-relaxed">
-          Amount (PRL)
+        <label className="mt-3 block">
+          <span className="label">Amount (PRL)</span>
           <input
-            className="input mt-2 w-full font-mono tabular-nums sm:w-48"
+            className="input w-full font-mono tabular-nums sm:w-48"
             placeholder="0.0"
             value={amountPrl}
             onChange={(e) => setAmountPrl(e.target.value)}

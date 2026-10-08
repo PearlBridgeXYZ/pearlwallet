@@ -553,10 +553,10 @@ export default function Settings() {
           <p className="mt-2 text-xs leading-6 text-text-3">
             This wallet accepts only supported RPC hosts. Other hosts are blocked.
           </p>
-          <label className="mt-3 block text-xs text-text-3">
-            Provider preset
+          <label className="mt-3 block">
+            <span className="label">Provider preset</span>
             <select
-              className="input mt-1 w-full"
+              className="input w-full"
               value={ETH_RPC_PRESETS.some((p) => p.url === ethRpcDraft) ? ethRpcDraft : ""}
               onChange={(e) => {
                 const url = e.target.value;
@@ -576,7 +576,7 @@ export default function Settings() {
             <label className="block min-w-0 flex-1">
               <span className="label">Ethereum RPC URL</span>
               <input
-                className="input mono min-w-0 flex-1"
+                className="input mono min-w-0 flex-1 placeholder:font-sans"
                 placeholder="Supported https:// RPC URL"
                 value={ethRpcDraft}
                 autoComplete="off"

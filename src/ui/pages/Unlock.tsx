@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
+import TopBar from "../components/TopBar";
 
 // Whitelist of paths the `?next=` redirect honours. We never want to
 // follow an arbitrary URL after unlock — open-redirect into an
@@ -46,9 +47,11 @@ export default function Unlock() {
   }
 
   return (
+    <>
+    <TopBar />
     <div className="shell-width flex min-h-full items-center justify-center py-10 sm:py-16">
       <div className="card w-full max-w-md shadow-slabsm sm:shadow-slab">
-        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">PearlWallet · Locked</p>
+        <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Wallet locked</p>
         <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Welcome back.</h1>
         <p className="mt-3 text-sm leading-7 text-text-2">Enter your password to unlock the wallet stored in this browser.</p>
         <form onSubmit={submit} className="mt-6 flex flex-col gap-4">
@@ -80,5 +83,6 @@ export default function Unlock() {
         </div>
       </div>
     </div>
+    </>
   );
 }

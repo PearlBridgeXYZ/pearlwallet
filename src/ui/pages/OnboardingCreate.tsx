@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useWallet } from "../../state/wallet-store";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { passwordAcceptable, passwordStrength } from "../../lib/validate";
+import TopBar from "../components/TopBar";
 
 type Step = "generate" | "verify" | "password" | "done";
 
@@ -111,6 +112,8 @@ export default function OnboardingCreate() {
 
   if (step === "generate") {
     return (
+      <>
+      <TopBar />
       <div className="shell-width my-8 max-w-lg sm:my-12">
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Create wallet · 1 / 3</p>
         <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Back up your recovery phrase.</h1>
@@ -165,11 +168,14 @@ export default function OnboardingCreate() {
           </button>
         </div>
       </div>
+      </>
     );
   }
 
   if (step === "verify") {
     return (
+      <>
+      <TopBar />
       <div className="shell-width my-8 max-w-lg sm:my-12">
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Create wallet · 2 / 3</p>
         <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Confirm your phrase.</h1>
@@ -219,11 +225,14 @@ export default function OnboardingCreate() {
           </button>
         </div>
       </div>
+      </>
     );
   }
 
   if (step === "password") {
     return (
+      <>
+      <TopBar />
       <div className="shell-width my-8 max-w-lg sm:my-12">
         <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Create wallet · 3 / 3</p>
         <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Set an unlock password.</h1>
@@ -317,11 +326,14 @@ export default function OnboardingCreate() {
           </div>
         )}
       </div>
+      </>
     );
   }
 
   // done
   return (
+    <>
+    <TopBar />
     <div className="shell-width my-8 max-w-lg sm:my-12">
       <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Ready to receive</p>
       <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Wallet created.</h1>
@@ -343,5 +355,6 @@ export default function OnboardingCreate() {
         Open dashboard
       </button>
     </div>
+    </>
   );
 }

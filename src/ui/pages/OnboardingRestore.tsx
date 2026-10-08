@@ -4,6 +4,7 @@ import { useWallet } from "../../state/wallet-store";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { passwordAcceptable, passwordStrength } from "../../lib/validate";
 import { applyMnemonicPaste, parseMnemonicPaste } from "../../lib/mnemonic-paste";
+import TopBar from "../components/TopBar";
 
 export default function OnboardingRestore() {
   const navigate = useNavigate();
@@ -95,6 +96,8 @@ export default function OnboardingRestore() {
   }
 
   return (
+    <>
+    <TopBar />
     <div className="shell-width my-8 max-w-lg sm:my-12">
       <p className="mb-3 text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Bring your wallet</p>
       <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Import your wallet.</h1>
@@ -228,5 +231,6 @@ export default function OnboardingRestore() {
         </div>
       )}
     </div>
+    </>
   );
 }

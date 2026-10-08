@@ -40,7 +40,7 @@ export default function TopBar() {
   return (
     <header className="wallet-header">
       <div className="shell-width wallet-header-inner">
-        <Link to="/dashboard" className="tap flex min-w-0 items-center gap-2" aria-label="PearlWallet home">
+        <Link to={status === "unlocked" ? "/dashboard" : "/"} className="tap flex min-w-0 items-center gap-2" aria-label="PearlWallet home">
           <img src={mark} alt="" width={36} height={36} className="h-9 w-9 shrink-0" />
           <span className="wallet-wordmark">PearlWallet</span>
         </Link>

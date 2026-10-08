@@ -322,7 +322,7 @@ export default function SendETH() {
         <button
           onClick={() => void reviewSend()}
           disabled={resolving}
-          className="btn-primary disabled:opacity-50 min-w-11"
+          className="btn-primary min-w-11"
         >
           {resolving ? "Resolving ENS…" : "Review"}
         </button>

@@ -384,7 +384,7 @@ export default function SendPRL() {
                 {composed.tipGrains > 0n && (
                   <div>
                     <dt className="text-text-3">
-                      Tip to PearlWallet Devs (10 bps, min 1 PRL)
+                      Developer tip (0.1%, min 1 PRL)
                     </dt>
                     <dd className="break-words font-mono tabular-nums">{formatGrains(composed.tipGrains)} PRL</dd>
                   </div>
@@ -552,13 +552,13 @@ export default function SendPRL() {
               className="mt-1"
             />
             <span>
-              Tip the PearlWallet devs{" "}
-              <span className="font-medium">10 bps</span> (min{" "}
+              Include the optional developer tip of{" "}
+              <span className="font-medium">0.1%</span> (min{" "}
               <span className="font-medium">1 PRL</span>) on this transaction.
               <span className="ml-1 text-xs text-text-3 leading-relaxed">
                 You can turn this off permanently in{" "}
                 <Link to="/settings" className="underline underline-offset-4">Settings</Link>
-                {" "}— the wallet is free to use.
+                {" "}— the wallet is free to use without it.
               </span>
             </span>
           </label>
