@@ -59,11 +59,29 @@ function corsHeaders(): Record<string, string> {
   };
 }
 
-function medianLow(xs: number[]): number {
-  const sorted = [...xs].sort((a, b) => a - b);
-  const n = sorted.length;
-  if (n === 0) throw new Error("medianLow: empty");
-  return sorted[Math.floor((n - 1) / 2)];
+/**
+ * Lower median of the ask prices with each ask counted once per whole PRL
+ * it offers (at least once) — the same value as expanding every ask into
+ * floor(qty) copies and taking medianLow, but computed over the sorted
+ * (price, weight) pairs with a running sum, so memory no longer grows with
+ * the quantity on offer (a few large asks used to exhaust the isolate).
+ * Weights are capped so their sum stays an exact integer.
+ */
+export function weightedMedianLow(asks: ReadonlyArray<readonly [number, number]>): number {
+  if (asks.length === 0) throw new Error("weightedMedianLow: empty");
+  const cap = Math.floor(Number.MAX_SAFE_INTEGER / asks.length);
+  const items = asks
+    .map(([px, qty]) => [px, Math.min(cap, Math.max(1, Math.floor(qty)))] as const)
+    .sort((a, b) => a[0] - b[0]);
+  let total = 0;
+  for (const [, w] of items) total += w;
+  const k = Math.floor((total - 1) / 2); // index of the lower median
+  let cum = 0;
+  for (const [px, w] of items) {
+    cum += w;
+    if (cum > k) return px;
+  }
+  return items[items.length - 1]![0];
 }
 
 interface PriceResult {
@@ -83,13 +101,8 @@ function computePrice(offers: Offer[]): PriceResult | null {
   }
   if (asks.length === 0) return null;
   if (asks.length >= 3) {
-    const weighted: number[] = [];
-    for (const [px, qty] of asks) {
-      const reps = Math.max(1, Math.floor(qty));
-      for (let i = 0; i < reps; i++) weighted.push(px);
-    }
     return {
-      usd_per_prl: medianLow(weighted),
+      usd_per_prl: weightedMedianLow(asks),
       source: "vwap_median",
       n_active_asks: asks.length,
     };

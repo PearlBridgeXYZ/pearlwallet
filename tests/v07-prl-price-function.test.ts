@@ -3,7 +3,8 @@
 // in-isolate cache 30 s for good prices, 5 s for errors.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { onRequestGet, _resetPriceCacheForTests } from "../functions/api/prl-price";
+import { readFileSync } from "node:fs";
+import { onRequestGet, _resetPriceCacheForTests, weightedMedianLow } from "../functions/api/prl-price";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -89,5 +90,46 @@ describe("functions/api/prl-price — OTC with CoinGecko fallback", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("functions/api/prl-price — weighted median without expanding asks", () => {
+  // The previous implementation: one array element per whole PRL offered.
+  function expandedMedianLow(asks: Array<[number, number]>): number {
+    const xs: number[] = [];
+    for (const [px, qty] of asks) for (let i = 0; i < Math.max(1, Math.floor(qty)); i++) xs.push(px);
+    xs.sort((a, b) => a - b);
+    return xs[Math.floor((xs.length - 1) / 2)]!;
+  }
+
+  it("matches the expanded lower median on small and random books", () => {
+    const books: Array<Array<[number, number]>> = [
+      [[1, 1], [2, 1], [3, 1]],
+      [[1, 1], [2, 1], [3, 1], [4, 1]],
+      [[3, 10], [1, 0.5], [2, 2.9]],
+      [[0.5, 100], [0.7, 1], [0.6, 99]],
+    ];
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let b = 0; b < 200; b++) {
+      const n = 3 + Math.floor(rnd() * 6);
+      books.push(Array.from({ length: n }, () => [Math.round(rnd() * 1000) / 100 + 0.01, rnd() * 50] as [number, number]));
+    }
+    for (const book of books) expect(weightedMedianLow(book)).toBe(expandedMedianLow(book));
+  });
+
+  it("three million-PRL asks are priced without allocating per PRL", () => {
+    const before = process.memoryUsage().heapUsed;
+    const px = weightedMedianLow([[0.3, 1e6], [0.2, 1e6], [0.25, 1e6]]);
+    expect(px).toBe(0.25);
+    expect(process.memoryUsage().heapUsed - before).toBeLessThan(16 * 1024 * 1024);
+    // Absurd quantities stay exact and finite.
+    expect(weightedMedianLow([[1, 1e300], [2, 1e300], [3, 1e300]])).toBe(2);
+  });
+
+  it("the function no longer pushes one element per PRL", () => {
+    const src = readFileSync("functions/api/prl-price.ts", "utf8");
+    expect(src).not.toMatch(/for \(let i = 0; i < reps; i\+\+\)/);
+    expect(src).toMatch(/usd_per_prl: weightedMedianLow\(asks\)/);
   });
 });
