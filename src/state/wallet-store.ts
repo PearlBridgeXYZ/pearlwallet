@@ -10,6 +10,7 @@ import {
   loadKeystore,
   replaceKeystoreBlob,
   saveKeystore,
+  addKeystoreIfAbsent,
   updateKeystoreAddresses,
   wipeKeystore,
   type KeystoreRecord,
@@ -209,6 +210,25 @@ function makeAsyncLock() {
 }
 const walletLock = makeAsyncLock();
 
+/** Message of the refusal below; the onboarding pages show it as "a wallet
+ *  was created in another tab — reload". It starts with E_WALLET_EXISTS so
+ *  existing code matching the prefix still treats it as "a wallet exists". */
+export const E_WALLET_EXISTS_ELSEWHERE = "E_WALLET_EXISTS: a wallet was created in another tab";
+
+/**
+ * Create / restore without overwrite consent found no wallet when it
+ * started, but another tab stored one before this tab's write (the add-if-
+ * absent transaction refused). Nothing was written; the other wallet stays.
+ * The worker session of the wallet that was not saved is discarded. The
+ * tab's status is left as is (switching to "locked" here would navigate
+ * away from the page before it can explain); the page asks for a reload,
+ * which picks up the stored wallet.
+ */
+function walletCreatedElsewhere(): never {
+  cryptoWorker.reset();
+  throw new Error(E_WALLET_EXISTS_ELSEWHERE);
+}
+
 export const useWallet = create<WalletState>((set, get) => ({
   status: "initializing",
   addresses: null,
@@ -349,7 +369,11 @@ export const useWallet = create<WalletState>((set, get) => ({
           createdAt: Date.now(),
         },
       };
-      await saveKeystore(rec);
+      if (opts?.allowOverwrite) {
+        await saveKeystore(rec);
+      } else if (!(await addKeystoreIfAbsent(rec))) {
+        walletCreatedElsewhere();
+      }
       // Replaced a stored wallet: peer tabs still hold the former one (its
       // blob, possibly an unlocked session). Tell them to lock onto the
       // stored record, as a password change does.
@@ -394,7 +418,11 @@ export const useWallet = create<WalletState>((set, get) => ({
           createdAt: Date.now(),
         },
       };
-      await saveKeystore(rec);
+      if (opts?.allowOverwrite) {
+        await saveKeystore(rec);
+      } else if (!(await addKeystoreIfAbsent(rec))) {
+        walletCreatedElsewhere();
+      }
       // Replaced a stored wallet: peer tabs still hold the former one (its
       // blob, possibly an unlocked session). Tell them to lock onto the
       // stored record, as a password change does.
@@ -472,14 +500,28 @@ export const useWallet = create<WalletState>((set, get) => ({
         rec.publicData.pearlAddress !== out.addresses.pearl;
       if (needsUpdate) {
         // Address lists only: the blob is never rewritten from this read.
-        // Compare-and-update bound to the decrypted blob: refused when the
-        // record changed after the check above.
-        const saved = await updateKeystoreAddresses({
+        // Compare-and-update bound to the decrypted blob (the wallet's
+        // identity): refused only when the record was wiped or replaced
+        // after the check above. Another tab's unlock / discovery of this
+        // same wallet meanwhile (same blob) is merged, not reported as a
+        // changed wallet, and a longer list it saved is never shortened
+        // ("grow"). The derived lists are authoritative for this blob, so
+        // the primary is not compared separately (a concurrent same-wallet
+        // migration may have just rewritten it).
+        const lists = {
           pearlAddress: out.addresses.pearl,
           pearlAddressPool: out.addresses.pearlPool,
           pearlChangePool: change,
-        }, rec.publicData.pearlAddress, blob);
-        if (!saved) await walletChanged(await loadKeystore());
+        };
+        let saved = await updateKeystoreAddresses(lists, undefined, blob, "grow");
+        if (!saved) {
+          const fresh = await loadKeystore();
+          // Still this wallet (same ciphertext): retry the merge once.
+          if (fresh && sameKeystoreBlob(fresh.blob, blob)) {
+            saved = await updateKeystoreAddresses(lists, undefined, blob, "grow");
+          }
+          if (!saved) await walletChanged(await loadKeystore());
+        }
       }
       set({ status: "unlocked", addresses: out.addresses, lastActivity: monotonicNow() });
       return { addresses: out.addresses };
@@ -648,6 +690,8 @@ export const useWallet = create<WalletState>((set, get) => ({
       const saved = await updateKeystoreAddresses(
         { pearlAddress: curExt[0]!, pearlAddressPool: ext, pearlChangePool: int },
         curExt[0],
+        undefined,
+        "grow",
       );
       if (!saved) return false;
       // A lock (or reset) while the keystore was written: publish nothing.
@@ -669,6 +713,9 @@ export const useWallet = create<WalletState>((set, get) => ({
       const saved = await updateKeystoreAddresses(
         { pearlAddress: addresses.pearlPool[0]!, pearlAddressPool: ext, pearlChangePool: int },
         addresses.pearlPool[0],
+        undefined,
+        // The one writer allowed to shorten the stored lists.
+        "replace",
       );
       if (!saved) return false;
       // Locked while the keystore was written: publish nothing (lock

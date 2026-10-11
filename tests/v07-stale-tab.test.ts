@@ -24,6 +24,12 @@ vi.mock("../src/storage/db", () => ({
   saveKeystore: async (r: KeystoreRecord) => {
     mem.rec = structuredClone(r);
   },
+  // Mirrors the real add-if-absent transaction (FY2).
+  addKeystoreIfAbsent: async (r: KeystoreRecord) => {
+    if (mem.rec) return false;
+    mem.rec = structuredClone(r);
+    return true;
+  },
   updateKeystoreAddresses: async (
     lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
     expectedPrimary?: string,

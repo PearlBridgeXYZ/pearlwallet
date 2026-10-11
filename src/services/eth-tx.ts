@@ -182,8 +182,12 @@ export class EthBroadcastStatusUnknownError extends Error {
   }
 }
 
-/** Post-error lookups by hash: count and spacing. Mutable for tests only. */
-export const ETH_BROADCAST_PROBE = { attempts: 3, intervalMs: 1_500 };
+/** Post-error lookups by hash: count, spacing, per-request timeout (one
+ *  attempt per URL, no retries) and an overall deadline, so the
+ *  status-unknown message appears within ~deadlineMs of the failed send
+ *  rather than after a full retry ladder per lookup. Mutable for tests
+ *  only. */
+export const ETH_BROADCAST_PROBE = { attempts: 3, intervalMs: 1_500, timeoutMs: 5_000, deadlineMs: 25_000 };
 
 /** Node messages meaning "this tx (or one with its nonce) is already
  *  known" — the earlier, failed-looking attempt may have delivered it. */
@@ -244,14 +248,34 @@ export function isDefinitiveEthRejection(err: unknown): boolean {
 }
 
 async function txKnownByHash(network: EthNetwork, hash: `0x${string}`): Promise<boolean> {
-  const { attempts, intervalMs } = ETH_BROADCAST_PROBE;
+  const { attempts, intervalMs, timeoutMs, deadlineMs } = ETH_BROADCAST_PROBE;
+  const deadline = Date.now() + deadlineMs;
+  // Lookups only: a single-attempt client (no http retry, no fallback
+  // re-walk, short timeout). The send above used the normal client.
+  const client = ethClient(network, { singleAttemptTimeoutMs: timeoutMs });
   for (let i = 0; i < attempts; i++) {
-    if (i > 0 && intervalMs > 0) await new Promise((r) => setTimeout(r, intervalMs));
+    if (i > 0 && intervalMs > 0) {
+      const wait = Math.min(intervalMs, deadline - Date.now());
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    }
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      const tx = await ethClient(network).getTransaction({ hash });
+      // Bounded by the overall deadline too (several URLs × timeoutMs
+      // could exceed it); a lookup still running past it counts as
+      // not found.
+      const tx = await Promise.race([
+        client.getTransaction({ hash }),
+        new Promise<null>((r) => {
+          timer = setTimeout(() => r(null), left);
+        }),
+      ]);
       if (tx) return true;
     } catch {
       // Not found or the lookup itself failed: treat as not found.
+    } finally {
+      clearTimeout(timer);
     }
   }
   return false;

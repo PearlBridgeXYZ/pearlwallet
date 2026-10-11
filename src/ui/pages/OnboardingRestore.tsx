@@ -1,6 +1,6 @@
 import { useMemo, useState, type ClipboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useWallet } from "../../state/wallet-store";
+import { useWallet, E_WALLET_EXISTS_ELSEWHERE } from "../../state/wallet-store";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { passwordAcceptable, passwordStrength } from "../../lib/validate";
 import { applyMnemonicPaste, parseMnemonicPaste } from "../../lib/mnemonic-paste";
@@ -85,7 +85,12 @@ export default function OnboardingRestore() {
       navigate("/dashboard");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg === "E_WALLET_EXISTS") {
+      if (msg === E_WALLET_EXISTS_ELSEWHERE) {
+        // Another tab stored a wallet while this one was saving: nothing
+        // was saved here and the other wallet is untouched.
+        setOverwriteOpen(false);
+        setError("A wallet was just created in another tab, so nothing was saved here. Reload this page to use that wallet.");
+      } else if (msg === "E_WALLET_EXISTS") {
         setOverwriteOpen(true);
       } else {
         setError(msg);

@@ -52,22 +52,66 @@ import type {
 } from "../crypto/worker";
 
 // Fee + dust knobs mirrored from pearl-tx.ts. Multisig spends are bigger
-// (script + control block per input) so the per-input vbyte estimate is
-// generous to avoid stalls. Re-using the constants from the singlesig path
-// would under-estimate the witness for tr_ms.
+// (signatures + leaf script + control block per input) and their size
+// depends on the vault's threshold and cosigner count, so the per-input
+// size is computed from the vault's actual tapscript spend
+// (multisigInputVbytes) rather than a flat constant: a flat 100 vB/input
+// underpaid every vault above roughly 2-of-3 (15-of-15 paid 0.76
+// grains/vB at the 2 grains/vB default — below the 1 grain/vB relay floor).
 const PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE = 2n;
-// Witness for 2-of-3 tr_ms: 2 × 64-byte sigs + 1 empty + ~37-byte leaf + 33-byte
-// control block ≈ 230 bytes ÷ 4 = 58 vweight + 41-byte non-witness header.
-// We bump to 100 vbytes/input to leave headroom for 3-of-5 and similar.
-const PER_INPUT_VBYTES_MULTISIG = 100n;
 const PER_P2TR_OUTPUT_VBYTES = 43n;
+// version 4 + locktime 4 + input count 1 + output count 1 + segwit
+// marker/flag 2 weight units (0.5 vB), rounded up.
 const FIXED_OVERHEAD_VBYTES = 11n;
 // DUST_LIMIT_GRAINS: the single-sig constant (pearl-tx.ts), one source.
 
-function estimateMultisigFee(numInputs: number, numOutputs: number, feerate: bigint): bigint {
+/** Non-witness bytes of one input: prevout txid 32 + vout 4 + empty
+ *  scriptSig length 1 + sequence 4. */
+const MULTISIG_INPUT_BASE_BYTES = 41;
+/** One signing cosigner's witness item: length prefix 1 + 64-byte Schnorr
+ *  signature + 1 sighash-type byte. Conservative: our own worker signs with
+ *  SIGHASH_DEFAULT (64 bytes) but a cosigner using another wallet may append
+ *  an explicit sighash byte (65), and the fee must cover either. */
+const MULTISIG_SIG_ITEM_BYTES = 66;
+/** A non-signing cosigner's slot in multi_a: an empty push (length 0). */
+const MULTISIG_EMPTY_ITEM_BYTES = 1;
+
+function compactSizeLen(n: number): number {
+  return n < 0xfd ? 1 : n <= 0xffff ? 3 : 5;
+}
+
+/**
+ * Virtual size (vbytes, rounded up) of one vault input spent through its
+ * tapscript leaf: witness = item count, `threshold` signatures, empty pushes
+ * for the other `total - threshold` slots, the leaf script and the control
+ * block (33 + 32 × merkle depth), each with its length prefix; vsize =
+ * ceil((4 × 41 + witness) / 4).
+ */
+export function multisigInputVbytes(
+  desc: Pick<VaultDescriptor, "threshold" | "total" | "leafScript" | "tapLeafScript">,
+): bigint {
+  const depth = desc.tapLeafScript[0]?.[0].merklePath.length ?? 0;
+  const controlBlock = 33 + 32 * depth;
+  const leaf = desc.leafScript.length;
+  const witness =
+    compactSizeLen(desc.total + 2) +
+    desc.threshold * MULTISIG_SIG_ITEM_BYTES +
+    (desc.total - desc.threshold) * MULTISIG_EMPTY_ITEM_BYTES +
+    compactSizeLen(leaf) + leaf +
+    compactSizeLen(controlBlock) + controlBlock;
+  const weight = 4 * MULTISIG_INPUT_BASE_BYTES + witness;
+  return BigInt(Math.ceil(weight / 4));
+}
+
+function estimateMultisigFee(
+  numInputs: number,
+  numOutputs: number,
+  feerate: bigint,
+  perInputVbytes: bigint,
+): bigint {
   const vbytes =
     FIXED_OVERHEAD_VBYTES +
-    BigInt(numInputs) * PER_INPUT_VBYTES_MULTISIG +
+    BigInt(numInputs) * perInputVbytes +
     BigInt(numOutputs) * PER_P2TR_OUTPUT_VBYTES;
   return vbytes * feerate;
 }
@@ -346,16 +390,19 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
     a.valueGrains > b.valueGrains ? -1 : a.valueGrains < b.valueGrains ? 1 : 0,
   );
 
+  // Per-input size from the vault's own leaf script / threshold.
+  const perInput = multisigInputVbytes(descriptorFromRecord(opts.vault));
+
   let numOutputs = 2; // dest + change (provisional)
   const picked: PrlUtxo[] = [];
   let sum = 0n;
   for (const u of sorted) {
     picked.push(u);
     sum += u.valueGrains;
-    const fee = estimateMultisigFee(picked.length, numOutputs, feerate);
+    const fee = estimateMultisigFee(picked.length, numOutputs, feerate, perInput);
     if (sum >= opts.amountGrains + fee) break;
   }
-  let fee = estimateMultisigFee(picked.length, numOutputs, feerate);
+  let fee = estimateMultisigFee(picked.length, numOutputs, feerate, perInput);
   let need = opts.amountGrains + fee;
   if (sum < need) throw new Error("E_INSUFFICIENT_FUNDS");
 
@@ -369,7 +416,7 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
     // assertPsbtMatchesPreview check (services/multisig.ts:628) will refuse
     // to sign the originator's own draft with E_MULTISIG_OUTPUT_MISMATCH.
     numOutputs -= 1;
-    const recomputed = estimateMultisigFee(picked.length, numOutputs, feerate);
+    const recomputed = estimateMultisigFee(picked.length, numOutputs, feerate, perInput);
     if (sum < opts.amountGrains + recomputed) throw new Error("E_INSUFFICIENT_FUNDS");
     fee = sum - opts.amountGrains;
     change = 0n;
@@ -950,7 +997,6 @@ export async function broadcastPendingTx(opts: {
 // Re-export the fee knobs so tests / UI can show estimates.
 export {
   PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE,
-  PER_INPUT_VBYTES_MULTISIG,
   PER_P2TR_OUTPUT_VBYTES,
   FIXED_OVERHEAD_VBYTES,
   DUST_LIMIT_GRAINS,

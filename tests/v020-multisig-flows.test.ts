@@ -53,7 +53,7 @@ import {
   psbtOutputsEqual,
   feeSuspiciousReason,
   assertPsbtMatchesPreview,
-  PER_INPUT_VBYTES_MULTISIG,
+  multisigInputVbytes,
   PER_P2TR_OUTPUT_VBYTES,
   FIXED_OVERHEAD_VBYTES,
   DUST_LIMIT_GRAINS,
@@ -462,11 +462,16 @@ describe("Cosigner pubkey descriptor (JSON exchange)", () => {
 });
 
 describe("Fee estimator constants", () => {
-  it("multisig per-input vbytes is larger than singlesig (covers tr_ms witness)", () => {
-    // Singlesig keypath spend is ~58 vbytes/input; multisig with 2-of-3
-    // adds ~37-byte leaf + 33-byte control block + 64-byte sig per slot.
-    // We pin the multisig figure at 100 to leave headroom for up to 3-of-5.
-    expect(PER_INPUT_VBYTES_MULTISIG).toBe(100n);
+  it("multisig per-input vbytes is larger than singlesig (covers tr_ms witness)", async () => {
+    // Singlesig keypath spend is ~58 vbytes/input; a 2-of-3 tapscript spend
+    // carries 2 sigs + 1 empty push + the leaf + a 33-byte control block.
+    // The per-input size is computed from the vault's own leaf (FY1): a
+    // 2-of-3 input is 110 vB (the former flat 100 underpaid it), and it
+    // grows with threshold and cosigner count.
+    const cs = await cosigners(3);
+    const d23 = descriptorFromRecord(recordFromCosigners(2, cs, 0));
+    expect(multisigInputVbytes(d23)).toBe(110n);
+    expect(multisigInputVbytes(d23)).toBeGreaterThan(58n);
   });
 
   it("output + overhead constants are sane", () => {
@@ -869,12 +874,12 @@ describe("composeVaultSend — dust-coalesce fee invariant (audit pass 4 H1 regr
     const numOutputs1 = 1;
     const fee2 =
       (FIXED_OVERHEAD_VBYTES +
-        BigInt(picked) * PER_INPUT_VBYTES_MULTISIG +
+        BigInt(picked) * multisigInputVbytes(descriptorFromRecord(rec)) +
         BigInt(numOutputs2) * PER_P2TR_OUTPUT_VBYTES) *
       feerate;
     const fee1 =
       (FIXED_OVERHEAD_VBYTES +
-        BigInt(picked) * PER_INPUT_VBYTES_MULTISIG +
+        BigInt(picked) * multisigInputVbytes(descriptorFromRecord(rec)) +
         BigInt(numOutputs1) * PER_P2TR_OUTPUT_VBYTES) *
       feerate;
 

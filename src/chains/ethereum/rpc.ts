@@ -33,6 +33,11 @@ export interface EthClientOptions {
     request: (req: Request) => void;
     response: (res: Response) => Promise<void> | void;
   };
+  /** One attempt per URL with this per-request timeout: no http retry and
+   *  no fallback re-walk. Only broadcastRaw's post-error lookups by hash
+   *  use it, so a status-unknown verdict is reached promptly; every other
+   *  caller (the send itself included) keeps the transport above. */
+  singleAttemptTimeoutMs?: number;
 }
 
 export function ethClient(net: EthNetwork, opts: EthClientOptions = {}) {
@@ -45,6 +50,7 @@ export function ethClient(net: EthNetwork, opts: EthClientOptions = {}) {
   const guard = opts.signal ? cancellationGuard(opts.signal) : undefined;
   if (guard && opts.observe) throw new Error("ethClient: signal and observe are exclusive");
   const observe = opts.observe;
+  const single = opts.singleAttemptTimeoutMs;
   return createPublicClient({
     chain: ethChain(net),
     // Explicit per-request timeout so one hung provider can't stall the
@@ -65,14 +71,14 @@ export function ethClient(net: EthNetwork, opts: EthClientOptions = {}) {
     // after any failure instead of reporting it as a plain failure.
     transport: fallback(
       urls.map((u) => http(u, {
-        timeout: ETH_RPC_TIMEOUT_MS,
-        retryCount: 1,
+        timeout: single ?? ETH_RPC_TIMEOUT_MS,
+        retryCount: single !== undefined ? 0 : 1,
         // Conditional spread: without a signal the config object is
         // exactly the pre-cancellation one (no `onFetchRequest` key).
         ...(guard ? { onFetchRequest: guard } : {}),
         ...(observe ? { onFetchRequest: observe.request, onFetchResponse: observe.response } : {}),
       })),
-      { rank: false, retryCount: 1 },
+      { rank: false, retryCount: single !== undefined ? 0 : 1 },
     ),
   });
 }

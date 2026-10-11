@@ -14,7 +14,7 @@ import {
 } from "../../services/eth-tx";
 import { fetchEthBalanceWei } from "../../services/balances";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
-import EthBroadcastUnknown, { ethUnknownBlocksSend, type EthUnknownState } from "../components/EthBroadcastUnknown";
+import EthBroadcastUnknown, { ethUnknownBlocksSend, useEthUnknown } from "../components/EthBroadcastUnknown";
 
 const GAS_BY_TIER: Record<FeeTier, string> = {
   low: "1 gwei",
@@ -44,7 +44,9 @@ export default function SendETH() {
   const [sending, setSending] = useState(false);
   // A broadcast whose outcome is unknown blocks another send from this
   // screen until the user says they checked it (it may already be live).
-  const [unknown, setUnknown] = useState<EthUnknownState | null>(null);
+  // Stored per network + address outside the component (state/eth-unknown):
+  // leaving the page and coming back keeps the block.
+  const [unknown, setUnknown] = useEthUnknown(ethNetwork, ethAddr);
 
   // Preview combines (a) the estimated gas cost the user will pay and
   // (b) a forward-looking solvency check: amount + worstCaseGas must fit

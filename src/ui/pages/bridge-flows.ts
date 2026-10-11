@@ -29,6 +29,7 @@ import { fetchBurnQuote, type BurnQuote, type MintQuote } from "../../services/b
 import type { BridgeCrossingRecord } from "../../storage/db";
 import type { EthNetwork } from "../../chains/ethereum/network";
 import { ethUnknownMessage, type EthUnknownState } from "../components/EthBroadcastUnknown";
+import { recordEthUnknown } from "../../state/eth-unknown";
 
 // ── Wrap ────────────────────────────────────────────────────────────────
 
@@ -264,6 +265,10 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
       // The approve / burn may already be on the network: never a plain
       // failure, and no retry until the user has checked the hash.
       view.setNotice(null);
+      // Recorded at module level, not only through the view: the card may
+      // have unmounted while this ran (its setters then go nowhere), and a
+      // remounted card must still block the next Unwrap.
+      recordEthUnknown({ network, from: ethAddress, hash: e.hash, what: step });
       view.setEthUnknown?.({ hash: e.hash, what: step, acknowledged: false });
       view.setErr(ethUnknownMessage(network, e.hash, step));
       return;

@@ -4,7 +4,6 @@
 import Dexie, { type Table } from "dexie";
 import type { PearlNetwork } from "../chains/pearl/network";
 import type { EthNetwork } from "../chains/ethereum/network";
-import { WALLET_TABS_STORAGE_KEY } from "../services/broadcast-lock";
 import { sameKeystoreBlob } from "./keystore-blob";
 
 export { sameKeystoreBlob };
@@ -221,6 +220,32 @@ export async function saveKeystore(record: KeystoreRecord): Promise<void> {
 }
 
 /**
+ * Stores a new wallet record only if none exists: the existence check and
+ * the insert share one read-write transaction, so two tabs that both saw an
+ * empty keystore and then create / restore cannot both succeed — the second
+ * write is refused (false) and the first wallet's record is left untouched.
+ * Used by create / restore without overwrite consent; the explicit
+ * overwrite path keeps using saveKeystore.
+ */
+export async function addKeystoreIfAbsent(record: KeystoreRecord): Promise<boolean> {
+  return db.transaction("rw", db.keystore, async () => {
+    const rec = await db.keystore.get("primary");
+    if (rec) return false;
+    await db.keystore.add(record);
+    return true;
+  });
+}
+
+/** `next` when it is at least as long as `stored`, or when the two
+ *  diverge; `stored` when it extends `next` (same prefix, longer). */
+function longerOfPrefixCompatible(stored: readonly string[] | undefined, next: readonly string[]): string[] {
+  if (Array.isArray(stored) && stored.length > next.length && next.every((a, i) => stored[i] === a)) {
+    return [...stored];
+  }
+  return [...next];
+}
+
+/**
  * Rewrites only the public Pearl address lists of the stored record. The
  * read and the write share one read-write transaction, so a password change
  * committed by another tab is never replaced by an older blob (a separate
@@ -229,24 +254,35 @@ export async function saveKeystore(record: KeystoreRecord): Promise<void> {
  * different wallet; with `expectedBlob`, refuses (false) unless the stored
  * record still holds that exact ciphertext (unlock binds its write to the
  * blob the worker decrypted). False when no record exists.
+ *
+ * `mode` "grow" (unlock, discovery) never shortens a stored list: when the
+ * stored list already extends the written one (another tab discovered and
+ * saved more addresses meanwhile) the stored list is kept. Only "replace"
+ * (resetPearlAddresses, the explicit shrink) may shorten.
  */
 export async function updateKeystoreAddresses(
   lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
   expectedPrimary?: string,
   expectedBlob?: KeystoreBlobJSON,
+  mode: "grow" | "replace" = "grow",
 ): Promise<boolean> {
   return db.transaction("rw", db.keystore, async () => {
     const rec = await db.keystore.get("primary");
     if (!rec) return false;
     if (expectedPrimary !== undefined && rec.publicData.pearlAddress !== expectedPrimary) return false;
     if (expectedBlob !== undefined && !sameKeystoreBlob(rec.blob, expectedBlob)) return false;
+    const grow = mode === "grow";
     await db.keystore.put({
       ...rec,
       publicData: {
         ...rec.publicData,
         pearlAddress: lists.pearlAddress,
-        pearlAddressPool: [...lists.pearlAddressPool],
-        pearlChangePool: [...lists.pearlChangePool],
+        pearlAddressPool: grow
+          ? longerOfPrefixCompatible(rec.publicData.pearlAddressPool, lists.pearlAddressPool)
+          : [...lists.pearlAddressPool],
+        pearlChangePool: grow
+          ? longerOfPrefixCompatible(rec.publicData.pearlChangePool, lists.pearlChangePool)
+          : [...lists.pearlChangePool],
       },
     });
     return true;
@@ -302,8 +338,13 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   "pearl-wallet-pending-releases-v1",
   "pearl-wallet-pending-intents-v1",
   "pearl-wallet-pending-attempts-v1",
-  // Open-tab list of the no-Web-Locks single-tab guard (broadcast-lock.ts).
-  WALLET_TABS_STORAGE_KEY,
+  // NOT listed: WALLET_TABS_STORAGE_KEY ("pearl-wallet-tabs-v1"). It is
+  // not wallet data but the list of LIVE tabs that the no-Web-Locks
+  // single-tab broadcast guard (services/broadcast-lock.ts) relies on;
+  // removing it on wipe would let a second open tab broadcast while
+  // another is still running (and would unlist this tab too). A tab
+  // unlists itself on unload; one that died listed is cleared by the
+  // user's "no other tab is open" confirmation (claimOnlyTab).
 ];
 const UI_STORAGE_KEY_RE = /^pearl-wallet-ui-v\d+$/;
 

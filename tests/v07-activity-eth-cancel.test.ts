@@ -395,9 +395,12 @@ describe("activity scan cancellation stops viem's retry/fallback stack (D1)", ()
     // R1 repair (FX1): broadcastRaw also passes options — an `observe`
     // hook only (no signal), on exactly one call, so the value path never
     // gets the cancellation guard.
-    expect([...withOpts].sort()).toEqual(["services/activity.ts", "services/eth-tx.ts"]);
+    // R2 FY6: plus one single-attempt client for its post-error lookups by
+    // hash (no signal either), so eth-tx.ts has exactly two such calls.
+    expect([...withOpts].sort()).toEqual(["services/activity.ts", "services/eth-tx.ts", "services/eth-tx.ts"]);
     const ethTxSrc = fs.readFileSync(path.join(root, "services/eth-tx.ts"), "utf8");
     expect(ethTxSrc.match(/ethClient\(network, \{\s*observe:/g)?.length).toBe(1);
+    expect(ethTxSrc.match(/ethClient\(network, \{ singleAttemptTimeoutMs: timeoutMs \}\)/g)?.length).toBe(1);
     expect(ethTxSrc).not.toMatch(/signal/);
     for (const vp of ["services/eth-tx.ts", "services/bridge.ts", "services/balances.ts", "services/ens.ts"]) {
       expect(fs.readFileSync(path.join(root, vp), "utf8")).toMatch(/ethClient\(/);

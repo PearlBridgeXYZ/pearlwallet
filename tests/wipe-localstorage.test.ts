@@ -65,10 +65,10 @@ describe("wipeKeystore localStorage scrub (audit C2)", () => {
     expect(localStorage.getItem("pearl-wallet-ui-v6")).toBeNull();
   });
 
-  // v0.7 R1 FX5 (Grok G6): the single-tab guard's open-tab list goes too;
-  // left behind, the next broadcast on a no-Web-Locks browser could refuse
-  // with E_SECOND_TAB for tabs that no longer exist.
-  it("removes the open-tab list of the no-Web-Locks guard (pearl-wallet-tabs-v1)", async () => {
+  // R2 FY4 (reverts R1 FX5): the single-tab guard's open-tab list lists
+  // LIVE tabs, not wallet data. A wipe must keep it: removing it would let
+  // a second open tab on a no-Web-Locks browser broadcast concurrently.
+  it("keeps the open-tab list of the no-Web-Locks guard (pearl-wallet-tabs-v1)", async () => {
     const { WALLET_TABS_STORAGE_KEY } = await import("../src/services/broadcast-lock");
     expect(WALLET_TABS_STORAGE_KEY).toBe("pearl-wallet-tabs-v1");
     localStorage.setItem(WALLET_TABS_STORAGE_KEY, JSON.stringify(["stale-tab"]));
@@ -80,7 +80,7 @@ describe("wipeKeystore localStorage scrub (audit C2)", () => {
       if (tbl.delete) vi.spyOn(tbl, "delete").mockResolvedValue(undefined as never);
     }
     await wipeKeystore();
-    expect(localStorage.getItem(WALLET_TABS_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem(WALLET_TABS_STORAGE_KEY)).toBe(JSON.stringify(["stale-tab"]));
     expect(localStorage.getItem("unrelated-key")).toBe("keepme");
   });
 });
