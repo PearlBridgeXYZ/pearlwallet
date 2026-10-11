@@ -23,6 +23,8 @@
 // starting with `#` are dropped. This makes the pasted list survive
 // trips through chat clients, plain text editors, and paper.
 
+import { formatGrains } from "../format";
+
 export interface ParsedManualUtxo {
   txid: string;
   vout: number;
@@ -134,6 +136,49 @@ export function sumManualUtxoValue(utxos: ParsedManualUtxo[]): bigint {
   let s = 0n;
   for (const u of utxos) s += BigInt(u.valueGrains);
   return s;
+}
+
+/** Amounts of a manually composed spend: the fee actually paid and the
+ *  change output (0n = no change output). */
+export interface ManualSpendPlan {
+  feeGrains: bigint;
+  changeGrains: bigint;
+}
+
+/**
+ * Validates and plans the outputs of a manually composed spend, with the
+ * same rules as Send (composePearlSend):
+ *   - a destination amount at or below `dustLimitGrains` is refused (the
+ *     network won't relay it);
+ *   - the fee input is a whole number of grains (digits only; empty = 0);
+ *   - change below the dust limit is not created: it is paid to miners as
+ *     part of the fee, so inputs = outputs + fee holds exactly.
+ * Throws an Error with a readable message on any refusal.
+ */
+export function planManualSpend(p: {
+  totalInGrains: bigint;
+  amountGrains: bigint;
+  feeInput: string;
+  dustLimitGrains: bigint;
+}): ManualSpendPlan {
+  if (p.amountGrains <= p.dustLimitGrains) {
+    throw new Error(
+      `Amount is too small: the network won't relay a payment of ${formatGrains(p.dustLimitGrains)} PRL or less.`,
+    );
+  }
+  const feeText = p.feeInput.trim();
+  if (feeText !== "" && !/^\d+$/.test(feeText)) {
+    throw new Error("Fee must be a whole number of grains");
+  }
+  const fee = BigInt(feeText || "0");
+  const change = p.totalInGrains - p.amountGrains - fee;
+  if (change < 0n) {
+    throw new Error(
+      `Insufficient: inputs ${formatGrains(p.totalInGrains)} PRL, need ${formatGrains(p.amountGrains)} + fee ${formatGrains(fee)}`,
+    );
+  }
+  if (change < p.dustLimitGrains) return { feeGrains: fee + change, changeGrains: 0n };
+  return { feeGrains: fee, changeGrains: change };
 }
 
 /** Derive the P2TR scriptPubKey for a Pearl bech32m address. Used to

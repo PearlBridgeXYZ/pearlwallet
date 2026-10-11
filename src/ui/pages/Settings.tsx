@@ -282,7 +282,11 @@ export default function Settings() {
       setError(
         e instanceof Error && e.message === "E_PASSWORD_WRONG"
           ? "Incorrect password."
-          : e instanceof Error ? e.message : "Wipe failed.",
+          : e instanceof Error && e.message === "E_WALLET_CHANGED"
+            ? "The wallet stored in this browser changed in another tab. Nothing was wiped. Unlock it first if you still want to wipe it."
+            : e instanceof Error && e.message === "E_WALLET_WIPED"
+              ? "The wallet was already removed from this browser in another tab."
+              : e instanceof Error ? e.message : "Wipe failed.",
       );
     }
   }

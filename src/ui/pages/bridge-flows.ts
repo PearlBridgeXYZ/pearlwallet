@@ -15,6 +15,7 @@
 
 import type { ComposedPearlTx, FrozenPearlTx } from "../../services/pearl-tx";
 import {
+  EthBroadcastStatusUnknownError,
   approveWprlForBridge,
   previewUnwrapGas,
   readWprlAllowance,
@@ -27,6 +28,7 @@ import { bridgeConfig } from "../../services/bridge";
 import { fetchBurnQuote, type BurnQuote, type MintQuote } from "../../services/bridge-v1";
 import type { BridgeCrossingRecord } from "../../storage/db";
 import type { EthNetwork } from "../../chains/ethereum/network";
+import { ethUnknownMessage, type EthUnknownState } from "../components/EthBroadcastUnknown";
 
 // ── Wrap ────────────────────────────────────────────────────────────────
 
@@ -106,6 +108,9 @@ export interface UnwrapView {
   /** A re-read quote that differs from the reviewed one, shown instead. */
   setQuote(q: BurnQuote): void;
   onStarted(rec: BridgeCrossingRecord): Promise<void>;
+  /** An approve / burn broadcast whose outcome is unknown: the page blocks
+   *  another Unwrap until the user says they checked it. */
+  setEthUnknown?(s: EthUnknownState): void;
 }
 
 export interface UnwrapInput {
@@ -162,6 +167,7 @@ function assertPlan(q: BurnQuote, network: EthNetwork, amount: bigint): void {
 async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas }: UnwrapInput, view: UnwrapView): Promise<void> {
   // Set only once the approve is mined successfully.
   let approveTxHash: `0x${string}` | null = null;
+  let step = "approval";
   try {
     // Confirm-time re-quote: bind amount, re-check paused + pinned
     // addresses, RE-READ allowance + balance just before signing
@@ -225,6 +231,7 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
       return;
     }
     view.setBusy("burning");
+    step = "burn";
     const r = await requestBurn({
       network,
       from: ethAddress,
@@ -253,6 +260,14 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
       view.setErr(`Burn submitted, but failed to save tracking. SAVE THIS burn tx: ${r.txHash}`);
     }
   } catch (e) {
+    if (e instanceof EthBroadcastStatusUnknownError) {
+      // The approve / burn may already be on the network: never a plain
+      // failure, and no retry until the user has checked the hash.
+      view.setNotice(null);
+      view.setEthUnknown?.({ hash: e.hash, what: step, acknowledged: false });
+      view.setErr(ethUnknownMessage(network, e.hash, step));
+      return;
+    }
     const raw = (e as Error).message;
     const msg =
       raw === "E_ETH_GAS_ABOVE_REVIEW"

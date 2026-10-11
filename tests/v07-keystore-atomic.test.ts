@@ -26,11 +26,14 @@ vi.mock("../src/storage/db", () => ({
   updateKeystoreAddresses: async (
     lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
     expectedPrimary?: string,
+    expectedBlob?: KeystoreRecord["blob"],
   ) => {
     mem.started?.();
     if (mem.gate) await mem.gate;
     if (!mem.rec) return false;
     if (expectedPrimary !== undefined && mem.rec.publicData.pearlAddress !== expectedPrimary) return false;
+    // Mirrors the real compare (FX2): unlock binds the write to its blob.
+    if (expectedBlob !== undefined && JSON.stringify(mem.rec.blob) !== JSON.stringify(expectedBlob)) return false;
     mem.rec = structuredClone({ ...mem.rec, publicData: { ...mem.rec.publicData, ...lists } });
     return true;
   },
@@ -48,8 +51,10 @@ vi.mock("../src/storage/db", () => ({
     mem.rec = structuredClone({ ...mem.rec, blob });
     return "replaced";
   },
-  wipeKeystore: async () => {
+  wipeKeystore: async (expectedBlob?: KeystoreRecord["blob"]) => {
+    if (expectedBlob !== undefined && mem.rec && JSON.stringify(mem.rec.blob) !== JSON.stringify(expectedBlob)) return "changed";
     mem.rec = undefined;
+    return "wiped";
   },
 }));
 
@@ -147,12 +152,35 @@ describe("S1 — address-list writes keep another tab's password change", () => 
     vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({
       addresses: { pearl: ext[0], pearlPool: ext, pearlChange: int, eth: ETH },
     } as never);
-    await racing(
-      () => useWallet.getState().unlock("old password"),
-      () => (mem.rec = { ...mem.rec!, blob: { ...NEW_BLOB } }),
-    );
+    // FX2: the address write is now bound to the blob this unlock
+    // decrypted. A password change committed meanwhile makes this session
+    // stale: nothing is written, the tab locks onto the stored record.
+    // (Before FX2 the lists were written and the unlock succeeded on the
+    // old blob; the invariant pinned here — the old blob is never written
+    // back — is unchanged.)
+    await expect(
+      racing(
+        () => useWallet.getState().unlock("old password"),
+        () => (mem.rec = { ...mem.rec!, blob: { ...NEW_BLOB } }),
+      ),
+    ).rejects.toThrow("E_WALLET_CHANGED");
     expect(mem.rec!.blob).toEqual(NEW_BLOB);
+    expect(mem.rec!.publicData.pearlChangePool).toBeUndefined();
+    expect(useWallet.getState().status).toBe("locked");
+    expect(useWallet.getState().blob).toEqual(NEW_BLOB);
+  });
+
+  it("the unlock migration still upgrades the record when nothing changed meanwhile", async () => {
+    seed();
+    delete mem.rec!.publicData.pearlChangePool;
+    useWallet.setState({ status: "locked", addresses: null });
+    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({
+      addresses: { pearl: ext[0], pearlPool: ext, pearlChange: int, eth: ETH },
+    } as never);
+    await useWallet.getState().unlock("old password");
+    expect(mem.rec!.blob).toEqual(OLD_BLOB);
     expect(mem.rec!.publicData.pearlChangePool).toEqual(int);
+    expect(useWallet.getState().status).toBe("unlocked");
   });
 
   it("changePassword replaces only the blob: address lists another tab extended meanwhile are kept", async () => {

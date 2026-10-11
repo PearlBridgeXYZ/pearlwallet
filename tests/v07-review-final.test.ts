@@ -17,6 +17,7 @@
 //   S13 CSP / allowlists no longer carry dead sentries or cloudflare-eth.com
 //   S14 the wipe dialog warns about unknown broadcasts it would forget
 
+import { keccak256 } from "viem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -158,7 +159,7 @@ describe("S4 — Bridge fees are shown before anything is signed", () => {
       },
       chain: { id: 1 },
     } as never);
-    const sign = vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: "0xraw" } as never);
+    const sign = vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: "0x02c0ffee" } as never);
     return { sent, sign };
   }
 
@@ -194,7 +195,7 @@ describe("S4 — Bridge fees are shown before anything is signed", () => {
     expect(sent).toEqual([]);
     await expect(
       requestBurn({ ...base, pearlAddress: "prl1pme", ceiling: { maxFeePerGas: fee, maxCostWei: 120_000n * fee } }),
-    ).resolves.toMatchObject({ txHash: "0xfeed" });
+    ).resolves.toMatchObject({ txHash: keccak256("0x02c0ffee") }); // FX1: local hash of the signed bytes
     expect(sent).toEqual(["tx"]);
   });
 

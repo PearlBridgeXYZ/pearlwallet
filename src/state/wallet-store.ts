@@ -15,6 +15,7 @@ import {
   type KeystoreRecord,
   type KeystoreBlobJSON,
 } from "../storage/db";
+import { sameKeystoreBlob } from "../storage/keystore-blob";
 
 // Idle window before the wallet auto-locks. Exported so the TopBar
 // countdown and the App-level interval check stay in lockstep — if one
@@ -271,9 +272,18 @@ export const useWallet = create<WalletState>((set, get) => ({
                 // session was derived from the OLD password; using it against
                 // the new blob would fail anyway, and the cleanest UX is to
                 // require an unlock with the new password.
+                // Also replaces / clears everything lock() clears: the
+                // record may now be a different wallet (overwrite create /
+                // restore in the other tab), and mounted queries must not
+                // keep reading the former addresses while locked.
                 cryptoWorker.reset();
                 clearBalanceMemory();
-                set({ status: "locked", blob: fresh.blob });
+                set({
+                  status: "locked",
+                  addresses: null,
+                  blob: fresh.blob,
+                  pearlAddressGeneration: get().pearlAddressGeneration + 1,
+                });
               } else {
                 // Foreign update with no row — likely a wipe arrived first.
                 // Treat as wiped so we don't dangle in stale "unlocked".
@@ -340,6 +350,10 @@ export const useWallet = create<WalletState>((set, get) => ({
         },
       };
       await saveKeystore(rec);
+      // Replaced a stored wallet: peer tabs still hold the former one (its
+      // blob, possibly an unlocked session). Tell them to lock onto the
+      // stored record, as a password change does.
+      if (existing) broadcastKeystoreEvent({ type: "blob-updated" });
       // New wallet (possibly replacing another): drop the previous one's
       // remembered per-address balances and scan state.
       clearBalanceMemory();
@@ -381,6 +395,10 @@ export const useWallet = create<WalletState>((set, get) => ({
         },
       };
       await saveKeystore(rec);
+      // Replaced a stored wallet: peer tabs still hold the former one (its
+      // blob, possibly an unlocked session). Tell them to lock onto the
+      // stored record, as a password change does.
+      if (existing) broadcastKeystoreEvent({ type: "blob-updated" });
       // New wallet (possibly replacing another): drop the previous one's
       // remembered per-address balances and scan state.
       clearBalanceMemory();
@@ -421,6 +439,28 @@ export const useWallet = create<WalletState>((set, get) => ({
         set({ status: "no-wallet", addresses: null, blob: null });
         throw new Error("E_WALLET_WIPED");
       }
+      // Stale-tab guard: the session belongs to the blob the worker just
+      // decrypted. If the stored record now holds a different blob (another
+      // tab restored / created a wallet or changed the password and this
+      // tab missed or has not yet handled the broadcast), this session must
+      // neither write its address lists over that record nor stay
+      // unlocked: lock onto the stored record (as changePassword does).
+      const walletChanged = async (fresh: KeystoreRecord | undefined): Promise<never> => {
+        cryptoWorker.reset();
+        clearBalanceMemory();
+        if (!fresh) {
+          set({ status: "no-wallet", addresses: null, blob: null });
+          throw new Error("E_WALLET_WIPED");
+        }
+        set({
+          status: "locked",
+          addresses: null,
+          blob: fresh.blob,
+          pearlAddressGeneration: get().pearlAddressGeneration + 1,
+        });
+        throw new Error("E_WALLET_CHANGED");
+      };
+      if (!sameKeystoreBlob(rec.blob, blob)) await walletChanged(rec);
       // Persist the freshly-derived pools back to the keystore so a record
       // saved by an older build (without pearlAddressPool / pearlChangePool)
       // gets upgraded without requiring a wipe-and-restore. Only the
@@ -432,11 +472,14 @@ export const useWallet = create<WalletState>((set, get) => ({
         rec.publicData.pearlAddress !== out.addresses.pearl;
       if (needsUpdate) {
         // Address lists only: the blob is never rewritten from this read.
-        await updateKeystoreAddresses({
+        // Compare-and-update bound to the decrypted blob: refused when the
+        // record changed after the check above.
+        const saved = await updateKeystoreAddresses({
           pearlAddress: out.addresses.pearl,
           pearlAddressPool: out.addresses.pearlPool,
           pearlChangePool: change,
-        }, rec.publicData.pearlAddress);
+        }, rec.publicData.pearlAddress, blob);
+        if (!saved) await walletChanged(await loadKeystore());
       }
       set({ status: "unlocked", addresses: out.addresses, lastActivity: monotonicNow() });
       return { addresses: out.addresses };
@@ -478,7 +521,25 @@ export const useWallet = create<WalletState>((set, get) => ({
         { password, blob },
       );
       cryptoWorker.reset();
-      await wipeKeystore();
+      // Compare-and-delete: only the wallet whose password was just
+      // verified is wiped. A stale tab (another tab replaced the record
+      // meanwhile) refuses and locks onto the stored record instead.
+      const result = await wipeKeystore(blob);
+      if (result === "changed") {
+        clearBalanceMemory();
+        const fresh = await loadKeystore();
+        if (fresh) {
+          set({
+            status: "locked",
+            addresses: null,
+            blob: fresh.blob,
+            pearlAddressGeneration: get().pearlAddressGeneration + 1,
+          });
+          throw new Error("E_WALLET_CHANGED");
+        }
+        set({ status: "no-wallet", addresses: null, blob: null });
+        throw new Error("E_WALLET_WIPED");
+      }
       clearBalanceMemory();
       // Broadcast records (wipeKeystore removed the key too; this also
       // re-renders the banner). Lock keeps them on purpose: a lock must not

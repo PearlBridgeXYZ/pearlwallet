@@ -5,6 +5,7 @@ import { useUI } from "../../state/ui-store";
 import { useWallet } from "../../state/wallet-store";
 import {
   composeVaultSend,
+  DUST_LIMIT_GRAINS,
   getVault,
   persistComposedAsPending,
   signPendingTx,
@@ -25,6 +26,11 @@ export function vaultHistoryCapMessage(deep: boolean): string {
   return deep
     ? `Even the deepest search (${deepest} transactions) couldn't read this vault's whole history, so its coins can't be proven unspent. Nothing was composed. Waiting won't change this: spending from this vault needs a wallet backed by a full node.`
     : `This vault has more history than the standard search reads, so its coins can't be proven unspent yet. Nothing was composed. "Search deeper" reads up to ${deepest} transactions (slower).`;
+}
+
+/** Same copy as Send PRL for a destination output at or below dust. */
+export function vaultDustMessage(): string {
+  return `Amount is too small: the network won't relay a payment of ${formatGrains(DUST_LIMIT_GRAINS)} PRL or less.`;
 }
 
 export default function SendFromVault() {
@@ -112,6 +118,10 @@ export default function SendFromVault() {
       setError("Amount must be greater than 0.");
       return;
     }
+    if (grains <= DUST_LIMIT_GRAINS) {
+      setError(vaultDustMessage());
+      return;
+    }
     setBusy(true);
     try {
       const c = await composeVaultSend({
@@ -130,6 +140,7 @@ export default function SendFromVault() {
       } else if (msg.includes("E_NO_UTXOS: every vault coin"))
         setError("Every vault coin is already being spent by a transaction broadcast recently. Wait for it to confirm.");
       else if (msg.includes("E_NO_UTXOS")) setError("Vault has no spendable UTXOs.");
+      else if (msg.includes("E_AMOUNT_DUST")) setError(vaultDustMessage());
       else if (msg.includes("E_INSUFFICIENT_FUNDS"))
         setError("Insufficient funds in the vault to cover amount + fee.");
       else setError(`Compose failed: ${msg}`);

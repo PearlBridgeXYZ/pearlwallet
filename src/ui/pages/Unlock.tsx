@@ -40,7 +40,11 @@ export default function Unlock() {
     } catch (e) {
       setError(e instanceof Error && e.message === "E_PASSWORD_WRONG"
         ? "Incorrect password."
-        : e instanceof Error ? e.message : "Unlock failed.");
+        : e instanceof Error && e.message === "E_WALLET_CHANGED"
+          ? "The wallet stored in this browser changed in another tab. Unlock again with that wallet's password."
+          : e instanceof Error && e.message === "E_WALLET_WIPED"
+            ? "The wallet was removed from this browser in another tab."
+            : e instanceof Error ? e.message : "Unlock failed.");
     } finally {
       setBusy(false);
     }

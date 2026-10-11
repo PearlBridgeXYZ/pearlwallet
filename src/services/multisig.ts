@@ -42,7 +42,7 @@ import {
   BroadcastStatusUnknownError,
   type PrlUtxo,
 } from "./pearl-rpc";
-import { broadcastSignedPearlTx, HistoryIncompleteError } from "./pearl-tx";
+import { broadcastSignedPearlTx, DUST_LIMIT_GRAINS, HistoryIncompleteError } from "./pearl-tx";
 import { BroadcastRefusedError, excludePendingSpends } from "./pending-spends";
 import type {
   PearlMultisigComposePsbtRequest,
@@ -62,7 +62,7 @@ const PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE = 2n;
 const PER_INPUT_VBYTES_MULTISIG = 100n;
 const PER_P2TR_OUTPUT_VBYTES = 43n;
 const FIXED_OVERHEAD_VBYTES = 11n;
-const DUST_LIMIT_GRAINS = 546n;
+// DUST_LIMIT_GRAINS: the single-sig constant (pearl-tx.ts), one source.
 
 function estimateMultisigFee(numInputs: number, numOutputs: number, feerate: bigint): bigint {
   const vbytes =
@@ -324,6 +324,10 @@ export interface ComposedVaultSend {
  * surprised by an extra output on a co-signed PSBT.
  */
 export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<ComposedVaultSend> {
+  // A destination output at or below dust is never relayed (same rule as
+  // single-sig composePearlSend): refuse before any network read, so
+  // cosigners are never asked to sign an unrelayable spend.
+  if (opts.amountGrains <= DUST_LIMIT_GRAINS) throw new Error("E_AMOUNT_DUST");
   const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
   const walk = await fetchPrlUtxos(opts.vault.pearlAddress, { maxPages: opts.maxPages });
   // A page-capped history may list coins spent on a page never read: it

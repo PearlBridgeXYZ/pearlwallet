@@ -488,6 +488,9 @@ describe("shrunk counterexamples", () => {
     }).catch((e: unknown) => e);
     // On HEAD this composes outputs[0] = 1 grain (non-relayable dust).
     expect(r instanceof Error ? "refused" : `composed dest=${(r as ComposedPearlTx).outputs[0]!.amountGrains}`).toBe("refused");
+    // The refusal must be the dust refusal itself, not any other error.
+    expect(r).toBeInstanceOf(Error);
+    expect((r as Error).message).toBe("E_AMOUNT_DUST");
   });
 
   it("send-max in the tip-floor gap: the composed plan balances and costs no more fee than the preview (coins 1.5 PRL + 1000 grains, tip on)", async () => {

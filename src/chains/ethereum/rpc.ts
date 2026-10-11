@@ -17,13 +17,22 @@ export const ETH_RPC_TIMEOUT_MS = 10_000;
 /**
  * Optional per-client cancellation. Only the activity scan passes one
  * (tests/v07-activity-eth-cancel.test.ts pins that); every value-path
- * caller constructs the unchanged transport.
+ * caller constructs the same transport without the cancellation hook.
  */
 export interface EthClientOptions {
   /** Once aborted, no NEW JSON-RPC request leaves this client (viem's own
    *  retries and fallback hops included). A request already in flight
    *  completes or times out; the caller discards its result. */
   signal?: AbortSignal;
+  /** Sees every fetch this client makes (each retry and fallback hop):
+   *  `request` before it leaves, `response` when an HTTP response arrives
+   *  (a timeout or network error produces no `response` call). Only
+   *  services/eth-tx.ts broadcastRaw passes one, to tell whether ANY
+   *  eth_sendRawTransaction attempt failed ambiguously. Must not throw. */
+  observe?: {
+    request: (req: Request) => void;
+    response: (res: Response) => Promise<void> | void;
+  };
 }
 
 export function ethClient(net: EthNetwork, opts: EthClientOptions = {}) {
@@ -34,10 +43,26 @@ export function ethClient(net: EthNetwork, opts: EthClientOptions = {}) {
   // doesn't appear twice.
   const urls = override ? [override, ...defaults.filter((u) => u !== override)] : [...defaults];
   const guard = opts.signal ? cancellationGuard(opts.signal) : undefined;
+  if (guard && opts.observe) throw new Error("ethClient: signal and observe are exclusive");
+  const observe = opts.observe;
   return createPublicClient({
     chain: ethChain(net),
     // Explicit per-request timeout so one hung provider can't stall the
     // dashboard; fallback moves on to the next URL on timeout.
+    //
+    // Retry configuration (viem 2.21): each http transport retries a
+    // retryable failure (HTTP 403/408/413/429/500/502/503/504, timeouts
+    // and network errors, JSON-RPC -1/-32005/-32603) once (retryCount 1:
+    // up to 2 attempts per URL); the fallback walks the URLs in order and
+    // the whole walk is retried once more (fallback retryCount 1). So one
+    // call makes up to 2 × 2 × N fetches for N URLs — 8 across the two
+    // defaults, 12 with an override in front. Builds up to v0.6.x used
+    // viem's http default (3) inside fallback retryCount 2.
+    // Calls that pass their own retryCount override only the outer
+    // (fallback) retry: eth_sendRawTransaction (viem passes retryCount 0)
+    // makes at most 2 × N attempts — each of which may have delivered the
+    // tx, which is why services/eth-tx.ts broadcastRaw probes by hash
+    // after any failure instead of reporting it as a plain failure.
     transport: fallback(
       urls.map((u) => http(u, {
         timeout: ETH_RPC_TIMEOUT_MS,
@@ -45,6 +70,7 @@ export function ethClient(net: EthNetwork, opts: EthClientOptions = {}) {
         // Conditional spread: without a signal the config object is
         // exactly the pre-cancellation one (no `onFetchRequest` key).
         ...(guard ? { onFetchRequest: guard } : {}),
+        ...(observe ? { onFetchRequest: observe.request, onFetchResponse: observe.response } : {}),
       })),
       { rank: false, retryCount: 1 },
     ),

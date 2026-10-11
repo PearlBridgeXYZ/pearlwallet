@@ -21,6 +21,9 @@ import * as pearlRpc from "../src/services/pearl-rpc";
 import * as workerClient from "../src/crypto/worker-client";
 import * as bridge from "../src/services/bridge";
 import { useMemoryStorage } from "./helpers/broadcast-env";
+import { keccak256 } from "viem";
+
+const SIGNED_RAW = "0x02c0ffee" as const;
 
 // ─── O1-H-1: suggestGas clamps an absurd baseFeePerGas ────────────────────
 
@@ -82,7 +85,7 @@ describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
       chain: { id: 1 },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
-    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: "0xraw" });
+    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: SIGNED_RAW });
 
     const frozen: FrozenEthGas = {
       gas: 21000n,
@@ -100,7 +103,9 @@ describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
       frozen,
     });
 
-    expect(res.txHash).toBe("0xdeadbeef");
+    // FX1: the hash is computed locally from the signed bytes, not
+    // taken from the node's echo.
+    expect(res.txHash).toBe(keccak256(SIGNED_RAW));
     // Critically: no re-quote of fee market or gas estimate.
     expect(getBlock).not.toHaveBeenCalled();
     expect(estimateGas).not.toHaveBeenCalled();
@@ -146,7 +151,7 @@ describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
       chain: { id: 1 },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
-    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: "0xraw" });
+    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: SIGNED_RAW });
 
     const res = await sendNative({
       network: "mainnet",
@@ -156,7 +161,9 @@ describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
       tier: "normal",
     });
 
-    expect(res.txHash).toBe("0xfeedface");
+    // FX1: the hash is computed locally from the signed bytes, not
+    // taken from the node's echo.
+    expect(res.txHash).toBe(keccak256(SIGNED_RAW));
     expect(getBlock).toHaveBeenCalled();
     expect(estimateGas).toHaveBeenCalled();
   });
@@ -182,7 +189,7 @@ describe("v0.1.11 / sendWprl — sign-what-you-saw", () => {
       chain: { id: 1 },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any);
-    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: "0xraw" });
+    vi.spyOn(workerClient.cryptoWorker, "call").mockResolvedValue({ raw: SIGNED_RAW });
 
     const res = await sendWprl({
       network: "mainnet",
@@ -198,7 +205,9 @@ describe("v0.1.11 / sendWprl — sign-what-you-saw", () => {
       },
     });
 
-    expect(res.txHash).toBe("0xcafe");
+    // FX1: the hash is computed locally from the signed bytes, not
+    // taken from the node's echo.
+    expect(res.txHash).toBe(keccak256(SIGNED_RAW));
     expect(getBlock).not.toHaveBeenCalled();
     expect(estimateGas).not.toHaveBeenCalled();
   });

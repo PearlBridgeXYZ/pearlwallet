@@ -6,6 +6,7 @@ import { useWallet } from "../../state/wallet-store";
 import { resolveEthDestination } from "../../services/ens";
 import { formatWei, formatWprl, parseWPRL } from "../../lib/format";
 import {
+  EthBroadcastStatusUnknownError,
   estimateWprlGas,
   evaluateGasCoverage,
   sendWprl,
@@ -14,6 +15,7 @@ import {
 } from "../../services/eth-tx";
 import { fetchEthBalanceWei } from "../../services/balances";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
+import EthBroadcastUnknown, { ethUnknownBlocksSend, type EthUnknownState } from "../components/EthBroadcastUnknown";
 
 const GAS_BY_TIER: Record<FeeTier, string> = {
   low: "1 gwei",
@@ -41,6 +43,9 @@ export default function SendWPRL() {
   const [resolvedEns, setResolvedEns] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
   const [sending, setSending] = useState(false);
+  // A broadcast whose outcome is unknown blocks another send from this
+  // screen until the user says they checked it (it may already be live).
+  const [unknown, setUnknown] = useState<EthUnknownState | null>(null);
 
   // Pre-flight quote: estimate gas + suggested fee market + current ETH
   // balance. Gates the "Send" button so a user without enough native ETH
@@ -115,6 +120,7 @@ export default function SendWPRL() {
     if (!validated || !ethAddr) return;
     const q = previewQ.data;
     if (!q) return;
+    if (ethUnknownBlocksSend(unknown)) return;
     setSending(true);
     setError(null);
     try {
@@ -132,10 +138,13 @@ export default function SendWPRL() {
         },
       });
       setTxHash(hash);
+      setUnknown(null);
       setStage("sent");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg === "E_PREVIEW_STALE") {
+      if (e instanceof EthBroadcastStatusUnknownError) {
+        setUnknown({ hash: e.hash, what: "WPRL transfer", acknowledged: false });
+      } else if (msg === "E_PREVIEW_STALE") {
         setError("Fee estimate is stale — re-confirm to refresh the numbers.");
         previewQ.refetch();
       } else if (msg === "E_ETH_FEE_MARKET_INSANE") {
@@ -240,12 +249,19 @@ export default function SendWPRL() {
           )}
 
           {error && <p className="mt-2 text-sm text-danger leading-relaxed break-words">{error}</p>}
+          {unknown && (
+            <EthBroadcastUnknown
+              network={ethNetwork}
+              state={unknown}
+              onAcknowledge={(acknowledged) => setUnknown({ ...unknown, acknowledged })}
+            />
+          )}
           <div className="mt-4 flex gap-2">
             <button onClick={() => setStage("compose")} className="btn-secondary min-w-11" disabled={sending}>
               Back
             </button>
             <button
-              disabled={!q || !covered || sending}
+              disabled={!q || !covered || sending || ethUnknownBlocksSend(unknown)}
               onClick={broadcast}
               className="btn-primary flex-1 min-w-11"
             >
@@ -306,6 +322,13 @@ export default function SendWPRL() {
           </div>
         </fieldset>
         {error && <p className="text-sm text-danger leading-relaxed break-words">{error}</p>}
+        {unknown && (
+          <EthBroadcastUnknown
+            network={ethNetwork}
+            state={unknown}
+            onAcknowledge={(acknowledged) => setUnknown({ ...unknown, acknowledged })}
+          />
+        )}
         <button
           onClick={() => void reviewSend()}
           disabled={resolving}

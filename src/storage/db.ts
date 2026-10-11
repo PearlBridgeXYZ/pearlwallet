@@ -4,6 +4,10 @@
 import Dexie, { type Table } from "dexie";
 import type { PearlNetwork } from "../chains/pearl/network";
 import type { EthNetwork } from "../chains/ethereum/network";
+import { WALLET_TABS_STORAGE_KEY } from "../services/broadcast-lock";
+import { sameKeystoreBlob } from "./keystore-blob";
+
+export { sameKeystoreBlob };
 
 export interface KeystoreBlobJSON {
   version: 1;
@@ -222,16 +226,20 @@ export async function saveKeystore(record: KeystoreRecord): Promise<void> {
  * committed by another tab is never replaced by an older blob (a separate
  * get + put would write back whatever blob the get saw). With
  * `expectedPrimary`, refuses (false) when the stored record belongs to a
- * different wallet. False when no record exists.
+ * different wallet; with `expectedBlob`, refuses (false) unless the stored
+ * record still holds that exact ciphertext (unlock binds its write to the
+ * blob the worker decrypted). False when no record exists.
  */
 export async function updateKeystoreAddresses(
   lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
   expectedPrimary?: string,
+  expectedBlob?: KeystoreBlobJSON,
 ): Promise<boolean> {
   return db.transaction("rw", db.keystore, async () => {
     const rec = await db.keystore.get("primary");
     if (!rec) return false;
     if (expectedPrimary !== undefined && rec.publicData.pearlAddress !== expectedPrimary) return false;
+    if (expectedBlob !== undefined && !sameKeystoreBlob(rec.blob, expectedBlob)) return false;
     await db.keystore.put({
       ...rec,
       publicData: {
@@ -243,21 +251,6 @@ export async function updateKeystoreAddresses(
     });
     return true;
   });
-}
-
-/** True when two keystore blobs are the same ciphertext under the same
- *  key-derivation parameters (every field compared). */
-export function sameKeystoreBlob(a: KeystoreBlobJSON, b: KeystoreBlobJSON): boolean {
-  return (
-    a.version === b.version &&
-    a.kdf === b.kdf &&
-    a.kdfIterations === b.kdfIterations &&
-    a.kdfSalt === b.kdfSalt &&
-    a.cipher === b.cipher &&
-    a.iv === b.iv &&
-    a.aad === b.aad &&
-    a.ciphertext === b.ciphertext
-  );
 }
 
 export type ReplaceBlobResult = "replaced" | "wiped" | "changed";
@@ -309,15 +302,42 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   "pearl-wallet-pending-releases-v1",
   "pearl-wallet-pending-intents-v1",
   "pearl-wallet-pending-attempts-v1",
+  // Open-tab list of the no-Web-Locks single-tab guard (broadcast-lock.ts).
+  WALLET_TABS_STORAGE_KEY,
 ];
 const UI_STORAGE_KEY_RE = /^pearl-wallet-ui-v\d+$/;
 
-export async function wipeKeystore(): Promise<void> {
+export type WipeResult = "wiped" | "changed";
+
+/**
+ * Wipes the wallet from this browser. With `expectedBlob` (the ciphertext
+ * whose password was just verified) the keystore delete is a compare-and-
+ * delete in one read-write transaction: when the stored record holds a
+ * different blob (another tab restored / created a wallet or changed the
+ * password meanwhile) nothing at all is wiped and the result is "changed".
+ * A row already gone (another tab's wipe) still wipes the rest.
+ */
+export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<WipeResult> {
+  // Nothing is wiped (no localStorage scrub either) on a refused compare.
+  let refused = false;
   // try/finally: a Dexie failure (quota exhaustion, corrupted IDB, locked
   // store) must NOT prevent the localStorage scrub. Otherwise a "wipe"
   // can leave the user's prior RPC override behind on the device.
   try {
-    await db.keystore.delete("primary");
+    if (expectedBlob !== undefined) {
+      const deleted = await db.transaction("rw", db.keystore, async () => {
+        const rec = await db.keystore.get("primary");
+        if (rec && !sameKeystoreBlob(rec.blob, expectedBlob)) return false;
+        await db.keystore.delete("primary");
+        return true;
+      });
+      if (!deleted) {
+        refused = true;
+        return "changed";
+      }
+    } else {
+      await db.keystore.delete("primary");
+    }
     await db.addressBook.clear();
     await db.txCache.clear();
     // Multisig vaults + pending txs hold no key material (the cosigner
@@ -332,7 +352,7 @@ export async function wipeKeystore(): Promise<void> {
     await db.bridgeCrossings.clear();
     await db.bridgeDepositPins.clear();
   } finally {
-    if (typeof localStorage !== "undefined") {
+    if (!refused && typeof localStorage !== "undefined") {
       // Explicit list first (covers the documented keys), then a regex sweep
       // of any pearl-wallet-ui-vN currently present — future-proof against a
       // STORAGE_KEY bump that forgets to update the list (audit C2).
@@ -354,4 +374,5 @@ export async function wipeKeystore(): Promise<void> {
       }
     }
   }
+  return "wiped";
 }

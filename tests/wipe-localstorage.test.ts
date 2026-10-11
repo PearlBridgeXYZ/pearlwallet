@@ -64,4 +64,82 @@ describe("wipeKeystore localStorage scrub (audit C2)", () => {
     await wipeKeystore().catch(() => {}); // may reject from the Dexie side
     expect(localStorage.getItem("pearl-wallet-ui-v6")).toBeNull();
   });
+
+  // v0.7 R1 FX5 (Grok G6): the single-tab guard's open-tab list goes too;
+  // left behind, the next broadcast on a no-Web-Locks browser could refuse
+  // with E_SECOND_TAB for tabs that no longer exist.
+  it("removes the open-tab list of the no-Web-Locks guard (pearl-wallet-tabs-v1)", async () => {
+    const { WALLET_TABS_STORAGE_KEY } = await import("../src/services/broadcast-lock");
+    expect(WALLET_TABS_STORAGE_KEY).toBe("pearl-wallet-tabs-v1");
+    localStorage.setItem(WALLET_TABS_STORAGE_KEY, JSON.stringify(["stale-tab"]));
+    localStorage.setItem("unrelated-key", "keepme");
+    const { db, wipeKeystore } = await import("../src/storage/db");
+    for (const t of ["keystore", "addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const) {
+      const tbl = db[t] as unknown as { clear?: () => Promise<void>; delete?: () => Promise<void> };
+      if (tbl.clear) vi.spyOn(tbl, "clear").mockResolvedValue(undefined as never);
+      if (tbl.delete) vi.spyOn(tbl, "delete").mockResolvedValue(undefined as never);
+    }
+    await wipeKeystore();
+    expect(localStorage.getItem(WALLET_TABS_STORAGE_KEY)).toBeNull();
+    expect(localStorage.getItem("unrelated-key")).toBe("keepme");
+  });
+});
+
+// v0.7 R1 FX2(c): wipe with the verified blob is a compare-and-delete in one
+// read-write transaction; a different stored blob wipes nothing at all.
+describe("wipeKeystore compare-and-delete (FX2c)", () => {
+  const blob = (c: string) =>
+    ({ version: 1, kdf: "PBKDF2-SHA256", kdfIterations: 1, kdfSalt: "00", cipher: "AES-256-GCM", iv: "00", aad: "00", ciphertext: c }) as const;
+
+  beforeEach(() => {
+    installLocalStoragePolyfill();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  async function stubDb(stored: ReturnType<typeof blob> | undefined) {
+    const { db, wipeKeystore, updateKeystoreAddresses } = await import("../src/storage/db");
+    const tx = vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => {
+      const fn = args[args.length - 1] as () => Promise<unknown>;
+      return fn();
+    }) as never);
+    vi.spyOn(db.keystore, "get").mockResolvedValue(
+      stored ? ({ id: "primary", version: 1, blob: stored, publicData: { pearlAddress: "prl1pY" } } as never) : (undefined as never),
+    );
+    const del = vi.spyOn(db.keystore, "delete").mockResolvedValue(undefined as never);
+    const put = vi.spyOn(db.keystore, "put").mockResolvedValue("primary" as never);
+    const clears = (["addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const).map((t) =>
+      vi.spyOn(db[t] as unknown as { clear: () => Promise<void> }, "clear").mockResolvedValue(undefined as never),
+    );
+    return { wipeKeystore, updateKeystoreAddresses, tx, del, put, clears };
+  }
+
+  it("a different stored blob: nothing deleted, nothing cleared, localStorage kept, 'changed'", async () => {
+    localStorage.setItem("pearl-wallet-ui-v6", "{}");
+    const { wipeKeystore, tx, del, clears } = await stubDb(blob("wallet-Y"));
+    await expect(wipeKeystore(blob("wallet-W"))).resolves.toBe("changed");
+    expect(tx).toHaveBeenCalledTimes(1);
+    expect(del).not.toHaveBeenCalled();
+    for (const c of clears) expect(c).not.toHaveBeenCalled();
+    expect(localStorage.getItem("pearl-wallet-ui-v6")).toBe("{}");
+  });
+
+  it("the same stored blob: deleted inside the transaction, the rest wiped, 'wiped'", async () => {
+    localStorage.setItem("pearl-wallet-ui-v6", "{}");
+    const { wipeKeystore, del, clears } = await stubDb(blob("wallet-W"));
+    await expect(wipeKeystore(blob("wallet-W"))).resolves.toBe("wiped");
+    expect(del).toHaveBeenCalledWith("primary");
+    for (const c of clears) expect(c).toHaveBeenCalled();
+    expect(localStorage.getItem("pearl-wallet-ui-v6")).toBeNull();
+  });
+
+  it("updateKeystoreAddresses with an expected blob refuses a different stored blob", async () => {
+    const { updateKeystoreAddresses, put } = await stubDb(blob("wallet-Y"));
+    const lists = { pearlAddress: "prl1pY", pearlAddressPool: ["prl1pW"], pearlChangePool: [] };
+    await expect(updateKeystoreAddresses(lists, "prl1pY", blob("wallet-W"))).resolves.toBe(false);
+    expect(put).not.toHaveBeenCalled();
+    await expect(updateKeystoreAddresses(lists, "prl1pY", blob("wallet-Y"))).resolves.toBe(true);
+    expect(put).toHaveBeenCalledTimes(1);
+  });
 });

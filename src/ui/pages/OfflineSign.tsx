@@ -26,7 +26,7 @@ import AnimatedPayloadQR from "../components/AnimatedPayloadQR";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { cryptoWorker } from "../../crypto/worker-client";
-import { broadcastSignedPearlTx, composePearlSend } from "../../services/pearl-tx";
+import { broadcastSignedPearlTx, composePearlSend, DUST_LIMIT_GRAINS } from "../../services/pearl-tx";
 import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
 import { PendingSpendConflictError } from "../../services/pending-spends";
 import type { PearlNetwork } from "../../chains/pearl/network";
@@ -40,6 +40,7 @@ import {
 } from "../../lib/offline-signing/payload";
 import {
   parseManualUtxos,
+  planManualSpend,
   sumManualUtxoValue,
 } from "../../lib/offline-signing/manual-utxo";
 import type { PearlTxRequest } from "../../crypto/worker";
@@ -264,15 +265,15 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         });
       }
       const totalIn = sumManualUtxoValue(inputs);
-      const feeGrains = BigInt(feeGrainsInput || "0");
-      if (feeGrains < 0n) throw new Error("Fee cannot be negative");
+      // Dust destination refused, digits-only fee, sub-dust change paid
+      // as fee (same rules as Send).
+      const { feeGrains, changeGrains } = planManualSpend({
+        totalInGrains: totalIn,
+        amountGrains,
+        feeInput: feeGrainsInput,
+        dustLimitGrains: DUST_LIMIT_GRAINS,
+      });
       const changeAddr = pool && pool.length > 0 ? pool[0] : "";
-      const changeGrains = totalIn - amountGrains - feeGrains;
-      if (changeGrains < 0n) {
-        throw new Error(
-          `Insufficient: inputs ${grainsToPrl(totalIn)} PRL, need ${grainsToPrl(amountGrains)} + fee ${grainsToPrl(feeGrains)}`,
-        );
-      }
       const outputs: Array<{ address: string; amountGrains: string }> = [
         { address: destination.trim(), amountGrains: amountGrains.toString() },
       ];

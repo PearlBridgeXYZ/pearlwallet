@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { refusalMessage } from "../components/PendingBroadcasts";
+import EthBroadcastUnknown, { ethUnknownBlocksSend, type EthUnknownState } from "../components/EthBroadcastUnknown";
 import { useWallet } from "../../state/wallet-store";
 import { db, type BridgeCrossingRecord } from "../../storage/db";
 import { bridgeConfig } from "../../services/bridge";
@@ -657,6 +658,9 @@ function UnwrapCard(props: {
   const [err, setErr] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<UnwrapBusy>("idle");
+  // An approve / burn whose broadcast outcome is unknown blocks Unwrap
+  // until the user says they checked it (it may already be live).
+  const [ethUnknown, setEthUnknown] = useState<EthUnknownState | null>(null);
   const quoteSeq = useRef(0);
   // One unwrap at a time per page load, claimed before its first await
   // (bridge-flows.ts); a run survives this card unmounting.
@@ -730,9 +734,10 @@ function UnwrapCard(props: {
 
   const unwrap = () => {
     if (!quote || !gas || !ethAddress || !pearlAddress || grains === null) return;
+    if (ethUnknownBlocksSend(ethUnknown)) return;
     void unwrapFlow(
       { network: ethNetwork, ethAddress, pearlAddress, amount: grains, quote, gas },
-      { setBusy, setErr, setNotice, setGas, setNeedsApprove, setQuote, onStarted },
+      { setEthUnknown, setBusy, setErr, setNotice, setGas, setNeedsApprove, setQuote, onStarted },
     );
   };
 
@@ -797,10 +802,17 @@ function UnwrapCard(props: {
 
       {notice && <p role="status" className="text-sm text-warn leading-relaxed break-words">{notice}</p>}
       {err && <p className="text-sm text-danger leading-relaxed break-words">{err}</p>}
+      {ethUnknown && (
+        <EthBroadcastUnknown
+          network={ethNetwork}
+          state={ethUnknown}
+          onAcknowledge={(acknowledged) => setEthUnknown({ ...ethUnknown, acknowledged })}
+        />
+      )}
 
       <button
         onClick={unwrap}
-        disabled={!quote || !gas || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false}
+        disabled={!quote || !gas || busy !== "idle" || status?.paused === true || quote?.withinDailyCap === false || ethUnknownBlocksSend(ethUnknown)}
         className="btn-primary min-w-11"
       >
         {busy === "checking"
