@@ -57,6 +57,7 @@ import {
   type PrlPoolScanProgress,
 } from "../../services/balances";
 import { fetchPrlPriceUsd } from "../../services/prices";
+import { detectFileProtocol } from "../../lib/pwa-install";
 import { notePoolScan } from "../../services/broadcast-status";
 import {
   scanPrlWallet,
@@ -472,9 +473,13 @@ export function useWalletBalances({
     retry: 1,
   });
 
+  // The price proxy is a same-origin route (/api/prl-price). Opened from
+  // file:// (the offline single-file build) there is no origin to serve it,
+  // so don't fire a fetch that can only fail and log on every refetch.
   const priceQ = useQuery({
     queryKey: ["prl-price"],
     queryFn: () => fetchPrlPriceUsd(),
+    enabled: !detectFileProtocol(),
     staleTime: PRICE_REFETCH_MS,
     refetchInterval: PRICE_REFETCH_MS,
     retry: 1,

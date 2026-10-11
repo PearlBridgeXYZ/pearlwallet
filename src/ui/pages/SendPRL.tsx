@@ -561,9 +561,14 @@ export default function SendPRL() {
                   Right now one transaction can send up to {formatGrains(tooMany.maxSendableGrains)} PRL.
                 </p>
               )}
-              <Link to="/consolidate" className="btn-primary tap mt-3 inline-flex">
-                Combine small coins
-              </Link>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <Link to="/consolidate" className="btn-primary tap inline-flex">
+                  Combine small coins
+                </Link>
+                <button className="inline-flex min-h-11 items-center underline underline-offset-4" onClick={rescan} disabled={previewQ.isFetching}>
+                  Rescan
+                </button>
+              </div>
             </div>
           )}
 

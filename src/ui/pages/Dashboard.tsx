@@ -200,8 +200,8 @@ export default function Dashboard() {
             <Link to="/receive" className="btn-secondary tap">Receive</Link>
           </div>
         )}
-        {/* REDESIGN-NOTE: show this prominently when the hook exposes the PRL coin
-            count (e.g. > 200 coins). */}
+        {/* Always offered as a quiet link; the Send page surfaces it loudly
+            when a send actually needs more inputs than one transaction allows. */}
         <div className="mt-2 text-center">
           <Link to="/consolidate" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">
             Combine small coins

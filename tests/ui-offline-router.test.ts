@@ -52,6 +52,30 @@ describe("no root-absolute asset paths in the bundle source", () => {
     }
     expect(bad).toEqual([]);
   });
+
+  // Same class, different syntax: a root-relative fetch("/api/...") resolves
+  // to file:///api/... under file:// and throws. The two same-origin service
+  // modules are allowed because their callers gate them (the price query is
+  // disabled under file://; the vault relay is unreachable without an origin).
+  it("root-relative fetch() calls live only in the gated same-origin services", () => {
+    const allowed = new Set(["src/services/prices.ts", "src/services/vault-relay.ts"]);
+    const bad: string[] = [];
+    for (const f of walk(join(ROOT, "src"), [".ts", ".tsx"])) {
+      const rel = relative(ROOT, f);
+      if (allowed.has(rel)) continue;
+      readFileSync(f, "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (/\bfetch\(\s*[`"']\/(?!\/)/.test(line)) bad.push(`${rel}:${i + 1}: ${line.trim()}`);
+        });
+    }
+    expect(bad).toEqual([]);
+  });
+
+  it("the price query is disabled when the page is opened from file://", () => {
+    const src = readFileSync(join(ROOT, "src/ui/hooks/useWalletBalances.ts"), "utf8");
+    expect(src).toMatch(/queryKey:\s*\["prl-price"\][\s\S]*?enabled:\s*!detectFileProtocol\(\)/);
+  });
 });
 
 describe("offline inline worker loads under file://", () => {
