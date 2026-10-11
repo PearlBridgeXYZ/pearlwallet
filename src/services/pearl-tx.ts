@@ -43,7 +43,9 @@ const PER_P2TR_OUTPUT_VBYTES = 43n;
 const FIXED_OVERHEAD_VBYTES = 11n;
 // Pearl dust threshold (mirror of btcd's): outputs ≤ 546 sats won't
 // relay. We refuse to assemble a change output below this — coalesce
-// it into fee instead.
+// it into fee instead — and refuse a destination output at or below it.
+// (546 is btcd's legacy figure and at least as strict as the P2TR one, so
+// the only effect of erring high is refusing sends of ≤ 0.00000546 PRL.)
 const DUST_LIMIT_GRAINS = 546n;
 
 /** Most inputs one send may spend. Equal to the signer's hard cap
@@ -446,6 +448,9 @@ export async function composePearlSend(opts: ComposeOptions): Promise<ComposedPe
   const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
   if (feerate <= 0n) throw new Error("E_FEERATE");
   if (opts.amountGrains <= 0n) throw new Error("E_AMOUNT");
+  // An output this small would not relay; refuse before selecting coins
+  // rather than sign a transaction the node can only reject.
+  if (opts.amountGrains <= DUST_LIMIT_GRAINS) throw new Error("E_AMOUNT_DUST");
   const maxInputs = clampMaxInputs(opts.maxInputs);
   const tipGrains = opts.includeTip ? computeTipGrains(opts.amountGrains) : 0n;
 
@@ -578,8 +583,11 @@ export interface MaxSendable {
  *                   1 PRL − 1 grain and the leftover returns as change
  *                   (or is fee when below dust); `exact` is false. With
  *                   the tip off the same coins send everything.
- * composePearlSend with the returned amount selects the same inputs and
- * produces the same fee (tests pin this).
+ * When `exact` is true, composePearlSend with the returned amount selects
+ * the same inputs and produces the same fee (tests pin this). In the
+ * tip-floor gap (`exact` false) it may select fewer inputs, so its fee and
+ * change differ from this preview; the composed plan is what is shown at
+ * confirmation and signed, and it balances on its own.
  */
 export function computeMaxSendable(opts: MaxSendableOptions): MaxSendable {
   const feerate = opts.feerateSatPerVbyte ?? PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;

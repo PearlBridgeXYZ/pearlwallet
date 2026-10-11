@@ -520,7 +520,12 @@ function SignTab({ network, pool }: SignTabProps) {
       };
       setSigned(out);
     } catch (e) {
-      setSignError(e instanceof Error ? e.message : String(e));
+      const msg = e instanceof Error ? e.message : String(e);
+      setSignError(
+        msg.includes("E_PEARL_FOREIGN_INPUT")
+          ? "This request spends a coin that does not belong to this wallet, so it was not signed. Check that the request was made for this wallet. (E_PEARL_FOREIGN_INPUT)"
+          : msg,
+      );
     } finally {
       setBusy(false);
     }

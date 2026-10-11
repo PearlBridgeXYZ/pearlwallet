@@ -344,7 +344,8 @@ describe("composePearlSend — fee accounting and diagnostics", () => {
         expect(c.amountGrains).toBe(amount);
         if (c.changeGrains > 0n) expect(c.changeGrains).toBeGreaterThanOrEqual(DUST_LIMIT_GRAINS);
       } catch (e) {
-        expect(e).toBeInstanceOf(InsufficientFundsError);
+        if (amount <= DUST_LIMIT_GRAINS) expect((e as Error).message).toBe("E_AMOUNT_DUST");
+        else expect(e).toBeInstanceOf(InsufficientFundsError);
       }
     }
   });

@@ -12,6 +12,7 @@ import {
   broadcastPearlPrecomposed,
   composePearlSend,
   composePearlSendDeepRetry,
+  DUST_LIMIT_GRAINS,
   computeMaxSendable,
   loadSpendableUtxos,
   HistoryIncompleteError,
@@ -321,6 +322,9 @@ export default function SendPRL() {
     }
     if (grains <= 0n) {
       return { ok: false, reason: "Amount must be greater than 0." };
+    }
+    if (grains <= DUST_LIMIT_GRAINS) {
+      return { ok: false, reason: `Amount is too small: the network won't relay a payment of ${formatGrains(DUST_LIMIT_GRAINS)} PRL or less.` };
     }
     return { ok: true, v: { dest: destination.trim(), grains, max: false } };
   }
