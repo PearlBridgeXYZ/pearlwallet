@@ -35,7 +35,7 @@ import {
   pearlRpcTuning,
 } from "./pearl-rpc";
 import { mapWithConcurrency } from "./rpc-limiter";
-import { memoryEpoch } from "../state/balance-memory";
+import { memoryEpoch, onBalanceMemoryClear } from "../state/balance-memory";
 
 export type ActivityChain = "pearl" | "wprl";
 export type ActivityDirection = "in" | "out";
@@ -407,7 +407,10 @@ async function scanWprlActivity(
   // is deployed there. No point firing a useless getLogs against it.
   if (/^0x0+$/.test(cfg)) return { items: [], source: "live" };
 
-  const client = ethClient(network);
+  // The scan's own cancellation reaches into viem: once cur.signal aborts
+  // no further request (retry or fallback hop included) leaves this
+  // client, so the former wallet's address stops appearing in filters.
+  const client = ethClient(network, { signal: cur.signal });
 
   checkCurrent(cur);
   try {
@@ -506,6 +509,7 @@ async function scanWprlActivity(
     });
     const trimmed = items.slice(0, limit);
 
+    checkCurrent(cur);
     await Promise.all(trimmed.map(async (it) => {
       const bn = itemBlocks.get(it.txid);
       if (bn === undefined) return;
@@ -519,7 +523,9 @@ async function scanWprlActivity(
 
     return { items: trimmed, source: "live" };
   } catch (err) {
-    if (cur.signal?.aborted || memoryEpoch() !== cur.epoch) throw err;
+    // A cancelled scan surfaces its abort reason / E_SESSION_CLEARED, not
+    // the viem HttpRequestError the cancellation guard produced.
+    checkCurrent(cur);
     return { items: [], source: "error" };
   }
 }
@@ -531,22 +537,47 @@ export async function fetchActivity(
   limit = 25,
   opts: ActivityOptions = {},
 ): Promise<ActivityResult> {
-  const cur = { signal: opts.signal, epoch: opts.epoch ?? memoryEpoch() };
-  const [pearlResult, wprlResult] = await Promise.all([
-    scanPearlActivity(pearlPool, limit, cur),
-    ethAddr ? scanWprlActivity(ethAddr, network, limit, cur) : Promise.resolve({ items: [] as ActivityItem[], source: "live" as const }),
-  ]);
-  // A result from an ended session is never handed back.
-  checkCurrent(cur);
+  // One controller per scan: it follows the caller's signal AND the
+  // balance-memory clear (lock / wipe / wallet switch), so both the Pearl
+  // transport and the viem client always see a signal — also in the
+  // epoch-only case where the caller passed none.
+  const ctrl = new AbortController();
+  const onAbort = () => ctrl.abort(opts.signal?.reason);
+  if (opts.signal?.aborted) ctrl.abort(opts.signal.reason);
+  else opts.signal?.addEventListener("abort", onAbort, { once: true });
+  const off = onBalanceMemoryClear(() => ctrl.abort(new Error(SESSION_CLEARED)));
+  const cur = { signal: ctrl.signal, epoch: opts.epoch ?? memoryEpoch() };
+  try {
+    let pearlResult: Awaited<ReturnType<typeof scanPearlActivity>>;
+    let wprlResult: WprlWalkResult;
+    try {
+      [pearlResult, wprlResult] = await Promise.all([
+        scanPearlActivity(pearlPool, limit, cur),
+        ethAddr ? scanWprlActivity(ethAddr, network, limit, cur) : Promise.resolve({ items: [] as ActivityItem[], source: "live" as const }),
+      ]);
+    } catch (err) {
+      // A cancelled scan always rejects with the cancellation reason (the
+      // caller's abort reason or E_SESSION_CLEARED), whichever transport
+      // noticed first: the Pearl fetch aborts with a bare DOMException and
+      // the viem guard with an HttpRequestError.
+      if (ctrl.signal.aborted) throw ctrl.signal.reason;
+      throw err;
+    }
+    // A result from an ended session is never handed back.
+    checkCurrent(cur);
 
-  const merged = [...pearlResult.items, ...wprlResult.items];
-  merged.sort(compareActivity);
+    const merged = [...pearlResult.items, ...wprlResult.items];
+    merged.sort(compareActivity);
 
-  return {
-    items: merged.slice(0, limit),
-    pearlSource: pearlResult.source,
-    wprlSource: wprlResult.source,
-  };
+    return {
+      items: merged.slice(0, limit),
+      pearlSource: pearlResult.source,
+      wprlSource: wprlResult.source,
+    };
+  } finally {
+    off();
+    opts.signal?.removeEventListener("abort", onAbort);
+  }
 }
 
 // Re-exported for test ergonomics. The real implementation reaches into
