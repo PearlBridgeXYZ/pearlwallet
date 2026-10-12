@@ -88,6 +88,66 @@ describe("functions/api/prl-price — OTC with CoinGecko fallback", () => {
     }
   });
 
+  it("hosted answers outside the bound or with inconsistent metadata are rejected", async () => {
+    const HOSTED = "https://wallet.pearlbridge.xyz/api/prl-price";
+    for (const bad of [
+      { usd_per_prl: 1e300, source: "coingecko", n_active_asks: 0 },
+      { usd_per_prl: 10_001, source: "coingecko", n_active_asks: 0 },
+      { usd_per_prl: 1.5, source: "coingecko", n_active_asks: 4 },
+      { usd_per_prl: 1.5, source: "lowest_ask", n_active_asks: 0 },
+      { usd_per_prl: 1.5, source: "vwap_median", n_active_asks: 2 },
+      { usd_per_prl: 1.5, source: "coingecko", n_active_asks: 0, extra: 1 },
+    ]) {
+      _resetPriceCacheForTests();
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+        if (String(url) === OTC) return new Response("[]");
+        if (String(url) === HOSTED) return new Response(JSON.stringify(bad));
+        return new Response(JSON.stringify({ "pearl-2": { usd: 1.41 } }));
+      }));
+      expect(await (await onRequestGet()).json()).toEqual({ usd_per_prl: 1.41, source: "coingecko", n_active_asks: 0 });
+    }
+  });
+
+  it("an implausible price from any source is never served", async () => {
+    stubUpstream(() => new Response(JSON.stringify([ask(50_000)])), () => new Response(JSON.stringify({ "pearl-2": { usd: 1e300 } })));
+    const r = await onRequestGet();
+    expect(r.status).not.toBe(200);
+  });
+
+  it("never takes the hosted hop from the hosted origin or from a hop request (no self-recursion)", async () => {
+    const HOSTED = "https://wallet.pearlbridge.xyz/api/prl-price";
+    for (const request of [
+      new Request(HOSTED),
+      new Request("https://next.wallet.pearlbridge.xyz/api/prl-price", { headers: { "x-pearlwallet-price-hop": "1" } }),
+    ]) {
+      _resetPriceCacheForTests();
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+        calls.push(String(url));
+        if (String(url) === OTC) return new Response("", { status: 404 });
+        return new Response(JSON.stringify({ "pearl-2": { usd: 1.41 } }));
+      }));
+      const r = await onRequestGet({ request });
+      expect(r.status).toBe(200);
+      expect(calls).not.toContain(HOSTED);
+    }
+  });
+
+  it("the hosted hop is marked so the far side can refuse to recurse", async () => {
+    const HOSTED = "https://wallet.pearlbridge.xyz/api/prl-price";
+    let hopHeader: string | null = null;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (String(url) === OTC) return new Response("", { status: 404 });
+      if (String(url) === HOSTED) {
+        hopHeader = new Headers(init?.headers).get("x-pearlwallet-price-hop");
+        return new Response(JSON.stringify({ usd_per_prl: 1.5, source: "coingecko", n_active_asks: 0 }));
+      }
+      return new Response("", { status: 429 });
+    }));
+    expect((await onRequestGet({ request: new Request("https://next.wallet.pearlbridge.xyz/api/prl-price") })).status).toBe(200);
+    expect(hopHeader).toBe("1");
+  });
+
   it("caches a good price for 30 s and an error for 5 s", async () => {
     vi.useFakeTimers();
     try {

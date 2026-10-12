@@ -87,9 +87,10 @@ export default function AsciiPearl() {
       timer = setTimeout(tick, 50);
     }
 
+    let onScreen = true;
     function resume() {
       clearTimeout(timer);
-      if (document.hidden) return;
+      if (document.hidden || !onScreen) return;
       if (motion.matches) draw();
       else tick();
     }
@@ -108,12 +109,22 @@ export default function AsciiPearl() {
 
     const observer = new ResizeObserver(resize);
     observer.observe(canvas);
+    // Stop drawing while the pearl is scrolled out of view (e.g. the
+    // expanded guide below the fold).
+    const visibility = typeof IntersectionObserver === "undefined"
+      ? null
+      : new IntersectionObserver((entries) => {
+        onScreen = entries.some((e) => e.isIntersecting);
+        resume();
+      });
+    visibility?.observe(canvas);
     motion.addEventListener("change", resume);
     document.addEventListener("visibilitychange", resume);
     resize();
     return () => {
       clearTimeout(timer);
       observer.disconnect();
+      visibility?.disconnect();
       motion.removeEventListener("change", resume);
       document.removeEventListener("visibilitychange", resume);
     };

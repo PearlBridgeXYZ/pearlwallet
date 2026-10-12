@@ -154,6 +154,7 @@
 .dashboard-asset-detail > div:not(.dashboard-amount):not(.dashboard-valuation) { grid-column: 1 / -1; font-family: "IBM Plex Sans", sans-serif; }
 .dashboard-amount, .dashboard-valuation { text-align: right; }
 .dashboard-valuation { color: var(--pb-text-3); font-size: 12px; }
+.dashboard-scope { margin-top: 2px; color: var(--pb-text-3); font-size: 11px; }
 .dashboard-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 28px; }
 .dashboard-actions .bracket-button { width: 100%; padding-inline: 8px; font-size: 11px; letter-spacing: .08em; }
 .dashboard-send { position: relative; }

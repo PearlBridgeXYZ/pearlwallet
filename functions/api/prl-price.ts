@@ -18,7 +18,13 @@
 // CoinGecko rate-limits (429), so on Pages the fallback alone is not
 // dependable; the hosted service runs the same OTC → CoinGecko chain
 // from a dedicated IP. Its answer is accepted only in the exact shape
-// below.
+// below, with source and ask count consistent, and only inside the
+// plausibility bound every source must meet (MAX_USD_PER_PRL).
+//
+// The hosted hop must never reach this Function itself (it would if this
+// Function were ever served at the hosted origin): the hop carries
+// HOP_HEADER, and a request that carries it, or that arrives on the
+// hosted origin, skips the hop.
 //
 // Response shape (snake_case to mirror the Python alerter):
 //   { "usd_per_prl": number,
@@ -49,6 +55,16 @@ const COINGECKO_IDS = ["pearl-2", "wrapped-pearl"] as const;
 const HOSTED_URL = "https://wallet.pearlbridge.xyz/api/prl-price";
 /** The hosted service answers from its own cache; keep its share small. */
 export const HOSTED_TIMEOUT_MS = 3_000;
+const HOSTED_HOST = "wallet.pearlbridge.xyz";
+const HOP_HEADER = "x-pearlwallet-price-hop";
+/** Upper sanity bound for any source's PRL price. Far above any traded
+ *  price; it only stops a broken upstream from showing an absurd value
+ *  (or overflowing USD totals downstream). */
+export const MAX_USD_PER_PRL = 10_000;
+
+function plausibleUsd(usd: unknown): usd is number {
+  return typeof usd === "number" && isFinite(usd) && usd > 0 && usd <= MAX_USD_PER_PRL;
+}
 /** Per-upstream timeout (CoinGecko). */
 export const UPSTREAM_TIMEOUT_MS = 8_000;
 /** OTC gets less so a slow order book still leaves the fallback time. */
@@ -127,6 +143,7 @@ async function fetchJson(
   url: string,
   deadline: number,
   maxMs: number = UPSTREAM_TIMEOUT_MS,
+  extraHeaders: Record<string, string> = {},
 ): Promise<{ ok: boolean; status: number; json: unknown }> {
   const timeoutMs = Math.min(maxMs, deadline - Date.now());
   if (timeoutMs <= 0) throw new Error("upstream budget exhausted");
@@ -134,7 +151,7 @@ async function fetchJson(
   const t = setTimeout(() => ac.abort(), timeoutMs);
   try {
     const r = await fetch(url, {
-      headers: { "user-agent": "pearlwallet-price/1", accept: "application/json" },
+      headers: { "user-agent": "pearlwallet-price/1", accept: "application/json", ...extraHeaders },
       signal: ac.signal,
       // Cloudflare subrequest edge cache (ignored outside Workers).
       cf: { cacheTtl: 30, cacheEverything: true },
@@ -151,7 +168,9 @@ async function fetchOtcPrice(deadline: number): Promise<PriceResult | null> {
   const r = await fetchJson(OTC_URL, deadline, OTC_TIMEOUT_MS);
   if (!r.ok) throw new Error(`otc http ${r.status}`);
   if (!Array.isArray(r.json)) throw new Error("otc not array");
-  return computePrice(r.json as Offer[]);
+  const p = computePrice(r.json as Offer[]);
+  if (p && !plausibleUsd(p.usd_per_prl)) throw new Error("otc implausible price");
+  return p;
 }
 
 // Fallback: CoinGecko simple-price, native id first then WPRL. Returns a
@@ -162,7 +181,7 @@ async function fetchCoingeckoPrice(deadline: number): Promise<PriceResult | null
   const body = (r.json ?? {}) as Record<string, { usd?: unknown } | undefined>;
   for (const id of COINGECKO_IDS) {
     const usd = body[id]?.usd;
-    if (typeof usd === "number" && isFinite(usd) && usd > 0) {
+    if (plausibleUsd(usd)) {
       return { usd_per_prl: usd, source: "coingecko", n_active_asks: 0 };
     }
   }
@@ -172,20 +191,22 @@ async function fetchCoingeckoPrice(deadline: number): Promise<PriceResult | null
 // Second: the hosted wallet's price service. Same response shape; anything
 // else is rejected. Returns a price or throws.
 async function fetchHostedPrice(deadline: number): Promise<PriceResult> {
-  const r = await fetchJson(HOSTED_URL, deadline, HOSTED_TIMEOUT_MS);
+  const r = await fetchJson(HOSTED_URL, deadline, HOSTED_TIMEOUT_MS, { [HOP_HEADER]: "1" });
   if (!r.ok) throw new Error(`hosted http ${r.status}`);
   const b = (r.json ?? {}) as Record<string, unknown>;
+  const keys = Object.keys(b).sort().join(",");
   const usd = b.usd_per_prl;
   const source = b.source;
   const n = b.n_active_asks;
-  if (
-    typeof usd !== "number" || !isFinite(usd) || usd <= 0 ||
-    (source !== "vwap_median" && source !== "lowest_ask" && source !== "coingecko") ||
-    typeof n !== "number" || !Number.isInteger(n) || n < 0
-  ) {
+  const consistent =
+    typeof n === "number" && Number.isInteger(n) &&
+    ((source === "coingecko" && n === 0) ||
+      (source === "lowest_ask" && (n === 1 || n === 2)) ||
+      (source === "vwap_median" && n >= 3));
+  if (keys !== "n_active_asks,source,usd_per_prl" || !plausibleUsd(usd) || !consistent) {
     throw new Error("hosted bad shape");
   }
-  return { usd_per_prl: usd, source, n_active_asks: n };
+  return { usd_per_prl: usd, source: source as PriceResult["source"], n_active_asks: n as number };
 }
 
 function errText(e: unknown): string {
@@ -195,20 +216,22 @@ function errText(e: unknown): string {
 type Upstream = { status: number; body: PriceResult | { error: string } };
 
 // OTC → hosted service → CoinGecko. First usable price wins.
-async function fetchUpstream(): Promise<Upstream> {
+async function fetchUpstream(skipHosted: boolean): Promise<Upstream> {
   const deadline = Date.now() + UPSTREAM_TOTAL_BUDGET_MS;
   let otcErr: string | null = null;
-  let hostedErr: string;
+  let hostedErr = "skipped (self)";
   try {
     const otc = await fetchOtcPrice(deadline);
     if (otc) return { status: 200, body: otc };
   } catch (e) {
     otcErr = errText(e);
   }
-  try {
-    return { status: 200, body: await fetchHostedPrice(deadline) };
-  } catch (e) {
-    hostedErr = errText(e);
+  if (!skipHosted) {
+    try {
+      return { status: 200, body: await fetchHostedPrice(deadline) };
+    } catch (e) {
+      hostedErr = errText(e);
+    }
   }
   try {
     const cg = await fetchCoingeckoPrice(deadline);
@@ -225,25 +248,41 @@ async function fetchUpstream(): Promise<Upstream> {
   };
 }
 
-let cache: { at: number; ttl: number; value: Upstream } | null = null;
+type CacheEntry = { at: number; ttl: number; value: Upstream };
+// Keyed by whether the hosted hop was skipped, so a self-hop answer never
+// serves a normal request (and vice versa).
+const cache = new Map<boolean, CacheEntry>();
 
 /** Test hook: drop the in-isolate cache. */
 export function _resetPriceCacheForTests(): void {
-  cache = null;
+  cache.clear();
 }
 
-async function getCached(now: number = Date.now()): Promise<Upstream> {
-  if (cache && now - cache.at < cache.ttl) return cache.value;
-  const value = await fetchUpstream();
-  cache = { at: now, ttl: value.status === 200 ? CACHE_TTL_MS : ERROR_CACHE_TTL_MS, value };
+async function getCached(skipHosted: boolean, now: number = Date.now()): Promise<Upstream> {
+  const hit = cache.get(skipHosted);
+  if (hit && now - hit.at < hit.ttl) return hit.value;
+  const value = await fetchUpstream(skipHosted);
+  cache.set(skipHosted, { at: now, ttl: value.status === 200 ? CACHE_TTL_MS : ERROR_CACHE_TTL_MS, value });
   return value;
+}
+
+/** True when this request must not take the hosted hop: it is the hop
+ *  itself, or it arrived on the hosted origin. */
+function isSelfRequest(request: Request | undefined): boolean {
+  if (!request) return false;
+  if (request.headers.get(HOP_HEADER)) return true;
+  try {
+    return new URL(request.url).host === HOSTED_HOST;
+  } catch {
+    return false;
+  }
 }
 
 export const onRequestOptions = () =>
   new Response(null, { status: 204, headers: corsHeaders() });
 
-export const onRequestGet = async (): Promise<Response> => {
-  const { status, body } = await getCached();
+export const onRequestGet = async (context?: { request?: Request }): Promise<Response> => {
+  const { status, body } = await getCached(isSelfRequest(context?.request));
   return new Response(JSON.stringify(body), {
     status,
     headers: {

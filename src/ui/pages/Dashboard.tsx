@@ -76,6 +76,7 @@ export default function Dashboard() {
           </div>
         )}
         <UpdatedAgo at={b.prl.updatedAt} />
+        <p className="dashboard-scope">PRL + WPRL in USD. ETH for network fees is shown separately.</p>
         <div className="dashboard-assets">
           <div className="dashboard-asset">
             <h2>PRL</h2>
