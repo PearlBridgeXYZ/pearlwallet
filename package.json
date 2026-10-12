@@ -4,7 +4,7 @@
   "version": "0.7.0",
   "type": "module",
   "description": "Non-custodial pure-web wallet for PRL + WPRL with native PearlBridge integration",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "scripts": {
     "dev": "node scripts/sync-version.mjs && vite",
     "prebuild": "node scripts/sync-version.mjs",

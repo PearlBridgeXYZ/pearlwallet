@@ -88,4 +88,4 @@ AUDIT-*.md       review reports
 
 ## License
 
-No license file has been published yet.
+Apache License 2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). The license does not grant use of the PearlWallet or PearlBridge names. Releases through v0.7.0 shipped without a license file (their package metadata declared MIT); this license applies from this commit on.
