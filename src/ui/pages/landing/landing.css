@@ -40,9 +40,9 @@
   .landing-build { position: absolute; top: 0; right: 0; }
 }
 @media (max-width: 759px) {
-  .ascii-pearl { opacity: .22; }
+  .ascii-pearl { opacity: .6; }
   .landing h1 { font-size: clamp(40px, 15vw, 100px); }
-  .landing-main { min-height: calc(100svh - 116px); }
+  .landing-main { min-height: calc(100svh - 116px); padding-block: 260px 48px; }
   .landing-copy { margin-top: 32px; font-size: clamp(13px, 3.85vw, 20px); }
   .landing-resources { gap: 18px; }
   .landing-resources a, .landing-about > summary { font-size: 10px; }
