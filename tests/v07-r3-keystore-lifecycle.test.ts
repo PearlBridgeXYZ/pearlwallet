@@ -359,6 +359,40 @@ describe("FZ3 (round 3) — a consented overwrite with a different wallet takes 
       vi.unstubAllGlobals();
     }
   });
+
+  // R7 P1 (GPT-6 R4-A1): the cleanup is fenced at the replace start.
+  it("another tab's status-unknown Pearl send saved while the replace runs survives its cleanup; the replaced wallet's older records go", async () => {
+    const ls = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => ls.get(k) ?? null, setItem: (k: string, v: string) => void ls.set(k, v), removeItem: (k: string) => void ls.delete(k),
+      key: (i: number) => [...ls.keys()][i] ?? null, get length() { return ls.size; },
+    });
+    const r = (txid: string, coin: string, createdAt: number) => ({
+      txid, inputs: [`${coin}:0`], addresses: [], destination: null, amountGrains: "100000000", kind: "payment", createdAt, state: "unknown",
+    });
+    const OLD = "a1".repeat(32);
+    const NEW = "b2".repeat(32);
+    try {
+      seed();
+      ls.set("pearl-wallet-broadcasts-v1", JSON.stringify({ v: 1, records: [r(OLD, "11".repeat(32), Date.now() - 60_000)] }));
+      const A = await openTab(async () => ({ mnemonic: "m", blob: blob("wallet-Y"), addresses: addrs("y") }));
+      const gate = deferred();
+      holds.set("bridgeDepositPins.clear", gate.promise);
+      const p = A.store.getState().restoreWallet("words", "pw", { allowOverwrite: true, observedBlob: blob("wallet-X") });
+      for (let i = 0; i < 50 && !reached.has("bridgeDepositPins.clear"); i++) await tick(2);
+      expect(reached.has("bridgeDepositPins.clear")).toBe(true);
+      await tick(5);
+      // Tab B (the new wallet) records a payment whose fate is unknown.
+      const cur = JSON.parse(ls.get("pearl-wallet-broadcasts-v1")!) as { v: 1; records: unknown[] };
+      ls.set("pearl-wallet-broadcasts-v1", JSON.stringify({ v: 1, records: [...cur.records, r(NEW, "22".repeat(32), Date.now())] }));
+      gate.resolve();
+      await p;
+      const left = (JSON.parse(ls.get("pearl-wallet-broadcasts-v1") ?? '{"records":[]}') as { records: Array<{ txid: string }> }).records;
+      expect(left.map((x) => x.txid)).toEqual([NEW]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 async function dbmReplace(r: KeystoreRecord, observed: KeystoreBlobJSON | null) {

@@ -6,6 +6,7 @@ import type { PearlNetwork } from "../chains/pearl/network";
 import type { EthNetwork } from "../chains/ethereum/network";
 import { sameKeystoreBlob } from "./keystore-blob";
 import { clearAllEthUnknown } from "../state/eth-unknown";
+import { forgetBroadcastRecordsUpTo } from "../services/pending-spends";
 
 export { sameKeystoreBlob };
 
@@ -452,10 +453,14 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   "pearl-wallet-ui-v4",
   "pearl-wallet-ui-v5",
   "pearl-wallet-ui-v6", // current (v0.2.8 — see ui-store STORAGE_KEY)
-  // Broadcast records (services/pending-spends.ts) — public chain data,
-  // but it reveals which coins this wallet holds and whom it paid.
-  "pearl-wallet-broadcasts-v1",
-  // The same data in the key layout of earlier pre-release builds.
+  // NOT listed: the broadcast records (services/pending-spends.ts,
+  // "pearl-wallet-broadcasts-v1"). They are removed after the scrub by
+  // forgetBroadcastRecordsUpTo, under the broadcast lock and only those
+  // saved before the wipe started: a wallet restored in another tab
+  // between the commit and this cleanup may already have a status-unknown
+  // send recorded there, its only block against paying twice.
+  // The broadcast records in the key layout of earlier pre-release builds
+  // (no current code reads or writes them).
   "pearl-wallet-pending-spends-v1",
   "pearl-wallet-pending-releases-v1",
   "pearl-wallet-pending-intents-v1",
@@ -503,9 +508,9 @@ export type WipeResult = "wiped" | "changed";
  * its keys remain, and could hit a wallet another tab just stored.
  */
 export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<WipeResult> {
-  // Ethereum send records saved after this point belong to whatever is
-  // stored after the commit (another tab may restore a wallet and send
-  // before the clear below runs): the clear keeps them.
+  // Ethereum send records and Pearl broadcast records saved after this
+  // point belong to whatever is stored after the commit (another tab may
+  // restore a wallet and send before the clears below run): they are kept.
   const startedAt = Date.now();
   const deleted = await db.transaction(
     "rw",
@@ -541,6 +546,9 @@ export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<Wip
   // must not run another one (a record that turned status-unknown after
   // this snapshot kept it would be lost).
   await clearAllEthUnknown({ recordedUpTo: startedAt });
+  // Pearl broadcast records: the same fence, under the broadcast lock
+  // (services/pending-spends.ts). Also the single post-commit clear.
+  await forgetBroadcastRecordsUpTo(startedAt);
   return "wiped";
 }
 

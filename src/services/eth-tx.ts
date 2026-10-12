@@ -334,6 +334,28 @@ export async function probeEthUnknownRecords(network: EthNetwork, from: string |
   );
 }
 
+/** How long the worker may take to sign an Ethereum tx, as Pearl's
+ *  SIGN_TIMEOUT_MS (services/pearl-tx.ts). Mutable for tests only. */
+export const ETH_SIGN_TIMEOUT = { ms: 120_000 };
+
+/** The worker's signature of `tx`, or E_SIGN_TIMEOUT after
+ *  ETH_SIGN_TIMEOUT.ms (a signature arriving later is ignored). */
+async function signEthWithin(tx: EthTxRequest): Promise<Hex> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error("E_SIGN_TIMEOUT: signing didn't finish; nothing was sent. Reload the page and try again.")),
+      ETH_SIGN_TIMEOUT.ms,
+    );
+  });
+  try {
+    const { raw } = await Promise.race([cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", { tx }), timeout]);
+    return raw;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Sign + broadcast for every ETH send path. Refuses (nothing signed) while
  * an unresolved status-unknown broadcast is recorded for this network +
@@ -381,9 +403,10 @@ async function signAndBroadcast(
       assertNoUnresolvedEthBroadcast(network, from);
       // Nothing awaited between this check and the sign request.
       assertSigningSession(session);
-      const { raw } = await cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", {
-        tx: composed,
-      });
+      // Bounded (a hung worker would hold this address's lock until the
+      // tab reloads): on timeout nothing was recorded or submitted, the
+      // lock is released, and a late signature is discarded.
+      const raw = await signEthWithin(composed);
       const hash = keccak256(raw);
       assertNoUnresolvedEthBroadcast(network, from);
       // Rejects (nothing sent) if the record can't be saved to both
@@ -436,6 +459,9 @@ function definitiveRpcAnswer(error: { code?: unknown; message?: unknown } | null
  * caller gets EthBroadcastStatusUnknownError (never a plain failure). The
  * original error is rethrown only when EVERY attempt (each HTTP retry and
  * fallback hop) got a definitive node rejection, or no request left at all.
+ * A reply that resolves is a success only when it is this tx's own hash;
+ * any other answer (null, malformed, another hash) goes through the same
+ * lookup: found → success, not found → EthBroadcastStatusUnknownError.
  */
 export async function broadcastRaw(network: EthNetwork, raw: Hex): Promise<`0x${string}`> {
   const hash = keccak256(raw);
@@ -456,9 +482,9 @@ export async function broadcastRaw(network: EthNetwork, raw: Hex): Promise<`0x${
       },
     },
   });
+  let ack: unknown;
   try {
-    await client.sendRawTransaction({ serializedTransaction: raw });
-    return hash;
+    ack = await client.sendRawTransaction({ serializedTransaction: raw });
   } catch (err) {
     let found = false;
     try {
@@ -471,6 +497,24 @@ export async function broadcastRaw(network: EthNetwork, raw: Hex): Promise<`0x${
     if (everyAttemptRejected && (attempts === 0 || isDefinitiveEthRejection(err))) throw err;
     throw new EthBroadcastStatusUnknownError(hash, err);
   }
+  // A successful reply counts only if it names this very tx: a 0x 32-byte
+  // hash equal (any case) to the one computed from the signed bytes. A null,
+  // malformed or different hash proves neither acceptance nor rejection:
+  // look the tx up by its own hash (the bounded probe); found → sent, not
+  // found → status unknown (its record stays; never a success, never a
+  // definitive rejection).
+  if (typeof ack === "string" && /^0x[0-9a-fA-F]{64}$/.test(ack) && ack.toLowerCase() === hash.toLowerCase()) return hash;
+  let found = false;
+  try {
+    found = await txKnownByHash(network, hash);
+  } catch {
+    found = false;
+  }
+  if (found) return hash;
+  throw new EthBroadcastStatusUnknownError(
+    hash,
+    new Error(`E_ETH_BROADCAST_ACK_MISMATCH: the node answered ${typeof ack === "string" ? JSON.stringify(ack.slice(0, 80)) : String(ack)} instead of ${hash}`),
+  );
 }
 
 async function chainIdFor(network: EthNetwork): Promise<number> {

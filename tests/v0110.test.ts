@@ -77,7 +77,9 @@ describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
 
   it("skips re-quote when given a fresh frozen preview", async () => {
     const getTxCount = vi.fn(async () => 7);
-    const sendRawTx = vi.fn(async () => "0xdeadbeef");
+    // R7 P2: a node acknowledges with this tx's own hash (anything else is
+    // looked up by hash and, not found, is "status unknown").
+    const sendRawTx = vi.fn(async ({ serializedTransaction }: { serializedTransaction: `0x${string}` }) => keccak256(serializedTransaction));
     const getBlock = vi.fn(async () => ({ baseFeePerGas: 10n * 1_000_000_000n }));
     const estimateGas = vi.fn(async () => 21000n);
     vi.spyOn(ethRpc, "ethClient").mockReturnValue({
@@ -148,7 +150,7 @@ describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
     const estimateGas = vi.fn(async () => 21000n);
     vi.spyOn(ethRpc, "ethClient").mockReturnValue({
       getTransactionCount: async () => 0,
-      sendRawTransaction: async () => "0xfeedface",
+      sendRawTransaction: async ({ serializedTransaction }: { serializedTransaction: `0x${string}` }) => keccak256(serializedTransaction), // R7 P2: its own hash
       getBlock,
       estimateGas,
       chain: { id: 1 },
@@ -189,7 +191,7 @@ describe("v0.1.11 / sendWprl — sign-what-you-saw", () => {
     const estimateGas = vi.fn(async () => 65000n);
     vi.spyOn(ethRpc, "ethClient").mockReturnValue({
       getTransactionCount: async () => 3,
-      sendRawTransaction: async () => "0xcafe",
+      sendRawTransaction: async ({ serializedTransaction }: { serializedTransaction: `0x${string}` }) => keccak256(serializedTransaction), // R7 P2: its own hash
       getBlock,
       estimateGas,
       chain: { id: 1 },

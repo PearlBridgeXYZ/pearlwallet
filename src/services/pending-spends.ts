@@ -191,7 +191,10 @@ export async function resetUnreadableBroadcastRecord(): Promise<void> {
   await withBroadcastLock(async () => (tryRead() === null ? writeRecords([]) : undefined));
 }
 
-/** Wallet wipe: forget everything. */
+/** Unconditional reset of the whole store: TESTS ONLY. App code (wipe,
+ *  wallet replacement) uses forgetBroadcastRecordsUpTo, which never removes
+ *  a record saved after the wipe / replace started (another tab's new
+ *  wallet's send) nor one an active send may still own. */
 export function clearPendingSpends(): void {
   try {
     localStorage.removeItem(BROADCASTS_STORAGE_KEY);
@@ -200,6 +203,69 @@ export function clearPendingSpends(): void {
   }
   updateFailed = false;
   notify();
+}
+
+/** What forgetBroadcastRecordsUpTo did: "cleared" every record saved up to
+ *  the fence (and an unreadable store); "kept-unknown" the same but kept
+ *  every "unknown" record (a broadcast was running when the clear began);
+ *  "kept" nothing removed (the lock wasn't granted, or the write failed). */
+export type ForgetBroadcastsResult = "cleared" | "kept-unknown" | "kept";
+
+/**
+ * Wallet wipe / replacement, after its keystore transaction committed:
+ * forgets the broadcast records that existed when it started — those with
+ * createdAt ≤ `recordedUpTo` — and keeps every later one. Between that
+ * commit and this clear another tab can restore (or unlock) a wallet and
+ * broadcast from it; that record (often "unknown") is the new wallet's only
+ * block against paying twice with different coins, so it is never removed.
+ *
+ * Read, compare and write run under the broadcast lock (every broadcast
+ * holds it from signing until its outcome is saved), so no record is
+ * rewritten away under a running send:
+ *  - lock free at once: no broadcast is running anywhere; records up to
+ *    the fence go (an unreadable store goes too: no valid record can be
+ *    saved into one);
+ *  - lock held (a broadcast is running, possibly one that recorded before
+ *    the fence and will end status-unknown): wait for it (bounded), then
+ *    forget only "accepted" records up to the fence and keep every
+ *    "unknown" one — the banner lists them (Check status / Release);
+ *  - not granted (busy, a second tab without Web Locks) or a write that
+ *    fails: nothing is removed (fail closed).
+ * A clock moved back can make a later record look older (as for the
+ * Ethereum records' fence). Never throws.
+ */
+export async function forgetBroadcastRecordsUpTo(recordedUpTo: number): Promise<ForgetBroadcastsResult> {
+  const prune = (keepUnknown: boolean) => async (): Promise<ForgetBroadcastsResult> => {
+    const records = tryRead();
+    const keep = records?.filter((r) => r.createdAt > recordedUpTo || (keepUnknown && r.state === "unknown")) ?? [];
+    if (records !== null && keep.length === records.length) {
+      // Nothing to forget (the read also dropped expired "accepted" ones;
+      // leaving them stored is harmless).
+      notify();
+      return keepUnknown ? "kept-unknown" : "cleared";
+    }
+    if (keep.length > 0) writeRecords(keep);
+    else {
+      try {
+        localStorage.removeItem(BROADCASTS_STORAGE_KEY);
+      } catch {
+        throw storageError("the broadcast record can't be removed");
+      }
+      updateFailed = false;
+      notify();
+    }
+    return keepUnknown ? "kept-unknown" : "cleared";
+  };
+  try {
+    return await withBroadcastLock(prune(false), { ifAvailable: true });
+  } catch (e) {
+    if (!(e instanceof BroadcastRefusedError) || e.reason !== "busy") return "kept";
+  }
+  try {
+    return await withBroadcastLock(prune(true));
+  } catch {
+    return "kept";
+  }
 }
 
 /** The user states that no other wallet tab is open (no-Web-Locks

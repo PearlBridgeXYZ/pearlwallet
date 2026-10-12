@@ -95,7 +95,6 @@ export function signPearlTxWithSeed(seed: Uint8Array, r: PearlTxRequest): { raw:
     throw new Error("E_PEARL_NO_OUTPUTS");
   }
   const params = pearlParams(r.network);
-  const network = { bech32: params.hrp, pubKeyHash: 0x00, scriptHash: 0x05, wif: 0x80 };
 
   // Shape checks first — no key derivation for a malformed request.
   const seen = new Set<string>();
@@ -125,11 +124,27 @@ export function signPearlTxWithSeed(seed: Uint8Array, r: PearlTxRequest): { raw:
     if (seen.has(key)) throw new Error("E_PEARL_DUPLICATE_INPUT");
     seen.add(key);
   }
+  // Every output must be a Pearl taproot (P2TR) address of this network:
+  // its script is built from the decoded 32-byte program, never by a
+  // generic address parser that would also take p2wpkh / p2wsh / base58
+  // forms (Sonnet R4 S-01).
+  const outputScripts: Uint8Array[] = [];
   for (const o of r.outputs) {
     if (!o || typeof o.address !== "string" || typeof o.amountGrains !== "string" || !/^[0-9]+$/.test(o.amountGrains)) {
       throw new Error("E_PEARL_OUTPUT_SHAPE");
     }
     if (BigInt(o.amountGrains) <= 0n) throw new Error("E_PEARL_OUTPUT_VALUE");
+    let program: Uint8Array;
+    try {
+      program = decodeTaprootAddress(o.address, params);
+    } catch {
+      throw new Error("E_PEARL_OUTPUT_ADDRESS");
+    }
+    const script = new Uint8Array(34);
+    script[0] = 0x51;
+    script[1] = 0x20;
+    script.set(program, 2);
+    outputScripts.push(script);
   }
   // Fee bound. The input values are committed in the taproot sighash, so
   // a lie about them only yields an invalid signature; the fee computed
@@ -186,9 +201,9 @@ export function signPearlTxWithSeed(seed: Uint8Array, r: PearlTxRequest): { raw:
       });
       signers.push(k);
     }
-    for (const o of r.outputs) {
-      tx.addOutputAddress(o.address, BigInt(o.amountGrains), network);
-    }
+    r.outputs.forEach((o, i) => {
+      tx.addOutput({ script: outputScripts[i]!, amount: BigInt(o.amountGrains) });
+    });
     // signIdx applies the BIP-86 tweak internally when tapInternalKey
     // matches the key's pubkey, so the raw child privkey is passed.
     for (let i = 0; i < signers.length; i++) {

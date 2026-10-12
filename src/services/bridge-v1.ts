@@ -11,6 +11,9 @@
 //   MITM'd response throws E_BRIDGE_API_SHAPE rather than propagating
 //   undefined into amount math.
 
+import { isValidPearlAddress } from "../chains/pearl/address";
+import { pearlParams } from "../chains/pearl/network";
+
 export const BRIDGE_V1_BASE = "https://api.pearlbridge.xyz/v1";
 
 export const GRAINS_PER_PRL = 100_000_000n;
@@ -249,7 +252,9 @@ export async function fetchDepositAddress(ethAddress: `0x${string}`): Promise<st
   const o = asObject(await getJson(`/deposit-address?ethAddress=${ethAddress}`), "deposit-address");
   if (o.error) throw new Error(String(o.error));
   const addr = o.pearlAddress;
-  if (typeof addr !== "string" || !addr.startsWith("prl1")) {
+  // A Pearl taproot (P2TR) mainnet address — the bridge is mainnet-only —
+  // decoded and checksummed, not merely "prl1…" (Sonnet R4 S-01).
+  if (typeof addr !== "string" || !isValidPearlAddress(addr, pearlParams("mainnet"))) {
     throw new Error("E_BRIDGE_API_SHAPE:depositAddress");
   }
   return addr;

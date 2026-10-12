@@ -526,7 +526,9 @@ function SignTab({ network, pool }: SignTabProps) {
       setSignError(
         msg.includes("E_PEARL_FOREIGN_INPUT")
           ? "This request spends a coin that does not belong to this wallet, so it was not signed. Check that the request was made for this wallet. (E_PEARL_FOREIGN_INPUT)"
-          : msg,
+          : msg.includes("E_PEARL_OUTPUT_ADDRESS")
+            ? "This request pays an address that is not a Pearl address (prl1p…), so it was not signed. (E_PEARL_OUTPUT_ADDRESS)"
+            : msg,
       );
     } finally {
       setBusy(false);

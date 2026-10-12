@@ -5,7 +5,7 @@ import { cryptoWorker } from "../crypto/worker-client";
 import { MAX_ADDRESSES_PER_BRANCH, RECEIVE_GAP_LIMIT, type HdBranch } from "../crypto/hd";
 import { monotonicNow } from "../lib/monotonic";
 import { clearBalanceMemory } from "./balance-memory";
-import { clearPendingSpends } from "../services/pending-spends";
+import { forgetBroadcastRecordsUpTo } from "../services/pending-spends";
 import { clearAllEthUnknown } from "./eth-unknown";
 import {
   loadKeystore,
@@ -363,9 +363,10 @@ function replacedOtherWallet(existing: KeystoreRecord | undefined, next: Keystor
  *  tab may still be running stays: see clearAllEthUnknown.) */
 async function forgetReplacedWalletLocalData(startedAt: number): Promise<void> {
   // Records saved after the replace started (the new wallet's sends, in
-  // another tab) are kept.
+  // another tab) are kept — Pearl ones under the broadcast lock, with an
+  // active send's "unknown" records kept too (forgetBroadcastRecordsUpTo).
   await clearAllEthUnknown({ recordedUpTo: startedAt });
-  clearPendingSpends();
+  await forgetBroadcastRecordsUpTo(startedAt);
 }
 
 export const useWallet = create<WalletState>((set, get) => ({
@@ -787,10 +788,10 @@ export const useWallet = create<WalletState>((set, get) => ({
       // their only post-commit clear. A second clear here would remove such
       // a record once its send ended status-unknown, and a retry after
       // restoring the same wallet could pay twice.
-      // Broadcast records (wipeKeystore removed the key too; this also
-      // re-renders the banner). Lock keeps them on purpose: a lock must not
-      // forget a broadcast whose fate is unknown.
-      clearPendingSpends();
+      // Pearl broadcast records: likewise wipeKeystore's fenced clear is
+      // their only one (an unconditional clear here would remove a record a
+      // wallet restored in another tab saved meanwhile). Lock keeps them on
+      // purpose: a lock must not forget a broadcast whose fate is unknown.
       broadcastKeystoreEvent({ type: "wiped" });
       set({ status: "no-wallet", addresses: null, blob: null });
     });

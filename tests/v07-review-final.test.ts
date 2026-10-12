@@ -153,9 +153,9 @@ describe("S4 — Bridge fees are shown before anything is signed", () => {
       getBlock: async () => ({ baseFeePerGas: baseGwei * GWEI }),
       estimateGas: async () => units,
       getTransactionCount: async () => 0,
-      sendRawTransaction: async () => {
+      sendRawTransaction: async ({ serializedTransaction }: { serializedTransaction: `0x${string}` }) => {
         sent.push("tx");
-        return "0xfeed";
+        return keccak256(serializedTransaction); // R7 P2: its own hash
       },
       chain: { id: 1 },
     } as never);

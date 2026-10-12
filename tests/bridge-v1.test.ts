@@ -17,6 +17,14 @@ import {
   resolveDepositAddress,
   type DepositTofuStore,
 } from "../src/services/bridge-v1";
+import { bech32 } from "@scure/base";
+import { encodeTaprootAddress } from "../src/chains/pearl/address";
+import { pearlParams } from "../src/chains/pearl/network";
+
+// Real Pearl taproot (P2TR) mainnet addresses (R7 P3: the deposit address
+// is decoded, not just prefix-checked).
+const PRL_GOOD = encodeTaprootAddress(new Uint8Array(32).fill(1), pearlParams("mainnet"));
+const PRL_OTHER = encodeTaprootAddress(new Uint8Array(32).fill(2), pearlParams("mainnet"));
 
 const okJson = (body: unknown) =>
   new Response(JSON.stringify(body), {
@@ -129,10 +137,19 @@ describe("fetchBurnQuote", () => {
 
 describe("fetchDepositAddress", () => {
   it("returns the derived prl1 address", async () => {
-    fetchMock.mockResolvedValue(okJson({ pearlAddress: "prl1pabcdef", ethAddress: "0xabc" }));
-    expect(await fetchDepositAddress("0xAbC0000000000000000000000000000000000000")).toBe(
-      "prl1pabcdef",
-    );
+    fetchMock.mockResolvedValue(okJson({ pearlAddress: PRL_GOOD, ethAddress: "0xabc" }));
+    expect(await fetchDepositAddress("0xAbC0000000000000000000000000000000000000")).toBe(PRL_GOOD);
+  });
+
+  // R7 P3 (Sonnet S-01): "prl1…" is not enough — a Pearl P2TR address only.
+  it.each([
+    ["p2wpkh with the Pearl prefix", bech32.encode("prl", [0, ...bech32.toWords(new Uint8Array(20).fill(3))])],
+    ["p2wsh with the Pearl prefix", bech32.encode("prl", [0, ...bech32.toWords(new Uint8Array(32).fill(3))])],
+    ["a bad checksum", PRL_GOOD.slice(0, -1) + (PRL_GOOD.endsWith("q") ? "p" : "q")],
+    ["a non-address starting prl1p", "prl1pabcdef"],
+  ])("refuses %s", async (_what, addr) => {
+    fetchMock.mockResolvedValue(okJson({ pearlAddress: addr }));
+    await expect(fetchDepositAddress("0xAbC0000000000000000000000000000000000000")).rejects.toThrow(/E_BRIDGE_API_SHAPE/);
   });
 
   it("refuses a non-prl1 deposit address (hostile API)", async () => {
@@ -206,19 +223,19 @@ describe("resolveDepositAddress — trust-on-first-use (audit H-2)", () => {
   }
 
   it("pins the first address and reports firstUse", async () => {
-    fetchMock.mockImplementation(async () => okJson({ pearlAddress: "prl1pgood" }));
+    fetchMock.mockImplementation(async () => okJson({ pearlAddress: PRL_GOOD }));
     const store = memStore();
     const r1 = await resolveDepositAddress(ETH, store);
-    expect(r1).toEqual({ address: "prl1pgood", firstUse: true });
+    expect(r1).toEqual({ address: PRL_GOOD, firstUse: true });
     const r2 = await resolveDepositAddress(ETH, store);
-    expect(r2).toEqual({ address: "prl1pgood", firstUse: false });
+    expect(r2).toEqual({ address: PRL_GOOD, firstUse: false });
   });
 
   it("REFUSES if a later fetch returns a different address (persistent compromise)", async () => {
     const store = memStore();
-    fetchMock.mockResolvedValueOnce(okJson({ pearlAddress: "prl1pgood" }));
+    fetchMock.mockResolvedValueOnce(okJson({ pearlAddress: PRL_GOOD }));
     await resolveDepositAddress(ETH, store);
-    fetchMock.mockResolvedValueOnce(okJson({ pearlAddress: "prl1pattacker" }));
+    fetchMock.mockResolvedValueOnce(okJson({ pearlAddress: PRL_OTHER }));
     await expect(resolveDepositAddress(ETH, store)).rejects.toThrow(/E_DEPOSIT_ADDRESS_CHANGED/);
   });
 });

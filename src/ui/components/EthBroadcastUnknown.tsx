@@ -171,6 +171,9 @@ export function ethUnresolvedMessage(network: EthNetwork, hash: string, what?: s
  *  confirmed); null for any other error. */
 export function ethRefusalMessage(e: unknown): string | null {
   if (e instanceof SigningSessionChangedError) return SESSION_CHANGED_MESSAGE;
+  if (e instanceof Error && e.message.startsWith("E_SIGN_TIMEOUT")) {
+    return "Nothing was sent: signing didn't finish in time. Reload the page and try again.";
+  }
   if (!(e instanceof BroadcastRefusedError)) return null;
   if (e.reason === "busy") return "Nothing was sent: another wallet tab is sending from this address. Wait for it to finish, then try again.";
   if (e.reason === "second-tab") return "Nothing was sent: another wallet tab is open. Close other wallet tabs, then try again.";
