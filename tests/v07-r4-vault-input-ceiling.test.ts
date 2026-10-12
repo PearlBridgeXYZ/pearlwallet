@@ -133,6 +133,14 @@ describe("L4 — one shared vault input ceiling", () => {
       const over = withOneMoreInput(max.psbtBase64);
       expect(() => recoverVaultFromPsbt(over)).toThrow(VaultRecoveryError);
       await expect(sign(rec, over, 0)).rejects.toThrow("E_MULTISIG_TOO_MANY_INPUTS");
+      // R5 L-c: the refusal carries the count and reads as plain copy on
+      // the cosign / pending-tx sign paths.
+      const overErr = await sign(rec, over, 0).catch((e) => e);
+      expect((overErr as Error).message).toBe("E_MULTISIG_TOO_MANY_INPUTS: 257");
+      const { vaultSignErrorMessage } = await import("../src/ui/vault-messages");
+      expect(vaultSignErrorMessage(overErr)).toBe(
+        "Nothing was signed: this transaction spends 257 vault coins, and this wallet signs at most 256 per vault transaction. Ask the sender to send less, or to combine the vault's coins first.",
+      );
       // And the worker never composes above it either.
       await expect(
         workerCall("composePearlMultisigPsbt", {
@@ -162,7 +170,9 @@ describe("L5 — the too-many-coins refusal names the limit that binds", () => {
       expect(err.maxInputs).toBe(256);
       const msg = vaultTooManyInputsMessage(err);
       expect(msg).toContain("at most 256");
-      expect(msg).toContain("limit on coins per vault transaction");
+      expect(msg).toContain("the most coins this wallet signs or imports in one vault transaction");
+      // R5 L-d: it does not claim other cosigners' wallets enforce it.
+      expect(msg).not.toMatch(/cosigner/i);
       expect(msg).not.toContain("100,000 vbytes"); // pre-fix: blamed the size limit
     } finally {
       spy.mockRestore();
@@ -180,7 +190,7 @@ describe("L5 — the too-many-coins refusal names the limit that binds", () => {
       const msg = vaultTooManyInputsMessage(err);
       expect(msg).toContain("at most 234");
       expect(msg).toContain("100,000 vbytes");
-      expect(msg).not.toContain("limit on coins per vault transaction");
+      expect(msg).not.toContain("the most coins this wallet signs");
     } finally {
       spy.mockRestore();
     }

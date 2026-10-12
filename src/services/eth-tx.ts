@@ -18,10 +18,12 @@ import type { EthTxRequest } from "../crypto/worker";
 import {
   assertNoRunningEthSend,
   assertNoUnresolvedEthBroadcast,
+  assertNoUnresolvedEthBroadcastDurable,
   beginEthBroadcast,
   clearEthUnknown,
   markEthUnknownSent,
   recordEthUnknown,
+  refreshDurableEthUnknown,
   unresolvedEthUnknown,
 } from "../state/eth-unknown";
 import { ethBroadcastLockName, withBroadcastLock } from "./broadcast-lock";
@@ -305,6 +307,8 @@ const probing = new Set<string>();
  */
 export async function probeEthUnknownRecords(network: EthNetwork, from: string | undefined): Promise<void> {
   if (!from) return;
+  // Include records only the IndexedDB copy holds (localStorage lost).
+  await refreshDurableEthUnknown();
   const recs = unresolvedEthUnknown(network, from);
   await Promise.all(
     recs.map(async (r) => {
@@ -312,7 +316,7 @@ export async function probeEthUnknownRecords(network: EthNetwork, from: string |
       if (probing.has(key)) return;
       probing.add(key);
       try {
-        if (await txKnownByHash(network, r.hash)) markEthUnknownSent(network, from, r.hash);
+        if (await txKnownByHash(network, r.hash)) await markEthUnknownSent(network, from, r.hash);
       } catch {
         /* lookup failed: keep blocking */
       } finally {
@@ -334,10 +338,12 @@ export async function probeEthUnknownRecords(network: EthNetwork, from: string |
  * fallbacks): no other tab reads a pending nonce, signs or broadcasts from
  * this address while a broadcast here is in flight — it waits, or is
  * refused "busy" with nothing signed. The signed tx is recorded (by its
- * locally computed hash) BEFORE it is submitted, so a tab closed or crashed
- * mid-submission or mid-lookup still leaves the block; the record is
- * removed only on a confirmed send or a definitive rejection, and stays
- * (status unknown) otherwise.
+ * locally computed hash) BEFORE it is submitted, in localStorage and in
+ * the durable IndexedDB copy (its commit awaited), so a tab closed or a
+ * browser crashed mid-submission or mid-lookup still leaves the block; the
+ * record is removed (from both) only on a confirmed send or a definitive
+ * rejection, and stays (status unknown) otherwise. The checks read both
+ * stores (the IndexedDB copy re-read first).
  */
 async function signAndBroadcast(
   network: EthNetwork,
@@ -349,11 +355,11 @@ async function signAndBroadcast(
   // (another tab) refuses "busy". Inside the lock (no other send running)
   // every unresolved record refuses, in-flight ones included: their sender
   // is gone, so their outcome is unknown.
-  assertNoUnresolvedEthBroadcast(network, from, { exceptInflight: true });
+  await assertNoUnresolvedEthBroadcastDurable(network, from, { exceptInflight: true });
   await assertNoRunningEthSend(network, from);
   return withBroadcastLock(
     async () => {
-      assertNoUnresolvedEthBroadcast(network, from);
+      await assertNoUnresolvedEthBroadcastDurable(network, from);
       const nonce = await ethClient(network).getTransactionCount({ address: from, blockTag: "pending" });
       const composed = build(nonce);
       assertNoUnresolvedEthBroadcast(network, from);
@@ -362,8 +368,9 @@ async function signAndBroadcast(
       });
       const hash = keccak256(raw);
       assertNoUnresolvedEthBroadcast(network, from);
-      // Throws (nothing sent) if the record can't be saved.
-      beginEthBroadcast({ network, from, hash, what });
+      // Rejects (nothing sent) if the record can't be saved to both
+      // localStorage and the IndexedDB copy (committed, durability strict).
+      await beginEthBroadcast({ network, from, hash, what });
       let outcome: "sent" | "unknown" | "rejected" = "unknown";
       try {
         const txHash = await broadcastRaw(network, raw);
@@ -373,8 +380,10 @@ async function signAndBroadcast(
         outcome = e instanceof EthBroadcastStatusUnknownError ? "unknown" : "rejected";
         throw e;
       } finally {
-        if (outcome === "unknown") recordEthUnknown({ network, from, hash, what });
-        else clearEthUnknown(network, from, hash);
+        // Still holding the lock: both stores are settled before the next
+        // send from this address can start. (Neither call throws.)
+        if (outcome === "unknown") await recordEthUnknown({ network, from, hash, what });
+        else await clearEthUnknown(network, from, hash);
       }
     },
     { name: ethBroadcastLockName(network, from) },
@@ -458,7 +467,7 @@ async function chainIdFor(network: EthNetwork): Promise<number> {
 }
 
 export async function sendNative(p: SendNativeParams): Promise<SendResult> {
-  assertNoUnresolvedEthBroadcast(p.network, p.from, { exceptInflight: true });
+  await assertNoUnresolvedEthBroadcastDurable(p.network, p.from, { exceptInflight: true });
   const chainId = await chainIdFor(p.network);
   let gas: bigint;
   let fees: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
@@ -491,7 +500,7 @@ export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
   if (cfg.wprl === "0x0000000000000000000000000000000000000000") {
     throw new Error("E_WPRL_NOT_DEPLOYED");
   }
-  assertNoUnresolvedEthBroadcast(p.network, p.from, { exceptInflight: true });
+  await assertNoUnresolvedEthBroadcastDurable(p.network, p.from, { exceptInflight: true });
   const chainId = await chainIdFor(p.network);
   const data = encodeFunctionData({
     abi: erc20Abi,
@@ -719,7 +728,7 @@ async function sendContractCall(
   ceiling: EthGasCeiling,
   what: string,
 ): Promise<SendResult> {
-  assertNoUnresolvedEthBroadcast(network, from, { exceptInflight: true });
+  await assertNoUnresolvedEthBroadcastDurable(network, from, { exceptInflight: true });
   const chainId = await chainIdFor(network);
   // 20% headroom (contractGas): requestBurn's gas varies with daily-window
   // storage writes (first burn of a window pays for slot init). An

@@ -35,7 +35,7 @@ export function vaultHistoryCapMessage(deep: boolean): string {
 export function vaultTooManyInputsMessage(e: VaultTooManyInputsError): string {
   const why =
     e.binding === "count"
-      ? `(the wallet's limit on coins per vault transaction, which every cosigner's wallet also enforces)`
+      ? `(the most coins this wallet signs or imports in one vault transaction)`
       : `(the network won't relay a transaction over 100,000 vbytes)`;
   return (
     `This send needs ${e.inputsNeeded} vault coins, but one transaction can spend at most ${e.maxInputs} ${why}. ` +

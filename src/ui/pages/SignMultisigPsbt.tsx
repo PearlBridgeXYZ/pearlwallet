@@ -33,6 +33,7 @@ import {
   type MySlot,
 } from "../../services/vault-import";
 import ImportVaultPrompt from "../components/ImportVaultPrompt";
+import { vaultSignErrorMessage } from "../vault-messages";
 import type { VaultRecord } from "../../storage/db";
 
 // Auto-import flow state for a PSBT that matches no local vault. We try to
@@ -305,7 +306,7 @@ export default function SignMultisigPsbt() {
       postSignedAtRef.current = null;
       setPostState({ kind: "idle" });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(vaultSignErrorMessage(e) ?? (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }

@@ -4,7 +4,7 @@ import Page from "../components/Page";
 import { refusalMessage } from "../components/PendingBroadcasts";
 import EthBroadcastUnknown, { ethUnknownBlocksSend, useEthUnknown } from "../components/EthBroadcastUnknown";
 import { sessionWalletPrimary, useWallet } from "../../state/wallet-store";
-import { db, putDepositPinForWallet, type BridgeCrossingRecord } from "../../storage/db";
+import { db, putBridgeCrossingForWallet, putDepositPinForWallet, type BridgeCrossingRecord } from "../../storage/db";
 import { bridgeConfig } from "../../services/bridge";
 import {
   getEthReceiptStatus,
@@ -61,6 +61,21 @@ export const depositTofu: DepositTofuStore = {
     await putDepositPinForWallet({ ethAddress: key, pearlAddress: value, pinnedAt: Date.now() }, walletPrimary);
   },
 };
+
+/**
+ * Stores a bridge crossing for the session's wallet, like the deposit pin:
+ * the keystore check and the put share one read-write transaction, so a
+ * crossing saved by a tab still unlocked on a wallet another tab wiped or
+ * replaced is refused (E_WALLET_WIPED / E_WALLET_CHANGED) instead of
+ * landing under the next wallet. `ifAbsent` (the adoption of a
+ * relay-indexed deposit): writes only if no row with that id exists;
+ * returns whether it wrote.
+ */
+export async function saveBridgeCrossing(rec: BridgeCrossingRecord, opts: { ifAbsent?: boolean } = {}): Promise<boolean> {
+  const walletPrimary = sessionWalletPrimary();
+  if (!walletPrimary) throw new Error("E_LOCKED");
+  return putBridgeCrossingForWallet(rec, walletPrimary, opts);
+}
 
 // Native PRL ↔ WPRL bridging (v0.4.0). The public /v1 API supplies quotes
 // and lifecycle state; ALL signing happens locally:
@@ -145,13 +160,11 @@ export default function Bridge() {
           // Only adopt genuinely in-flight deposits (audit N1): never
           // resurrect a failed/cancelled/under_review/refunded mint as a
           // fresh "confirming" zombie.
-          if (
-            recent &&
-            MINT_IN_FLIGHT.has(recent.state) &&
-            !(await db.bridgeCrossings.get(recent.txid))
-          ) {
+          // Wallet-bound, and only if no row for it exists (checked in the
+          // same transaction as the write).
+          if (recent && MINT_IN_FLIGHT.has(recent.state)) {
             const now = Date.now();
-            await db.bridgeCrossings.put({
+            await saveBridgeCrossing({
               id: recent.txid,
               direction: "wrap",
               amountGrains: recent.amountGrains.toString(),
@@ -165,7 +178,7 @@ export default function Bridge() {
               settledRef: null,
               approveTxHash: null,
               updatedAt: now,
-            });
+            }, { ifAbsent: true });
           }
         } catch {
           // best-effort; recovery retries next tick
@@ -236,7 +249,7 @@ export default function Bridge() {
           pool={pool}
           pearlNetwork={pearlNetwork}
           onStarted={async (rec) => {
-            await db.bridgeCrossings.put(rec);
+            await saveBridgeCrossing(rec);
             await reloadCrossings();
             setTab("activity");
           }}
@@ -249,7 +262,7 @@ export default function Bridge() {
           pearlAddress={addresses?.pearl}
           ethNetwork={ethNetwork}
           onStarted={async (rec) => {
-            await db.bridgeCrossings.put(rec);
+            await saveBridgeCrossing(rec);
             await reloadCrossings();
             setTab("activity");
           }}

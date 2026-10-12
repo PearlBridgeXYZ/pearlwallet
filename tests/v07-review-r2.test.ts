@@ -381,6 +381,12 @@ describe("R2-4 — vault broadcasts use the recorded path", () => {
       preview: { destination: rec.pearlAddress, amountGrains: "90000", feeGrains: "10000", changeGrains: "0", inputCount: 1 },
     };
     const put = vi.spyOn(db.vaultPendingTxs, "put").mockResolvedValue("p1" as never);
+    // R5 L-e: the record's updates are wallet-bound (one rw transaction
+    // with a check of the stored keystore against the session's wallet).
+    const prevWallet = useWallet.getState();
+    useWallet.setState({ status: "unlocked", addresses: { pearl: "w-primary", pearlPool: [], pearlChange: [], eth: "0x0" } } as never);
+    vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args[args.length - 1] as () => Promise<unknown>)()) as never);
+    vi.spyOn(db.keystore, "get").mockResolvedValue({ publicData: { pearlAddress: "w-primary" } } as never);
     addRecord("e".repeat(64), [PREV_OUTPOINT]);
     const calls = stubRpc((m, p) => (m === "sendrawtransaction" ? ok(rawTxId(p[0] as string)) : NO_TX()));
     await expect(broadcastPendingTx({ vault: rec, pending })).rejects.toBeInstanceOf(PendingSpendConflictError);
@@ -390,6 +396,8 @@ describe("R2-4 — vault broadcasts use the recorded path", () => {
     clearPendingSpends();
     const done = await broadcastPendingTx({ vault: rec, pending });
     expect(done.status).toBe("broadcast");
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ id: "p1", status: "broadcast" }));
+    useWallet.setState({ status: prevWallet.status, addresses: prevWallet.addresses } as never);
     expect(broadcastRecords()).toEqual([expect.objectContaining({ txid: done.txid, kind: "vault", state: "accepted" })]);
   });
 });

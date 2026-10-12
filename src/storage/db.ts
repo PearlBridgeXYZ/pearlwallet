@@ -282,8 +282,9 @@ export async function replaceKeystoreIfUnchanged(
 }
 
 /**
- * Wallet-bound writes: a vault or a bridge deposit pin belongs to the
- * wallet of the session that made it. A tab can still be unlocked on a
+ * Wallet-bound writes: a vault, a vault pending transaction, a bridge
+ * crossing or a bridge deposit pin belongs to the wallet of the session
+ * that made it. A tab can still be unlocked on a
  * wallet that another tab has just wiped or replaced (the cross-tab
  * notice has not reached it yet); a plain put from it would queue behind
  * the other tab's wipe / replace transaction, land after it and then show
@@ -313,6 +314,35 @@ export async function putDepositPinForWallet(pin: BridgeDepositPin, walletPrimar
   await db.transaction("rw", [db.keystore, db.bridgeDepositPins], async () => {
     await assertStoredWallet(walletPrimary);
     await db.bridgeDepositPins.put(pin);
+  });
+}
+
+/** Stores a vault pending transaction (a draft, a signature, its
+ *  broadcast or failed state) for the wallet `walletPrimary` (see
+ *  assertStoredWallet): a draft written by a tab still unlocked on a wiped
+ *  or replaced wallet never lands under the next wallet. */
+export async function putPendingTxForWallet(record: VaultPendingTxRecord, walletPrimary: string): Promise<void> {
+  await db.transaction("rw", [db.keystore, db.vaultPendingTxs], async () => {
+    await assertStoredWallet(walletPrimary);
+    await db.vaultPendingTxs.put(record);
+  });
+}
+
+/** Stores a bridge crossing for the wallet `walletPrimary` (see
+ *  assertStoredWallet). With `ifAbsent`, writes only when no row with that
+ *  id exists (checked in the same transaction) and returns whether it
+ *  wrote: the adoption of a relay-indexed deposit never overwrites a row
+ *  another tab saved meanwhile. */
+export async function putBridgeCrossingForWallet(
+  record: BridgeCrossingRecord,
+  walletPrimary: string,
+  opts: { ifAbsent?: boolean } = {},
+): Promise<boolean> {
+  return db.transaction("rw", [db.keystore, db.bridgeCrossings], async () => {
+    await assertStoredWallet(walletPrimary);
+    if (opts.ifAbsent && (await db.bridgeCrossings.get(record.id))) return false;
+    await db.bridgeCrossings.put(record);
+    return true;
   });
 }
 
@@ -435,8 +465,10 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   // choice to leave nothing behind. The current layout is one key per
   // record, removed by clearAllEthUnknown after the scrub — except an
   // in-flight record whose send (in another tab) may still be running:
-  // it is the only block that survives that tab dying mid-send. This is
-  // the former single key; the v1 key lived in sessionStorage.
+  // it is the only block that survives that tab dying mid-send. The same
+  // call clears their durable IndexedDB copy (state/eth-send-journal.ts,
+  // its own database) by the same rule. This is the former single key;
+  // the v1 key lived in sessionStorage.
   "pearl-wallet-eth-unknown-v2",
   // NOT listed: WALLET_TABS_STORAGE_KEY ("pearl-wallet-tabs-v1"). It is
   // not wallet data but the list of LIVE tabs that the no-Web-Locks

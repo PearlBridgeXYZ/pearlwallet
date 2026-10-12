@@ -665,7 +665,7 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       }
       // The shared vault input ceiling: never compose what this wallet's
       // own cosign / import paths would refuse.
-      if (r.utxos.length > MAX_VAULT_INPUTS) throw new Error("E_MULTISIG_TOO_MANY_INPUTS");
+      if (r.utxos.length > MAX_VAULT_INPUTS) throw new Error(`E_MULTISIG_TOO_MANY_INPUTS: ${r.utxos.length}`);
       if (!Array.isArray(r.outputs) || r.outputs.length === 0) {
         throw new Error("E_PEARL_NO_OUTPUTS");
       }
@@ -785,7 +785,7 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       }
       if (tx.inputsLength === 0) throw new Error("E_PEARL_NO_INPUTS");
       // The shared vault input ceiling (compose and import use it too).
-      if (tx.inputsLength > MAX_VAULT_INPUTS) throw new Error("E_MULTISIG_TOO_MANY_INPUTS");
+      if (tx.inputsLength > MAX_VAULT_INPUTS) throw new Error(`E_MULTISIG_TOO_MANY_INPUTS: ${tx.inputsLength}`);
 
       // Per-input vault binding check.
       for (let i = 0; i < tx.inputsLength; i++) {

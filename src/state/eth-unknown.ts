@@ -41,8 +41,26 @@
 // once its sender is gone (the lock is free: the tab closed or crashed
 // mid-send) — from then on it reads, blocks and is acknowledged like any
 // other status-unknown record.
+//
+// Durable copy (state/eth-send-journal.ts): localStorage is committed to
+// disk lazily, so a browser-process crash right after submission could
+// lose the pre-submission record. The send path therefore also writes it to
+// IndexedDB (durability "strict") and awaits the commit before submitting;
+// a failed write refuses the send. Every reader takes the union of both
+// stores (an entry unresolved in either one blocks; `durable` below is this
+// tab's view of the IndexedDB copy, refreshed from IndexedDB before every
+// send, before the mount-time lookups and whenever another tab changes a
+// record), and every resolution (confirmed sent, definitive rejection,
+// acknowledgement, a lookup finding the hash) and the wipe apply to both.
 
 import type { EthNetwork } from "../chains/ethereum/network";
+import {
+  ethSendJournalAvailable,
+  mutateEthSendJournal,
+  readEthSendJournal,
+  type JournalChanges,
+  type JournalEntries,
+} from "./eth-send-journal";
 import {
   BroadcastRefusedError,
   ethBroadcastLockName,
@@ -109,6 +127,26 @@ const ZERO_HASH = `0x${"0".repeat(64)}` as const;
 const HASH_RE = /^0x[0-9a-f]{64}$/;
 const ADDR_RE = /^0x[0-9a-f]{40}$/;
 
+/**
+ * The network, address and hash segment a v3 key names, all lowercased
+ * (keys are matched case-insensitively: a key written with a mixed-case
+ * address still belongs to, and blocks, that address). `hashPart` is null
+ * when the key has no hash segment. Null: not a v3 key, or it names no
+ * network + valid address (such a key cannot block any send).
+ */
+function parseRecordKey(key: string): { network: string; addr: string; hashPart: string | null } | null {
+  if (!key.startsWith(ETH_UNKNOWN_KEY_PREFIX)) return null;
+  const rest = key.slice(ETH_UNKNOWN_KEY_PREFIX.length);
+  const i = rest.indexOf(":");
+  if (i <= 0) return null;
+  const network = rest.slice(0, i).toLowerCase();
+  const after = rest.slice(i + 1);
+  const j = after.indexOf(":");
+  const addr = (j < 0 ? after : after.slice(0, j)).toLowerCase();
+  if (!ADDR_RE.test(addr)) return null;
+  return { network, addr, hashPart: j < 0 ? null : after.slice(j + 1).toLowerCase() };
+}
+
 function isRecord(x: unknown): x is EthUnknownRecord {
   const r = x as EthUnknownRecord;
   return (
@@ -148,8 +186,8 @@ function keysWithPrefix(storage: KVStorage, prefix: string): string[] {
 /**
  * The entry stored under `key`, which belongs to `network` + `from`
  * (lowercase). Anything that is not a valid record for exactly that key
- * (unparseable, another shape, another network / address / hash, a bad
- * hash in the key) FAILS CLOSED: it reads as an unresolved status-unknown
+ * (unparseable, another shape, another network / address / hash, a
+ * missing or bad hash segment in the key) FAILS CLOSED: it reads as an unresolved status-unknown
  * record for that address (what = ETH_UNKNOWN_UNREADABLE, the key's hash
  * when it has one), so it blocks signing until the user checks and
  * acknowledges it, never silently unblocks. Null: the key is gone.
@@ -157,8 +195,8 @@ function keysWithPrefix(storage: KVStorage, prefix: string): string[] {
 function readEntry(storage: KVStorage, key: string, network: string, from: string): Entry | null {
   const raw = storage.getItem(key);
   if (raw === null) return null;
-  const hashPart = key.slice(ETH_UNKNOWN_KEY_PREFIX.length + network.length + 1 + from.length + 1);
-  const keyHash = HASH_RE.test(hashPart) ? (hashPart as `0x${string}`) : null;
+  const hashPart = parseRecordKey(key)?.hashPart ?? null;
+  const keyHash = hashPart !== null && HASH_RE.test(hashPart) ? (hashPart as `0x${string}`) : null;
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -183,12 +221,17 @@ function readEntry(storage: KVStorage, key: string, network: string, from: strin
 
 const byAge = (a: Entry, b: Entry) => a.rec.ts - b.rec.ts || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
 
-/** Entries for this network + address, oldest first. Throws if the
+/** Entries for this network + address, oldest first: every v3 key that
+ *  names them, compared case-insensitively (a key without a valid hash
+ *  segment reads as an unreadable record and fails closed). Throws if the
  *  storage cannot be read. */
 function entriesFor(storage: KVStorage, network: string, from: string): Entry[] {
   const addr = from.toLowerCase();
+  const net = network.toLowerCase();
   const out: Entry[] = [];
-  for (const k of keysWithPrefix(storage, `${ETH_UNKNOWN_KEY_PREFIX}${network}:${addr}:`)) {
+  for (const k of keysWithPrefix(storage, ETH_UNKNOWN_KEY_PREFIX)) {
+    const p = parseRecordKey(k);
+    if (!p || p.network !== net || p.addr !== addr) continue;
     const e = readEntry(storage, k, network, addr);
     if (e) out.push(e);
   }
@@ -207,8 +250,9 @@ export function readEthUnknownRecords(storage: KVStorage): Records {
   }
   const groups = new Map<string, Entry[]>();
   for (const k of keys) {
-    const [network, addr] = k.slice(ETH_UNKNOWN_KEY_PREFIX.length).split(":");
-    if (!network || !addr || !ADDR_RE.test(addr)) continue;
+    const p = parseRecordKey(k);
+    if (!p) continue;
+    const { network, addr } = p;
     let e: Entry | null;
     try {
       e = readEntry(storage, k, network, addr);
@@ -272,10 +316,9 @@ export function acknowledgeEthUnknown(storage: KVStorage, network: string, from:
   }
 }
 
-// ── Live store (localStorage + change listeners) ────────────────────────
+// ── Live store (localStorage + IndexedDB copy + change listeners) ───────
 
-function memoryStorage(): KVStorage {
-  const m = new Map<string, string>();
+function memoryStorage(m: Map<string, string> = new Map()): KVStorage {
   return {
     getItem: (k) => m.get(k) ?? null,
     setItem: (k, v) => void m.set(k, v),
@@ -307,20 +350,89 @@ function notify(): void {
   for (const l of [...listeners]) l();
 }
 
-// Another tab wrote the key: re-read. (A 'storage' event fires in every
-// OTHER same-origin document; key null = localStorage.clear().)
+// ── The IndexedDB copy (state/eth-send-journal.ts) ──────────────────────
+//
+// `durable` is this tab's view of it: replaced wholesale by every read
+// and every committed change, in the order those IndexedDB transactions
+// were created (they run, and complete, in that order), so a slow read
+// never overwrites a newer view.
+
+let durableMap: Map<string, string> = new Map();
+let durable: KVStorage = memoryStorage(durableMap);
+let journalSeq = 0;
+let appliedSeq = 0;
+
+function applyDurable(entries: JournalEntries, seq: number): boolean {
+  if (seq < appliedSeq) return false;
+  appliedSeq = seq;
+  const same = entries.size === durableMap.size && [...entries].every(([k, v]) => durableMap.get(k) === v);
+  if (same) return false;
+  durableMap = new Map(entries);
+  durable = memoryStorage(durableMap);
+  return true;
+}
+
+/**
+ * Re-reads the IndexedDB copy into this tab's view (and notifies when it
+ * changed). False if IndexedDB could not be read; true when it was read,
+ * or where there is no IndexedDB at all. Never throws.
+ */
+export async function refreshDurableEthUnknown(): Promise<boolean> {
+  if (!ethSendJournalAvailable()) return true;
+  const seq = ++journalSeq;
+  try {
+    const entries = await readEthSendJournal();
+    if (applyDurable(entries, seq)) notify();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Applies `change` (one of the KVStorage functions above) to the
+ * IndexedDB copy inside one read-write transaction, durability "strict",
+ * and resolves once it has committed, with the entries as they now are;
+ * null where there is no IndexedDB. Rejects if the transaction failed
+ * (nothing changed).
+ */
+async function mutateDurable(change: (s: KVStorage) => void): Promise<JournalEntries | null> {
+  if (!ethSendJournalAvailable()) return null;
+  const seq = ++journalSeq;
+  const after = await mutateEthSendJournal((entries) => {
+    const m = new Map(entries);
+    change(memoryStorage(m));
+    const out: JournalChanges = new Map();
+    for (const [k, v] of m) if (entries.get(k) !== v) out.set(k, v);
+    for (const k of entries.keys()) if (!m.has(k)) out.set(k, null);
+    return out;
+  });
+  if (applyDurable(after, seq)) notify();
+  return after;
+}
+
+// Another tab wrote a record: re-read. (A 'storage' event fires in every
+// OTHER same-origin document; key null = localStorage.clear().) Every
+// change to the IndexedDB copy is paired with one to localStorage, so the
+// same event refreshes this tab's view of the IndexedDB copy.
 {
   const g = globalThis as { addEventListener?: (t: string, fn: (e: { key?: string | null }) => void) => void };
   if (typeof g.addEventListener === "function") {
     try {
       g.addEventListener("storage", (e) => {
-        if (!e || e.key === null || e.key === undefined || e.key.startsWith(ETH_UNKNOWN_KEY_PREFIX)) notify();
+        if (!e || e.key === null || e.key === undefined || e.key.startsWith(ETH_UNKNOWN_KEY_PREFIX)) {
+          notify();
+          void refreshDurableEthUnknown();
+        }
       });
     } catch {
       /* no storage events: this tab still reads storage before every send */
     }
   }
 }
+// A fresh page: load the IndexedDB copy (a record whose localStorage copy
+// was lost shows, and blocks, from here on).
+if (ethSendJournalAvailable()) void refreshDurableEthUnknown();
 
 export function subscribeEthUnknown(fn: () => void): () => void {
   listeners.add(fn);
@@ -332,7 +444,10 @@ export function subscribeEthUnknown(fn: () => void): () => void {
 const ownInflight = new Set<string>();
 const ownKey = (network: string, hash: string) => `${network}:${hash.toLowerCase()}`;
 
-export function recordEthUnknown(rec: Omit<EthUnknownRecord, "ts" | "sent" | "inflight" | "owner"> & { ts?: number }): void {
+/** Records a status-unknown broadcast in both stores (localStorage at
+ *  once, the IndexedDB copy before this resolves). Never throws: if a
+ *  store refuses, the other one (or the in-memory copy) still holds it. */
+export async function recordEthUnknown(rec: Omit<EthUnknownRecord, "ts" | "sent" | "inflight" | "owner"> & { ts?: number }): Promise<void> {
   ownInflight.delete(ownKey(rec.network, rec.hash));
   const r: EthUnknownRecord = { network: rec.network, from: rec.from, hash: rec.hash, what: rec.what, ts: rec.ts ?? Date.now() };
   try {
@@ -342,21 +457,35 @@ export function recordEthUnknown(rec: Omit<EthUnknownRecord, "ts" | "sent" | "in
     putEthUnknown((fallback ??= memoryStorage()), r);
   }
   notify();
+  try {
+    await mutateDurable((s) => putEthUnknown(s, r));
+  } catch {
+    /* the localStorage copy holds it */
+  }
 }
+
+const recordRefusal = () =>
+  new BroadcastRefusedError(
+    "storage",
+    "E_ETH_BROADCAST_RECORD: the wallet could not save this transaction before sending it, so nothing was sent",
+  );
 
 /**
  * Records a signed Ethereum tx BEFORE it is submitted (services/eth-tx.ts,
  * inside the per-address broadcast lock), as an unresolved record: from
  * here until the outcome is known it blocks every tab, and if this page
- * dies mid-submission or mid-lookup it keeps blocking (a fresh tab looks
- * the hash up on mount, as for any status-unknown record). The caller
- * clears it on a confirmed send or a definitive rejection.
+ * (or the whole browser) dies mid-submission or mid-lookup it keeps
+ * blocking (a fresh tab looks the hash up on mount, as for any
+ * status-unknown record). The caller clears it on a confirmed send or a
+ * definitive rejection.
  *
- * Must reach localStorage (read back), else nothing is sent: throws a
- * BroadcastRefusedError("storage"). Only where there is no localStorage at
- * all (not a browser) the in-memory copy stands in.
+ * Must reach localStorage (read back) AND, where IndexedDB exists, the
+ * IndexedDB copy (a committed durability-"strict" transaction), else
+ * nothing is sent: rejects with a BroadcastRefusedError("storage") and
+ * removes what it saved (nothing was submitted). Only where there is no
+ * localStorage at all (not a browser) the in-memory copy stands in.
  */
-export function beginEthBroadcast(rec: Omit<EthUnknownRecord, "ts" | "sent" | "inflight" | "owner">): void {
+export async function beginEthBroadcast(rec: Omit<EthUnknownRecord, "ts" | "sent" | "inflight" | "owner">): Promise<void> {
   const r: EthUnknownRecord = {
     network: rec.network,
     from: rec.from.toLowerCase(),
@@ -366,6 +495,7 @@ export function beginEthBroadcast(rec: Omit<EthUnknownRecord, "ts" | "sent" | "i
     inflight: true,
     owner: thisTabId,
   };
+  const sameHash = (x: EthUnknownRecord) => x.hash.toLowerCase() === r.hash.toLowerCase();
   let ls: KVStorage | undefined;
   let blocked = false;
   try {
@@ -375,27 +505,49 @@ export function beginEthBroadcast(rec: Omit<EthUnknownRecord, "ts" | "sent" | "i
   }
   if (!ls && !blocked) {
     putEthUnknown((fallback ??= memoryStorage()), r);
-    ownInflight.add(ownKey(r.network, r.hash));
-    notify();
-    return;
+  } else {
+    try {
+      if (!ls) throw new Error("blocked");
+      putEthUnknown(ls, r);
+      if (!ethUnknownFor(ls, r.network, r.from).some(sameHash)) throw new Error("not saved");
+    } catch {
+      throw recordRefusal();
+    }
   }
-  try {
-    if (!ls) throw new Error("blocked");
-    putEthUnknown(ls, r);
-    const saved = ethUnknownFor(ls, r.network, r.from).some((x) => x.hash.toLowerCase() === r.hash.toLowerCase());
-    if (!saved) throw new Error("not saved");
-  } catch {
-    throw new BroadcastRefusedError(
-      "storage",
-      "E_ETH_BROADCAST_RECORD: the wallet could not save this transaction before sending it, so nothing was sent",
-    );
-  }
+  // From here this tab's own (not "another tab's") in-flight send.
   ownInflight.add(ownKey(r.network, r.hash));
+  if (ethSendJournalAvailable()) {
+    let saved = false;
+    try {
+      const after = await mutateDurable((s) => putEthUnknown(s, r));
+      saved = after !== null && ethUnknownFor(memoryStorage(new Map(after)), r.network, r.from).some(sameHash);
+    } catch {
+      saved = false;
+    }
+    if (!saved) {
+      // Nothing was submitted: take the record back out of both stores.
+      ownInflight.delete(ownKey(r.network, r.hash));
+      try {
+        if (ls) acknowledgeEthUnknown(ls, r.network, r.from, r.hash);
+      } catch {
+        /* ignore */
+      }
+      if (fallback) acknowledgeEthUnknown(fallback, r.network, r.from, r.hash);
+      void mutateDurable((s) => acknowledgeEthUnknown(s, r.network, r.from, r.hash)).catch(() => undefined);
+      notify();
+      throw recordRefusal();
+    }
+  }
   notify();
 }
 
-export function clearEthUnknown(network: string, from: string, hash: string): void {
-  ownInflight.delete(ownKey(network, hash));
+/**
+ * Removes the record(s) of `hash` from both stores (a confirmed send, a
+ * definitive rejection, an acknowledgement, dismissing a "sent" record).
+ * True once both are gone; false if the IndexedDB copy could not be
+ * changed (it then still blocks, failing closed). Never throws.
+ */
+export async function clearEthUnknown(network: string, from: string, hash: string): Promise<boolean> {
   try {
     acknowledgeEthUnknown(liveStorage(), network, from, hash);
   } catch {
@@ -403,10 +555,22 @@ export function clearEthUnknown(network: string, from: string, hash: string): vo
   }
   if (fallback) acknowledgeEthUnknown(fallback, network, from, hash);
   notify();
+  let ok = true;
+  try {
+    await mutateDurable((s) => acknowledgeEthUnknown(s, network, from, hash));
+  } catch {
+    ok = false;
+  }
+  // Only now: until the IndexedDB copy is gone this tab's own in-flight
+  // record must not read as another (gone) sender's.
+  ownInflight.delete(ownKey(network, hash));
+  notify();
+  return ok;
 }
 
-/** A lookup found `hash` on the network: "it was sent". Unblocks. */
-export function markEthUnknownSent(network: string, from: string, hash: string): void {
+/** A lookup found `hash` on the network: "it was sent", in both stores.
+ *  Unblocks. Never throws. */
+export async function markEthUnknownSent(network: string, from: string, hash: string): Promise<void> {
   try {
     markEthUnknownSentIn(liveStorage(), network, from, hash);
   } catch {
@@ -414,31 +578,39 @@ export function markEthUnknownSent(network: string, from: string, hash: string):
   }
   if (fallback) markEthUnknownSentIn(fallback, network, from, hash);
   notify();
+  try {
+    await mutateDurable((s) => void markEthUnknownSentIn(s, network, from, hash));
+  } catch {
+    /* the IndexedDB copy still blocks (fails closed); the next lookup retries */
+  }
 }
 
 /** The in-flight record stored under `key`, when that key holds a valid
  *  one (null otherwise: a plain, sent or unreadable entry). */
 function inflightEntryAt(storage: KVStorage, key: string): EthUnknownRecord | null {
-  const [network, addr] = key.slice(ETH_UNKNOWN_KEY_PREFIX.length).split(":");
-  if (!network || !addr || !ADDR_RE.test(addr)) return null;
-  const e = readEntry(storage, key, network, addr);
+  const p = parseRecordKey(key);
+  if (!p) return null;
+  const e = readEntry(storage, key, p.network, p.addr);
   return e?.valid && e.rec.inflight && !e.rec.sent ? e.rec : null;
 }
 
 /**
  * Wipe / replace-wallet: forgets every record (every per-record key in
- * live storage, the former v2 key and v1 session key, and the in-memory
- * copy) EXCEPT an in-flight record whose send may still be running
- * (ethInflightSenderActive: this tab's own running send, or the
- * per-address broadcast lock held by another tab). That send has signed
- * and may have submitted; its record is the only block that survives the
- * sender dying mid-flight, so removing it then would let a later tab (the
- * same wallet restored) sign a second payment. Once its sender is gone the
- * record reads status-unknown and a later wipe removes it.
+ * live storage and in the IndexedDB copy, the former v2 key and v1 session
+ * key, and the in-memory copy) EXCEPT an in-flight record whose send may
+ * still be running (ethInflightSenderActive: this tab's own running send,
+ * or the per-address broadcast lock held by another tab). That send has
+ * signed and may have submitted; its record is the only block that
+ * survives the sender dying mid-flight, so removing it then would let a
+ * later tab (the same wallet restored) sign a second payment. Once its
+ * sender is gone the record reads status-unknown and a later wipe removes
+ * it.
  *
- * Plain, sent and unreadable records go at once (synchronously); each
- * in-flight one is removed only after its sender is found gone. Keys saved
- * after the snapshot (a send that starts meanwhile) are never touched.
+ * Plain, sent and unreadable records go at once (localStorage
+ * synchronously, the IndexedDB copy in one transaction); each in-flight
+ * one is removed only after its sender is found gone (from IndexedDB only
+ * if its entry is still exactly the one seen). Keys saved after the
+ * snapshot (a send that starts meanwhile) are never touched.
  */
 export async function clearAllEthUnknown(): Promise<void> {
   const stores: KVStorage[] = [];
@@ -455,7 +627,7 @@ export async function clearAllEthUnknown(): Promise<void> {
     }
   }
   if (fallback) stores.push(fallback);
-  const pending: Array<{ s: KVStorage; key: string; rec: EthUnknownRecord }> = [];
+  const pending: Array<{ rec: EthUnknownRecord; remove: () => Promise<void> }> = [];
   for (const s of stores) {
     try {
       for (const k of keysWithPrefix(s, ETH_UNKNOWN_KEY_PREFIX)) {
@@ -465,40 +637,96 @@ export async function clearAllEthUnknown(): Promise<void> {
         } catch {
           rec = null;
         }
-        if (rec) pending.push({ s, key: k, rec });
-        else s.removeItem(k);
+        if (rec) {
+          pending.push({
+            rec,
+            remove: async () => {
+              try {
+                s.removeItem(k);
+              } catch {
+                /* ignore */
+              }
+            },
+          });
+        } else s.removeItem(k);
       }
     } catch {
       /* ignore */
     }
   }
+  // The IndexedDB copy: everything but in-flight records, in one
+  // transaction (every key in that store is a record key).
+  try {
+    const seen: Array<{ key: string; value: string; rec: EthUnknownRecord }> = [];
+    await mutateDurable((s) => {
+      for (const k of keysWithPrefix(s, "")) {
+        let rec: EthUnknownRecord | null = null;
+        try {
+          rec = inflightEntryAt(s, k);
+        } catch {
+          rec = null;
+        }
+        if (rec) seen.push({ key: k, value: s.getItem(k) ?? "", rec });
+        else s.removeItem(k);
+      }
+    });
+    for (const { key, value, rec } of seen) {
+      pending.push({
+        rec,
+        remove: async () => {
+          try {
+            await mutateDurable((s) => {
+              if (s.getItem(key) === value) s.removeItem(key);
+            });
+          } catch {
+            /* still blocks; a later wipe removes it */
+          }
+        },
+      });
+    }
+  } catch {
+    /* IndexedDB failed: its records stay (and keep blocking) */
+  }
   const kept = new Set<string>();
-  for (const { s, key, rec } of pending) {
-    if (await ethInflightSenderActive(rec)) {
+  const active = new Map<string, Promise<boolean>>();
+  for (const { rec, remove } of pending) {
+    const id = `${rec.network}:${rec.from}:${rec.hash.toLowerCase()}:${rec.owner ?? ""}`;
+    let a = active.get(id);
+    if (!a) active.set(id, (a = ethInflightSenderActive(rec)));
+    if (await a) {
       kept.add(ownKey(rec.network, rec.hash));
       continue;
     }
-    try {
-      s.removeItem(key);
-    } catch {
-      /* ignore */
-    }
+    await remove();
   }
   if (fallback && fallback.length === 0) fallback = null;
   for (const k of [...ownInflight]) if (!kept.has(k)) ownInflight.delete(k);
   notify();
 }
 
+/** This network + address's records in every store (localStorage, the
+ *  in-memory copy, the IndexedDB copy), one per hash, oldest first. Where
+ *  the stores disagree about a hash, an unresolved entry wins over a
+ *  "sent" one (either store unresolved blocks), and an earlier store's
+ *  entry over a later one's. */
 function liveFor(network: string, from: string | undefined): EthUnknownRecord[] {
-  let live: EthUnknownRecord[] = [];
+  const sources: EthUnknownRecord[][] = [];
   try {
-    live = ethUnknownFor(liveStorage(), network, from);
+    sources.push(ethUnknownFor(liveStorage(), network, from));
   } catch {
     /* ignore */
   }
-  const mem = fallback ? ethUnknownFor(fallback, network, from) : [];
-  const seen = new Set(live.map((r) => r.hash.toLowerCase()));
-  return [...live, ...mem.filter((r) => !seen.has(r.hash.toLowerCase()))];
+  if (fallback) sources.push(ethUnknownFor(fallback, network, from));
+  sources.push(ethUnknownFor(durable, network, from));
+  const byHash = new Map<string, EthUnknownRecord>();
+  for (const list of sources) {
+    for (const r of list) {
+      const h = r.hash.toLowerCase();
+      const x = byHash.get(h);
+      if (!x || (x.sent && !r.sent)) byHash.set(h, r);
+    }
+  }
+  return [...byHash.values()].sort((a, b) => a.ts - b.ts);
 }
 
 /** Every unresolved (blocking) record for this network + address,
@@ -549,32 +777,27 @@ export async function assertNoRunningEthSend(network: string, from: string): Pro
 }
 
 /**
- * "I checked; it was not sent." Clears a status-unknown record. An
- * in-flight record is cleared only once its sender is gone, and then while
- * holding the per-address broadcast lock (no send can start meanwhile);
- * while the send may still be running nothing is cleared (false).
+ * "I checked; it was not sent." Clears a status-unknown record (in both
+ * stores; false if the IndexedDB copy could not be cleared, so it still
+ * blocks). An in-flight record is cleared only once its sender is gone,
+ * and then while holding the per-address broadcast lock (no send can
+ * start meanwhile); while the send may still be running nothing is
+ * cleared (false).
  */
 export async function acknowledgeEthUnknownChecked(network: string, from: string, hash: string): Promise<boolean> {
   const find = () => liveFor(network, from).find((r) => r.hash.toLowerCase() === hash.toLowerCase());
   const rec = find();
   if (!rec) return true;
-  if (!rec.inflight || rec.sent) {
-    clearEthUnknown(network, from, hash);
-    return true;
-  }
+  if (!rec.inflight || rec.sent) return clearEthUnknown(network, from, hash);
   if (rec.owner === thisTabId && ownInflight.has(ownKey(network, hash))) return false;
   if (!hasWebLocks()) {
     if (rec.owner === undefined || walletTabMayBeOpen(rec.owner)) return false;
-    clearEthUnknown(network, from, hash);
-    return true;
+    return clearEthUnknown(network, from, hash);
   }
   try {
     return await withBroadcastLock(
-      async () => {
-        // Holding the lock: no send from this address is running.
-        if (find()) clearEthUnknown(network, from, hash);
-        return true;
-      },
+      // Holding the lock: no send from this address is running.
+      async () => clearEthUnknown(network, from, hash),
       { name: ethBroadcastLockName(network, from), ifAvailable: true },
     );
   } catch {
@@ -588,6 +811,15 @@ export function currentEthUnknown(network: string, from: string | undefined): Et
   const all = liveFor(network, from);
   return all.find((r) => !r.sent) ?? all[0] ?? null;
 }
+
+/** True for the stand-in of an entry that could not be read (its hash is
+ *  the key's, or the zero hash when the key had none). */
+export function isUnreadableEthUnknown(rec: { what: string }): boolean {
+  return rec.what === ETH_UNKNOWN_UNREADABLE;
+}
+
+/** The zero hash an unreadable entry without a usable hash carries. */
+export const ETH_UNKNOWN_ZERO_HASH = ZERO_HASH;
 
 /**
  * Refusal raised by the signing service (services/eth-tx.ts) while an
@@ -606,12 +838,39 @@ export class EthUnresolvedBroadcastError extends Error {
 }
 
 /** Throws EthUnresolvedBroadcastError while an unresolved record exists
- *  for this network + address (read fresh from storage, not a cached view).
- *  `exceptInflight`: in-flight records are left to the check made inside
- *  the broadcast lock (eth-tx signAndBroadcast). There, holding the lock,
- *  any in-flight record's sender is gone, so it blocks as status-unknown;
- *  before the lock the caller just waits for a running send to finish. */
+ *  for this network + address in either store (localStorage read fresh;
+ *  the IndexedDB copy as last read — assertNoUnresolvedEthBroadcastDurable
+ *  re-reads it first). `exceptInflight`: in-flight records are left to the
+ *  check made inside the broadcast lock (eth-tx signAndBroadcast). There,
+ *  holding the lock, any in-flight record's sender is gone, so it blocks as
+ *  status-unknown; before the lock the caller just waits for a running
+ *  send to finish. */
 export function assertNoUnresolvedEthBroadcast(network: string, from: string, opts: { exceptInflight?: boolean } = {}): void {
   const rec = unresolvedEthUnknown(network, from).find((r) => !(opts.exceptInflight && r.inflight));
   if (rec) throw new EthUnresolvedBroadcastError(rec);
+}
+
+/** assertNoUnresolvedEthBroadcast after re-reading the IndexedDB copy
+ *  from IndexedDB itself. If IndexedDB cannot be read, refuses
+ *  (BroadcastRefusedError "storage"): a record only it still holds (its
+ *  localStorage copy lost in a crash) must not be missed. */
+export async function assertNoUnresolvedEthBroadcastDurable(
+  network: string,
+  from: string,
+  opts: { exceptInflight?: boolean } = {},
+): Promise<void> {
+  if (!(await refreshDurableEthUnknown())) {
+    throw new BroadcastRefusedError(
+      "storage",
+      "E_ETH_BROADCAST_RECORD: the wallet could not read its saved send records, so nothing was signed",
+    );
+  }
+  assertNoUnresolvedEthBroadcast(network, from, opts);
+}
+
+/** Tests only: drop this module's view of the IndexedDB copy. */
+export function __resetDurableEthUnknownForTests(): void {
+  durableMap = new Map();
+  durable = memoryStorage(durableMap);
+  appliedSeq = journalSeq;
 }

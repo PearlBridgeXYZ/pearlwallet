@@ -150,7 +150,7 @@ export default function SendWPRL() {
       } else if (e instanceof EthUnresolvedBroadcastError) {
         // Another tab (or an earlier visit) recorded a status-unknown
         // broadcast from this address; the warning above shows it.
-        setError(ethUnresolvedMessage(ethNetwork, e.hash));
+        setError(ethUnresolvedMessage(ethNetwork, e.hash, e.what));
       } else if (ethRefusalMessage(e)) {
         setError(ethRefusalMessage(e));
       } else if (msg === "E_PREVIEW_STALE") {

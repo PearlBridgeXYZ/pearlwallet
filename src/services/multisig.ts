@@ -18,6 +18,7 @@ import { base64 } from "@scure/base";
 import * as btc from "@scure/btc-signer";
 import {
   db,
+  putPendingTxForWallet,
   putVaultForWallet,
   type VaultRecord,
   type VaultPendingTxRecord,
@@ -926,8 +927,19 @@ export async function getPendingTx(id: string): Promise<VaultPendingTxRecord | u
   return db.vaultPendingTxs.get(id);
 }
 
+/** The session's wallet (its primary Pearl address) that a pending-tx
+ *  write is bound to; E_LOCKED while this tab is locked. */
+function pendingTxWallet(): string {
+  const walletPrimary = sessionWalletPrimary();
+  if (!walletPrimary) throw new Error("E_LOCKED");
+  return walletPrimary;
+}
+
+/** Stores a pending tx for the session's wallet: refused (E_WALLET_WIPED /
+ *  E_WALLET_CHANGED, nothing written) if another tab wiped or replaced it
+ *  meanwhile (storage/db putPendingTxForWallet). */
 export async function savePendingTx(rec: VaultPendingTxRecord): Promise<void> {
-  await db.vaultPendingTxs.put(rec);
+  await putPendingTxForWallet(rec, pendingTxWallet());
 }
 
 export async function deletePendingTx(id: string): Promise<void> {
@@ -943,6 +955,7 @@ export async function persistComposedAsPending(opts: {
   psbtBase64: string;
   preview: VaultPendingTxRecord["preview"];
 }): Promise<VaultPendingTxRecord> {
+  const walletPrimary = pendingTxWallet();
   const info = inspectPsbt(
     opts.psbtBase64,
     opts.vault.threshold,
@@ -958,7 +971,7 @@ export async function persistComposedAsPending(opts: {
     status: info.thresholdMet ? "ready" : "drafting",
     preview: opts.preview,
   };
-  await db.vaultPendingTxs.put(rec);
+  await putPendingTxForWallet(rec, walletPrimary);
   return rec;
 }
 
@@ -978,6 +991,8 @@ export async function signPendingTx(opts: {
   vault: VaultRecord;
   pending: VaultPendingTxRecord;
 }): Promise<VaultPendingTxRecord> {
+  // Bound to the wallet whose key signs below (wallet-bound write).
+  const walletPrimary = pendingTxWallet();
   const myHex = opts.vault.myPubkeyHex.toLowerCase();
   const pre = inspectPsbt(
     opts.pending.psbtBase64,
@@ -1008,7 +1023,7 @@ export async function signPendingTx(opts: {
     status: info.thresholdMet ? "ready" : "drafting",
     updatedAt: Date.now(),
   };
-  await db.vaultPendingTxs.put(updated);
+  await putPendingTxForWallet(updated, walletPrimary);
   return updated;
 }
 
@@ -1021,6 +1036,9 @@ export async function broadcastPendingTx(opts: {
   vault: VaultRecord;
   pending: VaultPendingTxRecord;
 }): Promise<VaultPendingTxRecord> {
+  // The record's updates are bound to the session's wallet (checked before
+  // anything is sent: a locked tab broadcasts nothing).
+  const walletPrimary = pendingTxWallet();
   const info = inspectPsbt(
     opts.pending.psbtBase64,
     opts.vault.threshold,
@@ -1051,7 +1069,7 @@ export async function broadcastPendingTx(opts: {
       status: "failed",
       updatedAt: Date.now(),
     };
-    await db.vaultPendingTxs.put(failed);
+    await putPendingTxForWallet(failed, walletPrimary);
     throw err;
   }
   const broadcast: VaultPendingTxRecord = {
@@ -1060,7 +1078,10 @@ export async function broadcastPendingTx(opts: {
     txid,
     updatedAt: Date.now(),
   };
-  await db.vaultPendingTxs.put(broadcast);
+  // Sent. If another tab wiped or replaced the wallet meanwhile, the
+  // record is not written (E_WALLET_WIPED / E_WALLET_CHANGED) — the
+  // broadcast itself stays recorded by the broadcast records.
+  await putPendingTxForWallet(broadcast, walletPrimary);
   return broadcast;
 }
 

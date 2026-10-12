@@ -269,7 +269,7 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
       // Recorded at module level, not only through the view: the card may
       // have unmounted while this ran (its setters then go nowhere), and a
       // remounted card must still block the next Unwrap.
-      recordEthUnknown({ network, from: ethAddress, hash: e.hash, what: step });
+      void recordEthUnknown({ network, from: ethAddress, hash: e.hash, what: step });
       view.setEthUnknown?.({ hash: e.hash, what: step, acknowledged: false });
       view.setErr(ethUnknownMessage(network, e.hash, step));
       return;
@@ -278,7 +278,7 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
       // Refused before signing: an unresolved approve / burn / send from
       // this address (possibly from another tab) is shown on the card.
       view.setNotice(null);
-      view.setErr(ethUnresolvedMessage(network, e.hash));
+      view.setErr(ethUnresolvedMessage(network, e.hash, e.what));
       return;
     }
     const refused = ethRefusalMessage(e);

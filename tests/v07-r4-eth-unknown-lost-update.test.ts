@@ -181,7 +181,7 @@ describe("L1 — fail closed", () => {
     inTab(A, () => A.m.recordEthUnknown({ network: "mainnet", from: ME, hash: H("11"), what: "ETH transfer" }));
     expect(() => inTab(A, () => A.m.assertNoUnresolvedEthBroadcast("mainnet", ME))).toThrow(`E_ETH_UNRESOLVED_BROADCAST: ${H("11")}`);
     // beginEthBroadcast refuses (nothing would be sent).
-    expect(() => inTab(A, () => A.m.beginEthBroadcast({ network: "mainnet", from: OTHER, hash: H("22"), what: "ETH transfer" }))).toThrow(/E_ETH_BROADCAST_RECORD/);
+    await expect(inTab(A, () => A.m.beginEthBroadcast({ network: "mainnet", from: OTHER, hash: H("22"), what: "ETH transfer" }))).rejects.toThrow(/E_ETH_BROADCAST_RECORD/);
     // A stored record whose 'sent' mark or removal cannot be written stays blocking.
     A.ls.setItem = realSet;
     inTab(A, () => A.m.recordEthUnknown({ network: "mainnet", from: OTHER, hash: H("33"), what: "burn" }));

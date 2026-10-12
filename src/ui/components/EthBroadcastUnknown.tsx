@@ -3,8 +3,11 @@
 // so the page's send button stays disabled until the user says they
 // checked the hash and it was not sent. Used by Send ETH, Send WPRL and
 // the bridge unwrap (approve / burn). The unacknowledged record lives in
-// state/eth-unknown.ts (localStorage, keyed by network + address), so the
-// block holds in every tab, across remounts, reloads and browser restarts.
+// state/eth-unknown.ts (localStorage, keyed by network + address, plus a
+// durable IndexedDB copy; either one unresolved blocks), so the block holds
+// in every tab, across remounts, reloads, browser restarts and a browser
+// crash right after submission. A record that could not be read has its
+// own copy (ethUnknownCopy), with no zero hash or Etherscan link.
 // On mount each unresolved hash is looked up once; one the network has is
 // shown as sent and stops blocking.
 //
@@ -21,8 +24,10 @@ import {
   acknowledgeEthUnknownChecked,
   clearEthUnknown,
   currentEthUnknown,
+  ETH_UNKNOWN_ZERO_HASH,
   ethInflightSenderActive,
   isOwnInflight,
+  isUnreadableEthUnknown,
   recordEthUnknown,
   subscribeEthUnknown,
 } from "../../state/eth-unknown";
@@ -113,17 +118,49 @@ export function useEthUnknown(
       if (!s || !from) return;
       // A record found sent is dismissed as is; "I checked; it was not
       // sent" clears an in-flight record only once its sender is gone.
-      if (s.acknowledged && s.sent) clearEthUnknown(network, from, s.hash);
+      if (s.acknowledged && s.sent) void clearEthUnknown(network, from, s.hash);
       else if (s.acknowledged) void acknowledgeEthUnknownChecked(network, from, s.hash);
-      else recordEthUnknown({ network, from, hash: s.hash, what: s.what });
+      else void recordEthUnknown({ network, from, hash: s.hash, what: s.what });
     },
     [network, from],
   );
   return [state, set];
 }
 
-/** The signing service refused: an unresolved record blocks this address. */
-export function ethUnresolvedMessage(network: EthNetwork, hash: string): string {
+/** Shown for a saved send record that could not be read (it still blocks
+ *  this address until acknowledged): there is no trustworthy hash to show. */
+export const ETH_UNREADABLE_RECORD_COPY =
+  "A saved send record from this address could not be read. Check your recent transactions before sending again.";
+
+/** What the status-unknown card shows for `state`: a heading, the body,
+ *  and the hash with its explorer link (both null for an unreadable record
+ *  without a usable hash: the zero hash is never shown or linked). */
+export function ethUnknownCopy(
+  network: EthNetwork,
+  state: { hash: string; what: string },
+): { title: string; body: string; hash: string | null; explorerUrl: string | null } {
+  const hasHash = state.hash.toLowerCase() !== ETH_UNKNOWN_ZERO_HASH;
+  const hash = hasHash ? state.hash : null;
+  const explorerUrl = hasHash ? ethTxExplorerUrl(network, state.hash) : null;
+  if (isUnreadableEthUnknown(state)) {
+    return { title: "A saved send record could not be read", body: ETH_UNREADABLE_RECORD_COPY, hash, explorerUrl };
+  }
+  return {
+    title: "Broadcast status unknown — check the transaction first",
+    body: `The ${state.what} may already be on the network: its status could not be confirmed. Sending again could pay twice.`,
+    hash,
+    explorerUrl,
+  };
+}
+
+/** The signing service refused: an unresolved record blocks this address.
+ *  `what` (EthUnresolvedBroadcastError.what) selects the unreadable-record
+ *  copy, which names no zero hash and links nothing. */
+export function ethUnresolvedMessage(network: EthNetwork, hash: string, what?: string): string {
+  if (what !== undefined && isUnreadableEthUnknown({ what })) {
+    const c = ethUnknownCopy(network, { hash, what });
+    return `Nothing was signed: ${c.body}${c.hash ? ` Record hash ${c.hash} (Etherscan: ${c.explorerUrl}).` : ""} Then confirm below.`;
+  }
   return `Nothing was signed: an earlier transaction from this address (${hash}) may already be on the network. Check it on Etherscan (${ethTxExplorerUrl(network, hash)}) and confirm below before sending again.`;
 }
 
@@ -184,24 +221,26 @@ export default function EthBroadcastUnknown(props: {
       </div>
     );
   }
+  const copy = ethUnknownCopy(network, state);
   return (
     <div role="alert" className="mt-3 rounded-pb border border-warn-line bg-warn-bg p-3 text-sm text-warn leading-relaxed break-words">
-      <p className="font-semibold">Broadcast status unknown — check the transaction first</p>
-      <p className="mt-1">
-        The {state.what} may already be on the network: its status could not be confirmed. Sending
-        again could pay twice.
-      </p>
-      <p className="mt-1">
-        Tx hash: <span className="break-all font-mono min-w-0 tabular-nums">{state.hash}</span>
-      </p>
-      <a
-        href={ethTxExplorerUrl(network, state.hash)}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="mt-2 inline-flex min-h-11 items-center underline underline-offset-4"
-      >
-        Check it on Etherscan →
-      </a>
+      <p className="font-semibold">{copy.title}</p>
+      <p className="mt-1">{copy.body}</p>
+      {copy.hash && copy.explorerUrl && (
+        <>
+          <p className="mt-1">
+            Tx hash: <span className="break-all font-mono min-w-0 tabular-nums">{copy.hash}</span>
+          </p>
+          <a
+            href={copy.explorerUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="mt-2 inline-flex min-h-11 items-center underline underline-offset-4"
+          >
+            Check it on Etherscan →
+          </a>
+        </>
+      )}
       <label className="mt-2 flex min-h-11 items-center gap-2">
         <input
           type="checkbox"

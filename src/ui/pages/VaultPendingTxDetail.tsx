@@ -17,6 +17,7 @@ import {
 } from "../../services/multisig";
 import { formatGrains } from "../../lib/format";
 import type { VaultRecord, VaultPendingTxRecord } from "../../storage/db";
+import { vaultSignErrorMessage } from "../vault-messages";
 
 // VaultPendingTxDetail — open one drafting/ready/broadcast PSBT, show
 // signer progress, sign with our own key, paste-back an externally-
@@ -88,7 +89,7 @@ export default function VaultPendingTxDetail() {
       const updated = await signPendingTx({ vault, pending });
       setPending(updated);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(vaultSignErrorMessage(e, pending.preview.inputCount) ?? (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }
