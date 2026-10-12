@@ -594,6 +594,66 @@ function inflightEntryAt(storage: KVStorage, key: string): EthUnknownRecord | nu
   return e?.valid && e.rec.inflight && !e.rec.sent ? e.rec : null;
 }
 
+/** The exact Ethereum send records stored when a wipe / replace started
+ *  (snapshotEthUnknown): every per-record key and its value, per store.
+ *  Opaque to callers. */
+export interface EthUnknownSnapshot {
+  /** localStorage, sessionStorage and the in-memory copy: key → value. */
+  readonly stores: ReadonlyMap<KVStorage, ReadonlyMap<string, string>>;
+  /** The IndexedDB copy: key → value; null when it could not be read (no
+   *  entry of it will then be removed). */
+  readonly durable: ReadonlyMap<string, string> | null;
+}
+
+function webStores(): KVStorage[] {
+  const out: KVStorage[] = [];
+  for (const get of [
+    () => (globalThis as { localStorage?: KVStorage }).localStorage,
+    () => (globalThis as { sessionStorage?: KVStorage }).sessionStorage,
+  ]) {
+    try {
+      const s = get();
+      if (s) out.push(s);
+    } catch {
+      /* blocked */
+    }
+  }
+  return out;
+}
+
+/**
+ * Wipe / replace-wallet, BEFORE its keystore transaction: every
+ * per-record key and its exact value in each store (localStorage,
+ * sessionStorage, the in-memory copy) and in the IndexedDB copy (read from
+ * IndexedDB itself). clearAllEthUnknown({ snapshot }) removes only these,
+ * and each only while its value is unchanged. A store that can't be read
+ * contributes nothing (nothing of it is removed: fail closed). Never throws.
+ */
+export async function snapshotEthUnknown(): Promise<EthUnknownSnapshot> {
+  const stores = new Map<KVStorage, Map<string, string>>();
+  for (const s of [...webStores(), ...(fallback ? [fallback] : [])]) {
+    const m = new Map<string, string>();
+    try {
+      for (const k of keysWithPrefix(s, ETH_UNKNOWN_KEY_PREFIX)) {
+        const v = s.getItem(k);
+        if (v !== null) m.set(k, v);
+      }
+    } catch {
+      continue;
+    }
+    stores.set(s, m);
+  }
+  let durableSnap: Map<string, string> | null = null;
+  if (ethSendJournalAvailable()) {
+    try {
+      durableSnap = new Map(await readEthSendJournal());
+    } catch {
+      durableSnap = null;
+    }
+  } else durableSnap = new Map();
+  return { stores, durable: durableSnap };
+}
+
 /**
  * Wipe / replace-wallet: forgets every record (every per-record key in
  * live storage and in the IndexedDB copy, the former v2 key and v1 session
@@ -614,22 +674,24 @@ function inflightEntryAt(storage: KVStorage, key: string): EthUnknownRecord | nu
  * Keys saved after the snapshot (a send that starts meanwhile) are never
  * touched.
  *
- * `recordedUpTo` (ms since epoch; the wipe / replace passes the time it
- * started): a valid record saved after it (ts greater) is kept. Between the
- * keystore transaction committing and this clear running, another tab can
- * restore a wallet and send from it; that send's record belongs to the
- * restored wallet, not the one wiped, and is its only block against paying
- * twice.
+ * `snapshot` (snapshotEthUnknown, taken by the wipe / replace before its
+ * keystore transaction): only keys it holds, each with exactly the value it
+ * holds (in that same store), are removed; every key written or rewritten
+ * after it is kept, whatever its timestamp says. Between the keystore
+ * transaction committing and this clear running, another tab can restore a
+ * wallet and send from it; that send's record belongs to the restored
+ * wallet, not the one wiped, and is its only block against paying twice.
+ * Without a snapshot every record (but a running send's) goes.
  */
-export async function clearAllEthUnknown(opts: { recordedUpTo?: number } = {}): Promise<void> {
-  const upTo = opts.recordedUpTo;
-  /** A valid record under `key` saved after `upTo`: not this clear's. */
-  const newer = (s: KVStorage, key: string): boolean => {
-    if (upTo === undefined) return false;
-    const p = parseRecordKey(key);
-    if (!p) return false;
-    const e = readEntry(s, key, p.network, p.addr);
-    return !!e?.valid && e.rec.ts > upTo;
+export async function clearAllEthUnknown(opts: { snapshot?: EthUnknownSnapshot } = {}): Promise<void> {
+  const snap = opts.snapshot;
+  /** `key`'s entry in `s` is not exactly as the snapshot saw it in the
+   *  same store (created or rewritten after it): not this clear's. */
+  const notSnapshotted = (seen: ReadonlyMap<string, string> | null | undefined, s: KVStorage, key: string): boolean => {
+    if (snap === undefined) return false;
+    if (!seen) return true;
+    const v = seen.get(key);
+    return v === undefined || s.getItem(key) !== v;
   };
   const stores: KVStorage[] = [];
   for (const s of [
@@ -646,13 +708,34 @@ export async function clearAllEthUnknown(opts: { recordedUpTo?: number } = {}): 
   }
   if (fallback) stores.push(fallback);
   const pending: Array<{ rec: EthUnknownRecord; remove: () => Promise<void> }> = [];
+  const kept = new Set<string>();
+  /** Not this clear's (or unreadable while comparing: kept, fail closed). */
+  const skip = (seen: ReadonlyMap<string, string> | null | undefined, s: KVStorage, k: string): boolean => {
+    let out: boolean;
+    try {
+      out = notSnapshotted(seen, s, k);
+    } catch {
+      out = snap !== undefined;
+    }
+    if (out) {
+      // A running send of this tab saved after the snapshot stays this
+      // tab's own.
+      try {
+        const r = inflightEntryAt(s, k);
+        if (r) kept.add(ownKey(r.network, r.hash));
+      } catch {
+        /* ignore */
+      }
+    }
+    return out;
+  };
   for (const s of stores) {
     try {
       for (const k of keysWithPrefix(s, ETH_UNKNOWN_KEY_PREFIX)) {
         let rec: EthUnknownRecord | null = null;
         let value: string | null = null;
+        if (skip(snap?.stores.get(s), s, k)) continue;
         try {
-          if (newer(s, k)) continue;
           value = s.getItem(k);
           rec = inflightEntryAt(s, k);
         } catch {
@@ -684,8 +767,8 @@ export async function clearAllEthUnknown(opts: { recordedUpTo?: number } = {}): 
     await mutateDurable((s) => {
       for (const k of keysWithPrefix(s, "")) {
         let rec: EthUnknownRecord | null = null;
+        if (skip(snap?.durable, s, k)) continue;
         try {
-          if (newer(s, k)) continue;
           rec = inflightEntryAt(s, k);
         } catch {
           rec = null;
@@ -711,7 +794,6 @@ export async function clearAllEthUnknown(opts: { recordedUpTo?: number } = {}): 
   } catch {
     /* IndexedDB failed: its records stay (and keep blocking) */
   }
-  const kept = new Set<string>();
   const active = new Map<string, Promise<boolean>>();
   for (const { rec, remove } of pending) {
     const id = `${rec.network}:${rec.from}:${rec.hash.toLowerCase()}:${rec.owner ?? ""}`;

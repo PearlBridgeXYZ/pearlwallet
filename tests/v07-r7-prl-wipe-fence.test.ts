@@ -10,10 +10,11 @@
 // a possible second payment. The same unscoped clear ran on a wallet
 // replacement (forgetReplacedWalletLocalData).
 //
-// Now one fenced clear (forgetBroadcastRecordsUpTo) runs after the commit,
-// under the broadcast lock: records saved after the wipe started are kept,
-// and when a broadcast was running at that point every "unknown" record is
-// kept too.
+// Now one scoped clear (forgetSnapshotBroadcastRecords; R7: a createdAt
+// fence, R8 Q1: a snapshot of the exact records taken before the keystore
+// transaction) runs after the commit, under the broadcast lock: records
+// saved after the wipe started are kept, and when a broadcast was running at
+// that point every "unknown" record is kept too.
 //
 // Real signer (public "abandon … about" seed), real broadcast path and
 // records; the node is a fetch mock, the wallet's Dexie tables are stubbed
@@ -35,7 +36,8 @@ import {
   BroadcastRefusedError,
   broadcastRecords,
   clearPendingSpends,
-  forgetBroadcastRecordsUpTo,
+  forgetSnapshotBroadcastRecords,
+  snapshotBroadcastRecords,
   unresolvedBroadcasts,
 } from "../src/services/pending-spends";
 import { db, wipeKeystore } from "../src/storage/db";
@@ -191,17 +193,22 @@ describe("R7 P1 — the wipe's cleanup keeps Pearl broadcast records it doesn't 
     expect(storedRecords().map((r) => [r.txid, r.state])).toEqual([[f.txid, "unknown"]]);
   });
 
-  it("forgets records saved up to the fence, keeps later ones (no lock contention)", async () => {
+  // Updated (R8 Q1): the fence is the snapshot, not createdAt.
+  it("forgets the snapshot's records, keeps later ones (no lock contention)", async () => {
     useFakeLocks();
     const fence = Date.now();
     seedRecords([
       rec({ txid: "a1".repeat(32), inputs: [`${"01".repeat(32)}:0`], createdAt: fence - 10, state: "unknown" }),
       rec({ txid: "a2".repeat(32), inputs: [`${"02".repeat(32)}:0`], createdAt: fence, state: "accepted" }),
+    ]);
+    const snap = snapshotBroadcastRecords();
+    seedRecords([
+      ...storedRecords(),
       rec({ txid: "a3".repeat(32), inputs: [`${"03".repeat(32)}:0`], createdAt: fence + 1, state: "unknown" }),
     ]);
-    await expect(forgetBroadcastRecordsUpTo(fence)).resolves.toBe("cleared");
+    await expect(forgetSnapshotBroadcastRecords(snap)).resolves.toBe("cleared");
     expect(storedRecords().map((r) => r.txid)).toEqual(["a3".repeat(32)]);
-    await expect(forgetBroadcastRecordsUpTo(fence + 1)).resolves.toBe("cleared");
+    await expect(forgetSnapshotBroadcastRecords(snapshotBroadcastRecords())).resolves.toBe("cleared");
     expect(localStorage.getItem(BROADCASTS_STORAGE_KEY)).toBeNull();
   });
 
@@ -210,9 +217,10 @@ describe("R7 P1 — the wipe's cleanup keeps Pearl broadcast records it doesn't 
     const locks = useFakeLocks();
     const fence = Date.now();
     seedRecords([rec({ txid: "b1".repeat(32), inputs: [`${"04".repeat(32)}:0`], createdAt: fence - 10, state: "accepted" })]);
+    const snap = snapshotBroadcastRecords();
     const held = deferred();
     void locks.request("pearl-wallet-broadcast", { mode: "exclusive" }, () => held.promise);
-    const p = forgetBroadcastRecordsUpTo(fence);
+    const p = forgetSnapshotBroadcastRecords(snap);
     await vi.advanceTimersByTimeAsync(16_000);
     await expect(p).resolves.toBe("kept");
     expect(storedRecords()).toHaveLength(1);
@@ -224,8 +232,8 @@ describe("R7 P1 — the wipe's cleanup keeps Pearl broadcast records it doesn't 
     const dbs = readFileSync("src/storage/db.ts", "utf8");
     expect(ws).not.toMatch(/clearPendingSpends\(/);
     expect(dbs).not.toMatch(/^\s*"pearl-wallet-broadcasts-v1",/m);
-    expect(ws.match(/await forgetBroadcastRecordsUpTo\(startedAt\);/g)).toHaveLength(1);
-    expect(dbs.match(/await forgetBroadcastRecordsUpTo\(startedAt\);/g)).toHaveLength(1);
+    expect(ws.match(/await forgetSnapshotBroadcastRecords\(snapshot\.prl\);/g)).toHaveLength(1);
+    expect(dbs.match(/await forgetSnapshotBroadcastRecords\(prlSnapshot\);/g)).toHaveLength(1);
     // The unconditional reset is for tests only: no app code calls it.
     const callers = (readdirSync("src", { recursive: true }) as string[])
       .filter((p) => /\.tsx?$/.test(p) && p !== join("services", "pending-spends.ts"))

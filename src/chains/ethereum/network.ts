@@ -6,6 +6,15 @@ export function ethChain(net: EthNetwork): Chain {
   return net === "mainnet" ? mainnet : sepolia;
 }
 
+/** The EIP-155 chain id each wallet ETH network signs for. The signing
+ *  service passes the wallet network's id to the worker (EthTxRequest
+ *  .expectedChainId), which signs only for one of these and only when the
+ *  transaction's chainId equals it. */
+export const ETH_CHAIN_ID: Record<EthNetwork, number> = {
+  mainnet: 1,
+  sepolia: 11155111,
+};
+
 export const ETH_RPC_PRIMARY: Record<EthNetwork, string> = {
   mainnet: "https://ethereum-rpc.publicnode.com",
   sepolia: "https://ethereum-sepolia-rpc.publicnode.com",

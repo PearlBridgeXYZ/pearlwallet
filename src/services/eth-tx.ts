@@ -13,7 +13,7 @@ import {
 } from "viem";
 import { ethClient } from "../chains/ethereum/rpc";
 import { bridgeConfig } from "./bridge";
-import type { EthNetwork } from "../chains/ethereum/network";
+import { ETH_CHAIN_ID, type EthNetwork } from "../chains/ethereum/network";
 import { cryptoWorker } from "../crypto/worker-client";
 import type { EthTxRequest } from "../crypto/worker";
 import {
@@ -549,6 +549,7 @@ export async function sendNative(p: SendNativeParams): Promise<SendResult> {
   }
   return await signAndBroadcast(p.network, p.from, "ETH transfer", (nonce) => ({
     chainId,
+    expectedChainId: ETH_CHAIN_ID[p.network],
     nonce,
     to: p.to,
     value: p.value.toString(),
@@ -588,6 +589,7 @@ export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
   }
   return await signAndBroadcast(p.network, p.from, "WPRL transfer", (nonce) => ({
     chainId,
+    expectedChainId: ETH_CHAIN_ID[p.network],
     nonce,
     to: cfg.wprl,
     value: "0",
@@ -821,6 +823,7 @@ async function sendContractCall(
   }
   return await signAndBroadcast(network, from, what, (nonce) => ({
     chainId,
+    expectedChainId: ETH_CHAIN_ID[network],
     nonce,
     to,
     value: "0",

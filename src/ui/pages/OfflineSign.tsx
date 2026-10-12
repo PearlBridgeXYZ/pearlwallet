@@ -26,7 +26,13 @@ import AnimatedPayloadQR from "../components/AnimatedPayloadQR";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { cryptoWorker } from "../../crypto/worker-client";
-import { broadcastSignedPearlTx, composePearlSend, DUST_LIMIT_GRAINS } from "../../services/pearl-tx";
+import {
+  broadcastSignedPearlTx,
+  composePearlSend,
+  DUST_LIMIT_GRAINS,
+  p2trKeyPathVsize,
+  PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE,
+} from "../../services/pearl-tx";
 import { dustErrorMessage } from "../pearl-messages";
 import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
 import { PendingSpendConflictError } from "../../services/pending-spends";
@@ -134,6 +140,31 @@ export function offlineAmountGrains(text: string): bigint | null {
   }
 }
 
+/**
+ * The manual composer's fee when the fee field is left empty: the exact
+ * size of this spend (p2trKeyPathVsize: `numInputs` key-path inputs, the
+ * payment, and a change output when one is left) at Send's default feerate
+ * (PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE). Without a change output (what is
+ * left would be dust) everything left over is the fee, as in Send; if the
+ * inputs can't cover the payment plus the one-output fee, that fee is
+ * returned and planManualSpend refuses "Insufficient".
+ */
+export function manualDefaultFeeGrains(numInputs: number, totalInGrains: bigint, amountGrains: bigint): bigint {
+  const rate = PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE;
+  const withChange = p2trKeyPathVsize(numInputs, 2) * rate;
+  if (totalInGrains - amountGrains - withChange >= DUST_LIMIT_GRAINS) return withChange;
+  const single = p2trKeyPathVsize(numInputs, 1) * rate;
+  const rest = totalInGrains - amountGrains;
+  return rest >= single ? rest : single;
+}
+
+/** The fee text planManualSpend gets: what the user typed, or (field left
+ *  empty) manualDefaultFeeGrains. Never a fixed default. */
+export function manualFeeInput(feeText: string, numInputs: number, totalInGrains: bigint, amountGrains: bigint): string {
+  if (feeText.trim() !== "") return feeText;
+  return manualDefaultFeeGrains(numInputs, totalInGrains, amountGrains).toString();
+}
+
 function ComposeTab({ pool, network }: ComposeTabProps) {
   const changePool = useWallet((s) => s.addresses?.pearlChange);
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
@@ -141,7 +172,9 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
   const [destination, setDestination] = useState("");
   const [amountPrl, setAmountPrl] = useState("");
   const [manualUtxoText, setManualUtxoText] = useState("");
-  const [feeGrainsInput, setFeeGrainsInput] = useState("500000");
+  // Empty: the fee is computed for the entered inputs and outputs at the
+  // default feerate (manualDefaultFeeGrains), never a fixed amount.
+  const [feeGrainsInput, setFeeGrainsInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [payload, setPayload] = useState<PearlUnsignedPayload | null>(null);
@@ -154,6 +187,16 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
   );
 
   const amountGrains = useMemo(() => offlineAmountGrains(amountPrl), [amountPrl]);
+
+  // The fee an empty fee field stands for, once inputs and amount are known.
+  const defaultFeeGrains = useMemo(() => {
+    if (!manualParsed || manualParsed.utxos.length === 0 || amountGrains === null || amountGrains <= 0n) return null;
+    try {
+      return manualDefaultFeeGrains(manualParsed.utxos.length, sumManualUtxoValue(manualParsed.utxos), amountGrains);
+    } catch {
+      return null;
+    }
+  }, [manualParsed, amountGrains]);
 
   async function generateLive() {
     setBusy(true);
@@ -271,7 +314,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
       const { feeGrains, changeGrains } = planManualSpend({
         totalInGrains: totalIn,
         amountGrains,
-        feeInput: feeGrainsInput,
+        feeInput: manualFeeInput(feeGrainsInput, inputs.length, totalIn, amountGrains),
         dustLimitGrains: DUST_LIMIT_GRAINS,
       });
       const changeAddr = pool && pool.length > 0 ? pool[0] : "";
@@ -362,13 +405,20 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
               </div>
             )}
             <label className="mt-3 block text-xs text-text-3 leading-relaxed">
-              Fee (grains, manual)
+              Fee (grains; empty = {String(PEARL_DEFAULT_FEERATE_SATS_PER_VBYTE)} sat/vB for this transaction)
               <input
                 className="input mt-2 w-full font-mono tabular-nums sm:w-48"
+                inputMode="numeric"
+                placeholder={defaultFeeGrains !== null ? defaultFeeGrains.toString() : "auto"}
                 value={feeGrainsInput}
                 onChange={(e) => setFeeGrainsInput(e.target.value)}
               />
             </label>
+            {feeGrainsInput.trim() === "" && defaultFeeGrains !== null && (
+              <p className="mt-1 text-xs text-text-3 leading-relaxed tabular-nums">
+                Fee: {defaultFeeGrains.toString()} grains ({grainsToPrl(defaultFeeGrains)} PRL)
+              </p>
+            )}
           </>
         )}
       </div>

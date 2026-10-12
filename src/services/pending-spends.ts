@@ -55,6 +55,10 @@ export interface BroadcastRecord {
   kind: BroadcastKind;
   createdAt: number;
   state: "unknown" | "accepted";
+  /** Opaque per-record id (32 hex), set when the record is created; absent
+   *  on records saved by earlier builds. Wipe / replace cleanup identifies
+   *  records by it (with their whole content), never by createdAt. */
+  id?: string;
 }
 
 export interface BroadcastPlan {
@@ -128,7 +132,8 @@ function isRecord(e: unknown): e is BroadcastRecord {
     (x.amountGrains === null || (isStr(x.amountGrains) && /^\d+$/.test(x.amountGrains))) &&
     KINDS.includes(x.kind) &&
     typeof x.createdAt === "number" && Number.isFinite(x.createdAt) &&
-    (x.state === "unknown" || x.state === "accepted")
+    (x.state === "unknown" || x.state === "accepted") &&
+    (x.id === undefined || (isStr(x.id) && /^[0-9a-f]{32}$/.test(x.id)))
   );
 }
 
@@ -192,9 +197,10 @@ export async function resetUnreadableBroadcastRecord(): Promise<void> {
 }
 
 /** Unconditional reset of the whole store: TESTS ONLY. App code (wipe,
- *  wallet replacement) uses forgetBroadcastRecordsUpTo, which never removes
- *  a record saved after the wipe / replace started (another tab's new
- *  wallet's send) nor one an active send may still own. */
+ *  wallet replacement) uses snapshotBroadcastRecords +
+ *  forgetSnapshotBroadcastRecords, which never remove a record saved or
+ *  rewritten after the wipe / replace started (another tab's new wallet's
+ *  send) nor one an active send may still own. */
 export function clearPendingSpends(): void {
   try {
     localStorage.removeItem(BROADCASTS_STORAGE_KEY);
@@ -205,40 +211,97 @@ export function clearPendingSpends(): void {
   notify();
 }
 
-/** What forgetBroadcastRecordsUpTo did: "cleared" every record saved up to
- *  the fence (and an unreadable store); "kept-unknown" the same but kept
- *  every "unknown" record (a broadcast was running when the clear began);
- *  "kept" nothing removed (the lock wasn't granted, or the write failed). */
+/** The exact records stored when a wipe / replace started (see
+ *  snapshotBroadcastRecords). Opaque to callers. */
+export interface BroadcastSnapshot {
+  /** Each record's identity + content: its id (or, on a record saved by an
+   *  earlier build, txid and createdAt) and every field, serialized. */
+  readonly records: ReadonlySet<string>;
+  /** The raw stored value when it was unreadable then, else null. */
+  readonly unreadableRaw: string | null;
+}
+
+/** A record's identity and content. Two records match only when every
+ *  field is the same, the per-record id (when present) included: a record
+ *  created later, or an earlier one rewritten (e.g. "unknown" → "accepted"),
+ *  never matches a snapshot entry, whatever its timestamps say. */
+const recordFingerprint = (r: BroadcastRecord): string => JSON.stringify(r);
+
+/**
+ * Wipe / replacement, BEFORE its keystore transaction: the exact records
+ * stored now. forgetSnapshotBroadcastRecords later removes only these.
+ * A store that can't be read at all gives an empty snapshot (nothing will
+ * be removed: fail closed). Never throws.
+ */
+export function snapshotBroadcastRecords(): BroadcastSnapshot {
+  let raw: string | null;
+  try {
+    raw = localStorage.getItem(BROADCASTS_STORAGE_KEY);
+  } catch {
+    return { records: new Set(), unreadableRaw: null };
+  }
+  const records = tryRead();
+  if (records === null) return { records: new Set(), unreadableRaw: raw };
+  return { records: new Set(records.map(recordFingerprint)), unreadableRaw: null };
+}
+
+/** What forgetSnapshotBroadcastRecords did: "cleared" every snapshot
+ *  record still unchanged (and an unreadable store unchanged since the
+ *  snapshot); "kept-unknown" the same but kept every "unknown" record (a
+ *  broadcast was running when the clear began); "kept" nothing removed
+ *  (the lock wasn't granted, or the write failed). */
 export type ForgetBroadcastsResult = "cleared" | "kept-unknown" | "kept";
 
 /**
  * Wallet wipe / replacement, after its keystore transaction committed:
- * forgets the broadcast records that existed when it started — those with
- * createdAt ≤ `recordedUpTo` — and keeps every later one. Between that
- * commit and this clear another tab can restore (or unlock) a wallet and
- * broadcast from it; that record (often "unknown") is the new wallet's only
- * block against paying twice with different coins, so it is never removed.
+ * forgets the broadcast records `snapshot` (snapshotBroadcastRecords, taken
+ * before that transaction) saw, each only while it is still exactly as seen
+ * (same id and content), and keeps every other one. Between that commit and
+ * this clear another tab can restore (or unlock) a wallet and broadcast from
+ * it; that record (often "unknown") is the new wallet's only block against
+ * paying twice with different coins, so it is never removed — whatever its
+ * createdAt (a clock moved back, or the same millisecond, does not matter:
+ * ownership is the snapshot, not the wall clock).
  *
  * Read, compare and write run under the broadcast lock (every broadcast
  * holds it from signing until its outcome is saved), so no record is
  * rewritten away under a running send:
- *  - lock free at once: no broadcast is running anywhere; records up to
- *    the fence go (an unreadable store goes too: no valid record can be
- *    saved into one);
+ *  - lock free at once: no broadcast is running anywhere; the snapshot's
+ *    unchanged records go (a store unreadable at the snapshot and still
+ *    holding the very same value goes too: no valid record can be saved
+ *    into one);
  *  - lock held (a broadcast is running, possibly one that recorded before
- *    the fence and will end status-unknown): wait for it (bounded), then
- *    forget only "accepted" records up to the fence and keep every
+ *    the snapshot and will end status-unknown): wait for it (bounded), then
+ *    forget only the snapshot's unchanged "accepted" records and keep every
  *    "unknown" one — the banner lists them (Check status / Release);
  *  - not granted (busy, a second tab without Web Locks) or a write that
  *    fails: nothing is removed (fail closed).
- * A clock moved back can make a later record look older (as for the
- * Ethereum records' fence). Never throws.
+ * Never throws.
  */
-export async function forgetBroadcastRecordsUpTo(recordedUpTo: number): Promise<ForgetBroadcastsResult> {
+export async function forgetSnapshotBroadcastRecords(snapshot: BroadcastSnapshot): Promise<ForgetBroadcastsResult> {
   const prune = (keepUnknown: boolean) => async (): Promise<ForgetBroadcastsResult> => {
     const records = tryRead();
-    const keep = records?.filter((r) => r.createdAt > recordedUpTo || (keepUnknown && r.state === "unknown")) ?? [];
-    if (records !== null && keep.length === records.length) {
+    if (records === null) {
+      // Unreadable now: removed only if it is the very value the snapshot
+      // found unreadable (anything else may be newer: kept, fail closed).
+      let raw: string | null;
+      try {
+        raw = localStorage.getItem(BROADCASTS_STORAGE_KEY);
+      } catch {
+        throw storageError("the broadcast record can't be read");
+      }
+      if (snapshot.unreadableRaw === null || raw !== snapshot.unreadableRaw) throw storageError("the broadcast record changed");
+      try {
+        localStorage.removeItem(BROADCASTS_STORAGE_KEY);
+      } catch {
+        throw storageError("the broadcast record can't be removed");
+      }
+      updateFailed = false;
+      notify();
+      return keepUnknown ? "kept-unknown" : "cleared";
+    }
+    const keep = records.filter((r) => !snapshot.records.has(recordFingerprint(r)) || (keepUnknown && r.state === "unknown"));
+    if (keep.length === records.length) {
       // Nothing to forget (the read also dropped expired "accepted" ones;
       // leaving them stored is harmless).
       notify();
@@ -333,6 +396,13 @@ export function assertBroadcastAllowed(plan: BroadcastPlan, txid: string | null,
   return records;
 }
 
+/** 128 random bits, hex: a record's identity (BroadcastRecord.id). */
+function newRecordId(): string {
+  const b = new Uint8Array(16);
+  globalThis.crypto.getRandomValues(b);
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+}
+
 /** Records `txid` as "unknown" BEFORE submission; true when this call made
  *  the record (false: the same bytes were recorded before). Throws a
  *  refusal when it can't be stored — then nothing may be sent. */
@@ -352,6 +422,7 @@ export function recordBroadcast(txid: string, plan: BroadcastPlan, now: number =
       kind: plan.kind,
       createdAt: now,
       state: "unknown",
+      id: newRecordId(),
     },
   ]);
   return true;

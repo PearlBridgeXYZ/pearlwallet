@@ -5,8 +5,8 @@ import { cryptoWorker } from "../crypto/worker-client";
 import { MAX_ADDRESSES_PER_BRANCH, RECEIVE_GAP_LIMIT, type HdBranch } from "../crypto/hd";
 import { monotonicNow } from "../lib/monotonic";
 import { clearBalanceMemory } from "./balance-memory";
-import { forgetBroadcastRecordsUpTo } from "../services/pending-spends";
-import { clearAllEthUnknown } from "./eth-unknown";
+import { forgetSnapshotBroadcastRecords, snapshotBroadcastRecords, type BroadcastSnapshot } from "../services/pending-spends";
+import { clearAllEthUnknown, snapshotEthUnknown, type EthUnknownSnapshot } from "./eth-unknown";
 import {
   loadKeystore,
   replaceKeystoreBlob,
@@ -357,16 +357,29 @@ function replacedOtherWallet(existing: KeystoreRecord | undefined, next: Keystor
   );
 }
 
+interface ReplacedWalletSnapshot {
+  eth: EthUnknownSnapshot;
+  prl: BroadcastSnapshot;
+}
+
+/** The send records stored when the replace starts (before its keystore
+ *  transaction): the only ones forgetReplacedWalletLocalData may remove. */
+async function snapshotReplacedWalletLocalData(): Promise<ReplacedWalletSnapshot> {
+  const eth = await snapshotEthUnknown();
+  return { eth, prl: snapshotBroadcastRecords() };
+}
+
 /** The replaced wallet's broadcast records (its coins and payees) and its
  *  Ethereum "may already be sent" records: they belong to addresses the new
  *  wallet does not hold. (An in-flight Ethereum record whose send in another
  *  tab may still be running stays: see clearAllEthUnknown.) */
-async function forgetReplacedWalletLocalData(startedAt: number): Promise<void> {
-  // Records saved after the replace started (the new wallet's sends, in
-  // another tab) are kept — Pearl ones under the broadcast lock, with an
-  // active send's "unknown" records kept too (forgetBroadcastRecordsUpTo).
-  await clearAllEthUnknown({ recordedUpTo: startedAt });
-  await forgetBroadcastRecordsUpTo(startedAt);
+async function forgetReplacedWalletLocalData(snapshot: ReplacedWalletSnapshot): Promise<void> {
+  // Records saved or rewritten after the snapshot (the new wallet's sends,
+  // in another tab) are kept whatever their timestamps — Pearl ones under
+  // the broadcast lock, with an active send's "unknown" records kept too
+  // (forgetSnapshotBroadcastRecords).
+  await clearAllEthUnknown({ snapshot: snapshot.eth });
+  await forgetSnapshotBroadcastRecords(snapshot.prl);
 }
 
 export const useWallet = create<WalletState>((set, get) => ({
@@ -521,9 +534,9 @@ export const useWallet = create<WalletState>((set, get) => ({
           // opened over (opts.observedBlob), not one read after the click: a
           // different wallet installed (or a wipe) by another tab while the
           // dialog was open or the worker ran is never erased by this consent.
-          const replaceStartedAt = Date.now();
+          const replaceSnapshot = await snapshotReplacedWalletLocalData();
           if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
-          if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData(replaceStartedAt);
+          if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData(replaceSnapshot);
         } else if (!(await addKeystoreIfAbsent(rec))) {
           walletCreatedElsewhere();
         }
@@ -586,9 +599,9 @@ export const useWallet = create<WalletState>((set, get) => ({
           // opened over (opts.observedBlob), not one read after the click: a
           // different wallet installed (or a wipe) by another tab while the
           // dialog was open or the worker ran is never erased by this consent.
-          const replaceStartedAt = Date.now();
+          const replaceSnapshot = await snapshotReplacedWalletLocalData();
           if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
-          if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData(replaceStartedAt);
+          if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData(replaceSnapshot);
         } else if (!(await addKeystoreIfAbsent(rec))) {
           walletCreatedElsewhere();
         }
@@ -788,7 +801,7 @@ export const useWallet = create<WalletState>((set, get) => ({
       // their only post-commit clear. A second clear here would remove such
       // a record once its send ended status-unknown, and a retry after
       // restoring the same wallet could pay twice.
-      // Pearl broadcast records: likewise wipeKeystore's fenced clear is
+      // Pearl broadcast records: likewise wipeKeystore's snapshot-scoped clear is
       // their only one (an unconditional clear here would remove a record a
       // wallet restored in another tab saved meanwhile). Lock keeps them on
       // purpose: a lock must not forget a broadcast whose fate is unknown.

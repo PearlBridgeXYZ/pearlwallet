@@ -33,6 +33,7 @@ import { encryptPlaintext, decryptBlob, type EncryptedBlob } from "./keystore";
 import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm, clearBtxAccountSecrets } from "../chains/btx/derive";
 import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
+import { ETH_CHAIN_ID } from "../chains/ethereum/network";
 import { assertBtxUiEnabled } from "../lib/features";
 import { MAX_VAULT_INPUTS, vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
@@ -205,6 +206,10 @@ function blobFromJSON(j: BlobJSON): EncryptedBlob {
 // thread.
 export interface EthTxRequest {
   chainId: number;
+  /** The chain id of the wallet's ETH network (ETH_CHAIN_ID), passed by the
+   *  signing service: the worker refuses (E_TX_CHAIN) unless `chainId`
+   *  equals it and it is one of the wallet's networks. */
+  expectedChainId: number;
   nonce: number;
   to: `0x${string}`;
   value: string; // bigint as decimal string (postMessage-safe)
@@ -510,11 +515,22 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       const t = msg.tx;
       if (
         typeof t.chainId !== "number" ||
-        typeof t.nonce !== "number" ||
+        !Number.isSafeInteger(t.nonce) ||
+        t.nonce < 0 ||
         typeof t.to !== "string" ||
-        !/^0x[0-9a-fA-F]{40}$/.test(t.to)
+        !/^0x[0-9a-fA-F]{40}$/.test(t.to) ||
+        (t.data !== undefined && (typeof t.data !== "string" || !/^0x([0-9a-fA-F]{2})*$/.test(t.data)))
       ) {
         throw new Error("E_TX_SHAPE");
+      }
+      // Signs only for the wallet's own ETH network: the chain id the
+      // service expects for it, which must be one of the wallet's networks.
+      if (
+        !Number.isSafeInteger(t.expectedChainId) ||
+        !Object.values(ETH_CHAIN_ID).includes(t.expectedChainId) ||
+        t.chainId !== t.expectedChainId
+      ) {
+        throw new Error("E_TX_CHAIN");
       }
       // The privateKey passed to viem must be a 0x-prefixed 64-hex-char
       // string. We re-encode from the session bytes each call rather

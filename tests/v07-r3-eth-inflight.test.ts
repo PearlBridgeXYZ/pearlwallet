@@ -459,11 +459,13 @@ describe("R4 — a wipe while another tab's send is in flight keeps that send's 
   it("the wallet store awaits the clear on replace; the wipe's clear is wipeKeystore's only", async () => {
     const fs = await import("node:fs");
     const ws = fs.readFileSync("src/state/wallet-store.ts", "utf8");
-    expect(ws.match(/await forgetReplacedWalletLocalData\(replaceStartedAt\);/g)).toHaveLength(2);
+    // Updated (R8 Q1): the clear is scoped by a snapshot taken before the
+    // keystore transaction, not by a wall-clock fence.
+    expect(ws.match(/await forgetReplacedWalletLocalData\(replaceSnapshot\);/g)).toHaveLength(2);
     // One call (forgetReplacedWalletLocalData), awaited; none in wipe().
     expect(ws.match(/clearAllEthUnknown\(/g)).toHaveLength(1);
-    expect(ws.match(/await clearAllEthUnknown\(\{ recordedUpTo: startedAt \}\);/g)).toHaveLength(1);
+    expect(ws.match(/await clearAllEthUnknown\(\{ snapshot: snapshot\.eth \}\);/g)).toHaveLength(1);
     const db = fs.readFileSync("src/storage/db.ts", "utf8");
-    expect(db.match(/await clearAllEthUnknown\(\{ recordedUpTo: startedAt \}\);/g)).toHaveLength(1);
+    expect(db.match(/await clearAllEthUnknown\(\{ snapshot: ethSnapshot \}\);/g)).toHaveLength(1);
   });
 });
