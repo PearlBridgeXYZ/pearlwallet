@@ -5,7 +5,6 @@ import { AUTO_LOCK_MS } from "../../state/wallet-store";
 import { monotonicNow } from "../../lib/monotonic";
 
 import { useUI } from "../../state/ui-store";
-import mark from "../assets/brand/pearlbridge-mark.svg";
 
 function formatRemaining(ms: number): string {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -41,8 +40,7 @@ export default function TopBar() {
     <header className="wallet-header">
       <div className="shell-width wallet-header-inner">
         <Link to={status === "unlocked" ? "/dashboard" : "/"} className="tap flex min-w-0 items-center gap-2" aria-label="PearlWallet home">
-          <img src={mark} alt="" width={36} height={36} className="h-9 w-9 shrink-0" />
-          <span className="wallet-wordmark">PearlWallet</span>
+          <span className="wallet-wordmark">pearlwallet<span className="text-accent" aria-hidden="true">_</span></span>
         </Link>
         {status === "unlocked" && (
           <nav className="wallet-nav" aria-label="Wallet">

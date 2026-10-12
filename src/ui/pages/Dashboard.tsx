@@ -49,10 +49,10 @@ export default function Dashboard() {
       </div>
 
       <h1 className="page-title">Your wallet</h1>
-      <div className="card shadow-slabsm sm:shadow-slab">
+      <div className="dashboard-balance">
         <div className="text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Total balance</div>
         {b.totalUsd !== null ? (
-          <div className="mt-3 break-words font-mono text-[38px] font-semibold leading-none tracking-[-.5px] tabular-nums sm:text-5xl">{formatUSD(b.totalUsd)}</div>
+          <div className="dashboard-total break-words font-mono tabular-nums">{formatUSD(b.totalUsd)}</div>
         ) : b.prl.value !== null && b.price.status === "error" ? (
           <div className="mt-3 text-lg text-text-3">— <span className="text-sm">price unavailable</span></div>
         ) : b.prl.status === "error" && !b.scan.running ? (
@@ -82,7 +82,7 @@ export default function Dashboard() {
           {ethEnabled ? "Estimated PRL + WPRL value in USD. ETH for network fees is shown separately." : "Estimated PRL value in USD."}
         </p>
 
-        <div className="mt-6 divide-y divide-line border-y border-line">
+        <div className="dashboard-assets mt-6 divide-y divide-line border-y border-line">
           <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-start gap-4 py-4">
             <div>
               <h2 className="text-sm font-semibold">PRL</h2>
@@ -182,51 +182,35 @@ export default function Dashboard() {
           )}
         </div>
 
-        {ethEnabled ? (
-          <>
-            <div className="mt-5 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <Link to="/send/prl" className="btn-secondary tap">Send PRL</Link>
-              <Link to="/send/wprl" className="btn-secondary tap">Send WPRL</Link>
-              <Link to="/send/eth" className="btn-secondary tap">Send ETH</Link>
-            </div>
-            <div className="mt-2 grid grid-cols-2 gap-2">
-              <Link to="/receive" className="btn-secondary tap">Receive</Link>
-              <Link to="/bridge" className="btn-primary tap">Bridge</Link>
-            </div>
-          </>
-        ) : (
-          <div className="mt-5 grid grid-cols-2 gap-2">
-            <Link to="/send/prl" className="btn-secondary tap">Send PRL</Link>
-            <Link to="/receive" className="btn-secondary tap">Receive</Link>
-          </div>
-        )}
-        {/* Always offered as a quiet link; the Send page surfaces it loudly
-            when a send actually needs more inputs than one transaction allows. */}
-        <div className="mt-2 text-center">
-          <Link to="/consolidate" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">
-            Combine small coins
-          </Link>
-          <p className="text-xs leading-6 text-text-3">Many small payments? Combine them to make sends faster and cheaper.</p>
+        <div className="dashboard-actions">
+          {ethEnabled ? (
+            <details className="dashboard-send">
+              <summary className="bracket-button" aria-label="Send">[ SEND ]</summary>
+              <nav className="dashboard-send-options" aria-label="Send an asset">
+                <Link to="/send/prl">Send PRL</Link>
+                <Link to="/send/wprl">Send WPRL</Link>
+                <Link to="/send/eth">Send ETH</Link>
+              </nav>
+            </details>
+          ) : (
+            <Link to="/send/prl" className="bracket-button" aria-label="Send PRL">[ SEND ]</Link>
+          )}
+          <Link to="/receive" className="bracket-button" aria-label="Receive">[ RECEIVE ]</Link>
+          {ethEnabled && <Link to="/bridge" className="bracket-button" aria-label="Bridge">[ BRIDGE ]</Link>}
         </div>
-        {multisigEnabled && (
-          <div className="mt-2">
-            <Link to="/vaults" className="btn-secondary block w-full text-center">
-              Vaults
-            </Link>
-          </div>
-        )}
-        {offlineSigningEnabled && (
-          <div className="mt-2">
-            <Link to="/offline-sign" className="btn-secondary block w-full text-center">
-              Offline signing <span className="text-xs text-warn">(experimental)</span>
-            </Link>
-          </div>
-        )}
+        {/* Always offered; Send surfaces this when its input limit is reached. */}
+        <div className="dashboard-tools">
+          <Link to="/consolidate">Combine small coins</Link>
+          {multisigEnabled && <Link to="/vaults">Vaults</Link>}
+          {offlineSigningEnabled && (
+            <Link to="/offline-sign">Offline signing <span className="text-warn">(experimental)</span></Link>
+          )}
+        </div>
       </div>
 
-      <div className="mt-8 border-t border-heading pt-4">
+      <div className="mt-8 border-t border-line pt-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Your addresses</h2>
+          <h2 className="text-base font-normal">Your addresses</h2>
           <Link to="/receive" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">View QR</Link>
         </div>
         <div className="mt-3 space-y-3 text-sm">
@@ -239,9 +223,9 @@ export default function Dashboard() {
 
       {btxOn && <BtxCard />}
 
-      <div className="mt-8 border-t border-heading pt-4">
+      <div className="mt-8 border-t border-line pt-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Recent activity</h2>
+          <h2 className="text-base font-normal">Recent activity</h2>
           <Link to="/history" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">See all</Link>
         </div>
         {/* Start the activity scan once the first PRL scan has settled so
