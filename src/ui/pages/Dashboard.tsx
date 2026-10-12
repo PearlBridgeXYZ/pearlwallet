@@ -48,6 +48,7 @@ export default function Dashboard() {
 
       <h1 className="page-title">Your wallet</h1>
       <div className="dashboard-balance">
+        <h2 className="sr-only">Total balance</h2>
         {b.totalUsd !== null ? (
           <div className="dashboard-total break-words font-mono tabular-nums">{formatUSD(b.totalUsd)}</div>
         ) : b.prl.value !== null && b.price.status === "error" ? (
