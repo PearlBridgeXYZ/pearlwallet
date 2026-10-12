@@ -7,6 +7,7 @@ import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { BTX_UI_ENABLED } from "../../lib/features";
 import { pearlParams } from "../../chains/pearl/network";
+import { TIP_POLICY_TEXT } from "../../chains/pearl/tip";
 import { ETH_RPC_PRESETS } from "../../chains/ethereum/network";
 import { passwordAcceptable } from "../../lib/validate";
 
@@ -667,8 +668,7 @@ export default function Settings() {
       <section className="card mb-6">
         <h2 className="border-b border-line pb-3 text-lg font-semibold">Optional developer tip</h2>
         <p className="mt-3 text-sm leading-7 text-text-2">
-          PRL sends can include a <span className="font-medium">0.1%</span> tip
-          to support development, with a minimum of <span className="font-medium">1 PRL</span>.
+          PRL sends can include a tip to support development. {TIP_POLICY_TEXT}{" "}
           The tip is on by default and is shown in the send preview.
         </p>
         <p className="mt-2 text-xs leading-6 text-text-3">
@@ -686,7 +686,7 @@ export default function Settings() {
         <p className="mt-3 text-sm leading-7 text-text-2">
           Status:{" "}
           {tipEnabled
-            ? "Tip on — 0.1%, minimum 1 PRL, shown before sending"
+            ? "Tip on — shown before sending"
             : "Tip off — no developer tip added"}
         </p>
       </section>

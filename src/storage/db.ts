@@ -225,7 +225,7 @@ export async function saveKeystore(record: KeystoreRecord): Promise<void> {
  * empty keystore and then create / restore cannot both succeed — the second
  * write is refused (false) and the first wallet's record is left untouched.
  * Used by create / restore without overwrite consent; the explicit
- * overwrite path keeps using saveKeystore.
+ * overwrite path uses replaceKeystoreIfUnchanged.
  */
 export async function addKeystoreIfAbsent(record: KeystoreRecord): Promise<boolean> {
   return db.transaction("rw", db.keystore, async () => {
@@ -234,6 +234,62 @@ export async function addKeystoreIfAbsent(record: KeystoreRecord): Promise<boole
     await db.keystore.add(record);
     return true;
   });
+}
+
+/**
+ * Explicit replacement (create / restore with overwrite consent) as a
+ * compare-and-replace: the read, the check and the write share one
+ * read-write transaction. `observed` is the stored blob the user saw when
+ * confirming the overwrite, or null when nothing was stored then. The new
+ * record is written only while the stored row is still exactly that (the
+ * same blob, or still absent); otherwise another tab installed, replaced
+ * or wiped a wallet meanwhile, nothing is written and the result is false
+ * — the consent covered the wallet the user saw, not a different one.
+ *
+ * When the new record is a different wallet (another primary Pearl or
+ * Ethereum address, or nothing was stored), the replaced wallet's data goes
+ * in the same transaction, as wipeKeystore clears it: its vaults, their
+ * pending txs, address book, tx cache, bridge crossings and deposit pins.
+ * Otherwise they would show as the new wallet's own (Vaults would list the
+ * old wallet's vaults and mark its pubkey as "mine"). Restoring the same
+ * wallet (same addresses, e.g. under a new password) keeps them. The
+ * caller drops the replaced wallet's localStorage records after commit
+ * (wallet-store: replacedOtherWallet).
+ */
+export async function replaceKeystoreIfUnchanged(
+  record: KeystoreRecord,
+  observed: KeystoreBlobJSON | null,
+): Promise<boolean> {
+  return db.transaction(
+    "rw",
+    [db.keystore, db.addressBook, db.txCache, db.vaults, db.vaultPendingTxs, db.bridgeCrossings, db.bridgeDepositPins],
+    async () => {
+      const rec = await db.keystore.get("primary");
+      if (observed === null ? rec !== undefined : !rec || !sameKeystoreBlob(rec.blob, observed)) return false;
+      await db.keystore.put(record);
+      if (!rec || !sameWalletRecord(rec, record)) {
+        await db.addressBook.clear();
+        await db.txCache.clear();
+        await db.vaults.clear();
+        await db.vaultPendingTxs.clear();
+        await db.bridgeCrossings.clear();
+        await db.bridgeDepositPins.clear();
+      }
+      return true;
+    },
+  );
+}
+
+/** Same wallet: the same primary Pearl and Ethereum addresses (both are
+ *  derived from the seed, so a different seed never matches). */
+export function sameWalletRecord(
+  a: Pick<KeystoreRecord, "publicData">,
+  b: Pick<KeystoreRecord, "publicData">,
+): boolean {
+  return (
+    a.publicData.pearlAddress === b.publicData.pearlAddress &&
+    a.publicData.ethAddress.toLowerCase() === b.publicData.ethAddress.toLowerCase()
+  );
 }
 
 /** `next` when it is at least as long as `stored`, or when the two
@@ -338,6 +394,11 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   "pearl-wallet-pending-releases-v1",
   "pearl-wallet-pending-intents-v1",
   "pearl-wallet-pending-attempts-v1",
+  // Ethereum broadcasts of unknown outcome (state/eth-unknown.ts): public
+  // chain data (address + tx hash), removed because a wipe is the user's
+  // choice to leave nothing behind. The v1 key lived in sessionStorage;
+  // the wallet store's wipe clears that and the in-memory copy.
+  "pearl-wallet-eth-unknown-v2",
   // NOT listed: WALLET_TABS_STORAGE_KEY ("pearl-wallet-tabs-v1"). It is
   // not wallet data but the list of LIVE tabs that the no-Web-Locks
   // single-tab broadcast guard (services/broadcast-lock.ts) relies on;
@@ -351,69 +412,76 @@ const UI_STORAGE_KEY_RE = /^pearl-wallet-ui-v\d+$/;
 export type WipeResult = "wiped" | "changed";
 
 /**
- * Wipes the wallet from this browser. With `expectedBlob` (the ciphertext
- * whose password was just verified) the keystore delete is a compare-and-
- * delete in one read-write transaction: when the stored record holds a
- * different blob (another tab restored / created a wallet or changed the
- * password meanwhile) nothing at all is wiped and the result is "changed".
- * A row already gone (another tab's wipe) still wipes the rest.
+ * Wipes the wallet from this browser. The whole IndexedDB part is ONE
+ * read-write transaction over every store it touches: with `expectedBlob`
+ * (the ciphertext whose password was just verified) it first compares the
+ * stored record — a different blob (another tab restored / created a
+ * wallet or changed the password meanwhile) wipes nothing at all and the
+ * result is "changed" — then deletes the keystore row and clears every
+ * associated table. No other tab can store a wallet (and then a vault,
+ * pending tx, bridge record, ...) between the keystore delete and the
+ * clears, so a wallet restored elsewhere never loses its data to this
+ * wipe. A row already gone (another tab's wipe) still wipes the rest.
+ *
+ * The localStorage scrub runs only after that transaction has committed:
+ * never on a refused compare, and not when the transaction fails
+ * (IndexedDB broken / blocked — the error is rethrown and the wipe reports
+ * failure). A failed transaction deleted nothing, so the wallet is still
+ * here; scrubbing would erase its broadcast-safety records (the Pearl
+ * broadcast records and the Ethereum "may already be sent" blocks) while
+ * its keys remain, and could hit a wallet another tab just stored.
  */
 export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<WipeResult> {
-  // Nothing is wiped (no localStorage scrub either) on a refused compare.
-  let refused = false;
-  // try/finally: a Dexie failure (quota exhaustion, corrupted IDB, locked
-  // store) must NOT prevent the localStorage scrub. Otherwise a "wipe"
-  // can leave the user's prior RPC override behind on the device.
-  try {
-    if (expectedBlob !== undefined) {
-      const deleted = await db.transaction("rw", db.keystore, async () => {
+  const deleted = await db.transaction(
+    "rw",
+    [db.keystore, db.addressBook, db.txCache, db.vaults, db.vaultPendingTxs, db.bridgeCrossings, db.bridgeDepositPins],
+    async () => {
+      if (expectedBlob !== undefined) {
         const rec = await db.keystore.get("primary");
         if (rec && !sameKeystoreBlob(rec.blob, expectedBlob)) return false;
-        await db.keystore.delete("primary");
-        return true;
-      });
-      if (!deleted) {
-        refused = true;
-        return "changed";
       }
-    } else {
       await db.keystore.delete("primary");
+      await db.addressBook.clear();
+      await db.txCache.clear();
+      // Multisig vaults + pending txs hold no key material (the cosigner
+      // pubkey set is public and the PSBT carries only signatures), but
+      // they do reveal vault membership + counterparties. A user issuing
+      // "wipe" expects to leave the device clean.
+      await db.vaults.clear();
+      await db.vaultPendingTxs.clear();
+      // Bridge state reveals bridging history; the deposit-address pin
+      // would otherwise be silently inherited by a wallet re-imported in
+      // the same browser (audit round-2 item 1). Both must go.
+      await db.bridgeCrossings.clear();
+      await db.bridgeDepositPins.clear();
+      return true;
+    },
+  );
+  // Nothing is wiped (no localStorage scrub either) on a refused compare.
+  if (!deleted) return "changed";
+  scrubLocalStorage();
+  return "wiped";
+}
+
+function scrubLocalStorage(): void {
+  if (typeof localStorage === "undefined") return;
+  // Explicit list first (covers the documented keys), then a regex sweep
+  // of any pearl-wallet-ui-vN currently present — future-proof against a
+  // STORAGE_KEY bump that forgets to update the list (audit C2).
+  const keys = new Set<string>(LOCAL_STORAGE_KEYS);
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && UI_STORAGE_KEY_RE.test(k)) keys.add(k);
     }
-    await db.addressBook.clear();
-    await db.txCache.clear();
-    // Multisig vaults + pending txs hold no key material (the cosigner
-    // pubkey set is public and the PSBT carries only signatures), but they
-    // do reveal vault membership + counterparties. A user issuing "wipe"
-    // expects to leave the device clean.
-    await db.vaults.clear();
-    await db.vaultPendingTxs.clear();
-    // Bridge state reveals bridging history; the deposit-address pin would
-    // otherwise be silently inherited by a wallet re-imported in the same
-    // browser (audit round-2 item 1). Both must go on a clean wipe.
-    await db.bridgeCrossings.clear();
-    await db.bridgeDepositPins.clear();
-  } finally {
-    if (!refused && typeof localStorage !== "undefined") {
-      // Explicit list first (covers the documented keys), then a regex sweep
-      // of any pearl-wallet-ui-vN currently present — future-proof against a
-      // STORAGE_KEY bump that forgets to update the list (audit C2).
-      const keys = new Set<string>(LOCAL_STORAGE_KEYS);
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && UI_STORAGE_KEY_RE.test(k)) keys.add(k);
-        }
-      } catch {
-        // length/key access can throw under partitioning; fall back to list.
-      }
-      for (const k of keys) {
-        try {
-          localStorage.removeItem(k);
-        } catch {
-          // localStorage can be partitioned/quota-exhausted; swallow.
-        }
-      }
+  } catch {
+    // length/key access can throw under partitioning; fall back to list.
+  }
+  for (const k of keys) {
+    try {
+      localStorage.removeItem(k);
+    } catch {
+      // localStorage can be partitioned/quota-exhausted; swallow.
     }
   }
-  return "wiped";
 }

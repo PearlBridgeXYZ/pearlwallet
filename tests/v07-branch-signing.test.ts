@@ -107,10 +107,22 @@ function prevoutMap(us: PearlUtxoSpec[]) {
   return new Map(us.map((u) => [`${u.txid}:${u.vout}`, { script: unhex(u.scriptHex), amount: BigInt(u.valueGrains) }]));
 }
 
+describe("signPearlTxWithSeed — the reviewed fee ceiling is mandatory", () => {
+  it("refuses a request without maxFeeGrains (E_FEE_CAP_REQUIRED) and signs with it", () => {
+    const ins = [utxo(0, 0, 50_000n, 9)];
+    const base = { utxos: ins, outputs: [{ address: OTHER_DEST, amountGrains: "40000" }], network: "mainnet" as const };
+    expect(() => signPearlTxWithSeed(seed, base as unknown as PearlTxRequest)).toThrow("E_FEE_CAP_REQUIRED");
+    expect(() => signPearlTxWithSeed(seed, { ...base, maxFeeGrains: undefined } as unknown as PearlTxRequest)).toThrow("E_FEE_CAP_REQUIRED");
+    expect(() => signPearlTxWithSeed(seed, { ...base, maxFeeGrains: "9999" })).toThrow("E_PEARL_FEE_ABOVE_LIMIT");
+    const { raw } = signPearlTxWithSeed(seed, { ...base, maxFeeGrains: "10000" });
+    expect(verifySignatures(raw, prevoutMap(ins))).toBe(1);
+  });
+});
+
 describe("signPearlTxWithSeed — signer mapping", () => {
   it("signs with exactly the (branch, index) key of each input", () => {
     const ins = [utxo(0, 7, 50_000n, 1), utxo(1, 3, 70_000n, 2), utxo(1, 250, 30_000n, 3)];
-    const req: PearlTxRequest = { utxos: ins, outputs: [{ address: OTHER_DEST, amountGrains: "140000" }], network: "mainnet" };
+    const req: PearlTxRequest = { utxos: ins, outputs: [{ address: OTHER_DEST, amountGrains: "140000" }], network: "mainnet", maxFeeGrains: (ins.reduce((a, u) => a + BigInt(u.valueGrains), 0n) - 140_000n).toString() };
     const { raw } = signPearlTxWithSeed(seed, req);
     expect(verifySignatures(raw, prevoutMap(ins))).toBe(3);
     // The verifier discriminates: a different prevout amount (committed in
@@ -129,7 +141,7 @@ describe("signPearlTxWithSeed — signer mapping", () => {
 
 describe("signPearlTxWithSeed — input binding (E_PEARL_FOREIGN_INPUT)", () => {
   const out = [{ address: OTHER_DEST, amountGrains: "1000" }];
-  const sign = (u: PearlUtxoSpec[]) => () => signPearlTxWithSeed(seed, { utxos: u, outputs: out, network: "mainnet" });
+  const sign = (u: PearlUtxoSpec[]) => () => signPearlTxWithSeed(seed, { utxos: u, outputs: out, network: "mainnet", maxFeeGrains: (u.reduce((a, u) => a + BigInt(u.valueGrains), 0n) - 1_000n).toString() });
 
   it("wrong branch for the script → reject", () => {
     expect(sign([utxo(0, 3, 5000n, 1, scriptOf(1, 3))])).toThrow("E_PEARL_FOREIGN_INPUT");

@@ -6,11 +6,12 @@ import { MAX_ADDRESSES_PER_BRANCH, RECEIVE_GAP_LIMIT, type HdBranch } from "../c
 import { monotonicNow } from "../lib/monotonic";
 import { clearBalanceMemory } from "./balance-memory";
 import { clearPendingSpends } from "../services/pending-spends";
+import { clearAllEthUnknown } from "./eth-unknown";
 import {
   loadKeystore,
   replaceKeystoreBlob,
-  saveKeystore,
   addKeystoreIfAbsent,
+  replaceKeystoreIfUnchanged,
   updateKeystoreAddresses,
   wipeKeystore,
   type KeystoreRecord,
@@ -81,12 +82,12 @@ interface WalletState {
   createWallet(
     strength: 128 | 256,
     password: string,
-    opts?: { allowOverwrite?: boolean },
+    opts?: OnboardOptions,
   ): Promise<{ mnemonic: string; addresses: Addresses }>;
   restoreWallet(
     mnemonic: string,
     password: string,
-    opts?: { allowOverwrite?: boolean },
+    opts?: OnboardOptions,
   ): Promise<{ addresses: Addresses }>;
   unlock(password: string): Promise<{ addresses: Addresses }>;
   lock(): Promise<void>;
@@ -210,10 +211,54 @@ function makeAsyncLock() {
 }
 const walletLock = makeAsyncLock();
 
+// Bumped by every lock: lock(), wipe and the forced locks of the
+// cross-tab handlers. lock() does not queue behind walletLock (it must
+// take effect at once), so an unlock can be running while it happens; the
+// unlock captures this at its start and, if it changed by the time it
+// would publish "unlocked", discards its fresh session and stays locked.
+let lockGeneration = 0;
+
+/** Message of an unlock overtaken by a lock (auto-lock, Lock button). */
+export const E_LOCKED_DURING_UNLOCK = "E_LOCKED: the wallet was locked while unlocking";
+
 /** Message of the refusal below; the onboarding pages show it as "a wallet
  *  was created in another tab — reload". It starts with E_WALLET_EXISTS so
  *  existing code matching the prefix still treats it as "a wallet exists". */
 export const E_WALLET_EXISTS_ELSEWHERE = "E_WALLET_EXISTS: a wallet was created in another tab";
+
+/**
+ * Create / restore options. Overwrite consent is bound to the wallet the
+ * user was shown: `observedBlob` is the stored record's blob carried by the
+ * WalletExistsError that opened the "replace existing wallet" dialog (null:
+ * nothing was stored then). The replace happens only while that exact
+ * record is still stored; anything else is E_WALLET_CHANGED, nothing
+ * touched.
+ */
+export type OnboardOptions =
+  | { allowOverwrite?: false }
+  | { allowOverwrite: true; observedBlob: KeystoreBlobJSON | null };
+
+/** Create / restore without overwrite consent while a wallet is stored.
+ *  Carries that wallet's blob, which an overwrite confirmed over it must
+ *  pass back as `observedBlob`. Message "E_WALLET_EXISTS". */
+export class WalletExistsError extends Error {
+  readonly observedBlob: KeystoreBlobJSON;
+  constructor(observedBlob: KeystoreBlobJSON) {
+    super("E_WALLET_EXISTS");
+    this.name = "WalletExistsError";
+    this.observedBlob = observedBlob;
+  }
+}
+
+/** Overwrite consent checked before anything runs: the stored record must
+ *  still be the one the dialog was opened over. Throws (nothing touched,
+ *  no worker reset) otherwise; a caller that did not say which record it
+ *  saw is refused too. */
+function assertOverwriteObserved(existing: KeystoreRecord | undefined, observed: KeystoreBlobJSON | null | undefined): void {
+  if (observed === undefined) throw new Error("E_OVERWRITE_UNBOUND: overwrite consent must name the wallet it was given for");
+  const same = observed === null ? existing === undefined : existing !== undefined && sameKeystoreBlob(existing.blob, observed);
+  if (!same) throw new Error("E_WALLET_CHANGED");
+}
 
 /**
  * Create / restore without overwrite consent found no wallet when it
@@ -227,6 +272,41 @@ export const E_WALLET_EXISTS_ELSEWHERE = "E_WALLET_EXISTS: a wallet was created 
 function walletCreatedElsewhere(): never {
   cryptoWorker.reset();
   throw new Error(E_WALLET_EXISTS_ELSEWHERE);
+}
+
+/**
+ * Create / restore WITH overwrite consent: the stored record is no longer
+ * the one observed when the user confirmed (another tab stored, replaced
+ * or wiped a wallet while this tab derived and encrypted). Nothing was
+ * written. The unsaved worker session is discarded; the page asks for a
+ * reload so the user reviews the wallet now stored before replacing it.
+ */
+function walletChangedDuringOverwrite(): never {
+  cryptoWorker.reset();
+  throw new Error("E_WALLET_CHANGED");
+}
+
+/**
+ * A consented overwrite stored a different wallet than the one replaced
+ * (other primary addresses), or none was stored. replaceKeystoreIfUnchanged
+ * has already cleared the replaced wallet's IndexedDB data (vaults, pending
+ * txs, address book, ...) inside its transaction; this tab then drops its
+ * localStorage records after that commit.
+ */
+function replacedOtherWallet(existing: KeystoreRecord | undefined, next: KeystoreRecord): boolean {
+  return (
+    !existing ||
+    existing.publicData.pearlAddress !== next.publicData.pearlAddress ||
+    existing.publicData.ethAddress.toLowerCase() !== next.publicData.ethAddress.toLowerCase()
+  );
+}
+
+/** The replaced wallet's broadcast records (its coins and payees) and its
+ *  Ethereum "may already be sent" records: they belong to addresses the new
+ *  wallet does not hold. */
+function forgetReplacedWalletLocalData(): void {
+  clearAllEthUnknown();
+  clearPendingSpends();
 }
 
 export const useWallet = create<WalletState>((set, get) => ({
@@ -285,6 +365,7 @@ export const useWallet = create<WalletState>((set, get) => ({
           // status=unlocked but blob=null — wallet "works" until refresh
           // then loses the mnemonic.
           void walletLock(async () => {
+            lockGeneration++;
             if (ev.data.type === "blob-updated") {
               const fresh = await loadKeystore();
               if (fresh) {
@@ -345,8 +426,10 @@ export const useWallet = create<WalletState>((set, get) => ({
       // existing encrypted keystore. Caller must explicitly opt-in by passing
       // allowOverwrite (the UI requires "wipe my wallet" confirmation).
       const existing = await loadKeystore();
-      if (existing && !opts?.allowOverwrite) {
-        throw new Error("E_WALLET_EXISTS");
+      if (!opts?.allowOverwrite) {
+        if (existing) throw new WalletExistsError(existing.blob);
+      } else {
+        assertOverwriteObserved(existing, opts.observedBlob);
       }
       const { pearlNetwork, ethNetwork } = get();
       const out = await cryptoWorker.call<"createWallet", {
@@ -370,7 +453,12 @@ export const useWallet = create<WalletState>((set, get) => ({
         },
       };
       if (opts?.allowOverwrite) {
-        await saveKeystore(rec);
+        // Compare-and-replace against the record the overwrite dialog was
+        // opened over (opts.observedBlob), not one read after the click: a
+        // different wallet installed (or a wipe) by another tab while the
+        // dialog was open or the worker ran is never erased by this consent.
+        if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
+        if (replacedOtherWallet(existing, rec)) forgetReplacedWalletLocalData();
       } else if (!(await addKeystoreIfAbsent(rec))) {
         walletCreatedElsewhere();
       }
@@ -394,8 +482,10 @@ export const useWallet = create<WalletState>((set, get) => ({
   async restoreWallet(mnemonic, password, opts) {
     return walletLock(async () => {
       const existing = await loadKeystore();
-      if (existing && !opts?.allowOverwrite) {
-        throw new Error("E_WALLET_EXISTS");
+      if (!opts?.allowOverwrite) {
+        if (existing) throw new WalletExistsError(existing.blob);
+      } else {
+        assertOverwriteObserved(existing, opts.observedBlob);
       }
       const { pearlNetwork, ethNetwork } = get();
       const out = await cryptoWorker.call<"restoreWallet", {
@@ -419,7 +509,12 @@ export const useWallet = create<WalletState>((set, get) => ({
         },
       };
       if (opts?.allowOverwrite) {
-        await saveKeystore(rec);
+        // Compare-and-replace against the record the overwrite dialog was
+        // opened over (opts.observedBlob), not one read after the click: a
+        // different wallet installed (or a wipe) by another tab while the
+        // dialog was open or the worker ran is never erased by this consent.
+        if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
+        if (replacedOtherWallet(existing, rec)) forgetReplacedWalletLocalData();
       } else if (!(await addKeystoreIfAbsent(rec))) {
         walletCreatedElsewhere();
       }
@@ -442,6 +537,7 @@ export const useWallet = create<WalletState>((set, get) => ({
 
   async unlock(password) {
     return walletLock(async () => {
+      const generation = lockGeneration;
       const { blob, pearlNetwork } = get();
       if (!blob) throw new Error("E_NO_WALLET");
       // Re-derive as many addresses per branch as discovery previously
@@ -523,12 +619,23 @@ export const useWallet = create<WalletState>((set, get) => ({
           if (!saved) await walletChanged(await loadKeystore());
         }
       }
+      if (lockGeneration !== generation) {
+        // lock() (auto-lock, the Lock button) ran while this unlock was
+        // finishing: it already set "locked" and reset the worker, but the
+        // worker session this unlock created may have outlived that reset.
+        // Discard it and stay locked rather than show an unlocked wallet.
+        cryptoWorker.reset();
+        clearBalanceMemory();
+        set({ status: "locked", addresses: null, pearlAddressGeneration: get().pearlAddressGeneration + 1 });
+        throw new Error(E_LOCKED_DURING_UNLOCK);
+      }
       set({ status: "unlocked", addresses: out.addresses, lastActivity: monotonicNow() });
       return { addresses: out.addresses };
     });
   },
 
   async lock() {
+    lockGeneration++;
     await cryptoWorker.call<"lock">("lock", {}).catch(() => undefined);
     cryptoWorker.reset();
     // v0.2.4 (SEC, pass-2 M-2): clear addresses on lock. They survive
@@ -562,11 +669,22 @@ export const useWallet = create<WalletState>((set, get) => ({
         "exportMnemonic",
         { password, blob },
       );
+      lockGeneration++;
       cryptoWorker.reset();
       // Compare-and-delete: only the wallet whose password was just
       // verified is wiped. A stale tab (another tab replaced the record
       // meanwhile) refuses and locks onto the stored record instead.
-      const result = await wipeKeystore(blob);
+      let result: Awaited<ReturnType<typeof wipeKeystore>>;
+      try {
+        result = await wipeKeystore(blob);
+      } catch (e) {
+        // The wipe failed (IndexedDB error): nothing was deleted, but the
+        // worker session is already gone — end locked, not "unlocked"
+        // with no session behind it.
+        clearBalanceMemory();
+        set({ status: "locked", addresses: null, pearlAddressGeneration: get().pearlAddressGeneration + 1 });
+        throw e;
+      }
       if (result === "changed") {
         clearBalanceMemory();
         const fresh = await loadKeystore();
@@ -583,6 +701,10 @@ export const useWallet = create<WalletState>((set, get) => ({
         throw new Error("E_WALLET_WIPED");
       }
       clearBalanceMemory();
+      // Ethereum "may already be sent" records: the localStorage key went
+      // with the scrub; this also drops the in-memory copy and the former
+      // sessionStorage key and re-renders open warnings.
+      clearAllEthUnknown();
       // Broadcast records (wipeKeystore removed the key too; this also
       // re-renders the banner). Lock keeps them on purpose: a lock must not
       // forget a broadcast whose fate is unknown.
@@ -734,3 +856,22 @@ export const useWallet = create<WalletState>((set, get) => ({
     });
   },
 }));
+
+/**
+ * Calls `onChange` once, the first time this tab's view of the stored
+ * wallet (its blob or status) changes after the call — e.g. another tab
+ * replaced, wiped or changed it and broadcast that. The onboarding pages
+ * use it to close an open "replace existing wallet" dialog, so consent is
+ * asked again over the wallet stored now. Returns the unsubscribe.
+ */
+export function subscribeStoredWalletChange(onChange: () => void): () => void {
+  const start = useWallet.getState();
+  let fired = false;
+  const off = useWallet.subscribe((s) => {
+    if (fired || (s.blob === start.blob && s.status === start.status)) return;
+    fired = true;
+    off();
+    onChange();
+  });
+  return off;
+}

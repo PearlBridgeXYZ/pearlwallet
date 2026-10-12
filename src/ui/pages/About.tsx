@@ -1,4 +1,5 @@
 import Page from "../components/Page";
+import { TIP_POLICY_TEXT } from "../../chains/pearl/tip";
 import { BUILD_GIT_SHA, BUILD_TIME, BUILD_VERSION } from "../../build-info";
 
 export default function About() {
@@ -89,9 +90,9 @@ export default function About() {
         <section className="border-t border-heading pt-5">
           <h2 className="text-lg font-semibold">Optional developer tip</h2>
           <p className="mt-3 text-text-2">
-            PRL sends include an optional 0.1% developer tip, with a minimum of
-            1 PRL. It is on by default and can be turned off in Settings. Network
-            and bridge fees are separate.
+            PRL sends include an optional developer tip. {TIP_POLICY_TEXT} It is
+            on by default; you can turn it off for any send or in Settings.
+            Network and bridge fees are separate.
           </p>
         </section>
 

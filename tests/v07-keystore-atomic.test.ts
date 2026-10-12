@@ -270,8 +270,12 @@ describe("S1 — address-list writes keep another tab's password change", () => 
     );
     expect(db).not.toMatch(/db\.keystore\.update\(/);
     const store = readFileSync("src/state/wallet-store.ts", "utf8");
-    // saveKeystore remains only for create / restore (a whole new record).
-    expect(store.match(/await saveKeystore\(/g)).toHaveLength(2);
+    // Create / restore write a whole new record only through the compare-
+    // and-replace (overwrite consent, FZ3) or add-if-absent writers; the
+    // blind saveKeystore put is no longer used by the store.
+    expect(store).not.toMatch(/saveKeystore\(/);
+    expect(store.match(/await replaceKeystoreIfUnchanged\(/g)).toHaveLength(2);
+    expect(store.match(/await addKeystoreIfAbsent\(/g)).toHaveLength(2);
     expect(store).not.toMatch(/db\.keystore\.put/);
     expect(store).not.toMatch(/rec\.publicData\.pearl\w+ = /);
   });

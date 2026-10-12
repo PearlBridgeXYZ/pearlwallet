@@ -29,6 +29,7 @@ import * as workerClient from "../src/crypto/worker-client";
 import { createUnwrapFlow, type UnwrapView } from "../src/ui/pages/bridge-flows";
 import EthBroadcastUnknown, { ethUnknownBlocksSend, type EthUnknownState } from "../src/ui/components/EthBroadcastUnknown";
 import { createElement } from "react";
+import { useFakeLocks } from "./helpers/broadcast-env";
 import { renderToStaticMarkup } from "react-dom/server";
 
 const MNEMONIC =
@@ -120,6 +121,8 @@ const savedProbe = { ...ETH_BROADCAST_PROBE };
 beforeEach(() => {
   records = [];
   ETH_BROADCAST_PROBE.intervalMs = 0;
+  // ETH sends run inside the per-address cross-tab lock (R3 FZ1).
+  useFakeLocks();
   useUI.setState({ ethRpcOverride: undefined } as never);
 });
 afterEach(() => {
@@ -282,7 +285,11 @@ describe("FX1 — ETH broadcast never reports a possibly delivered tx as failed"
 
   it("every ETH send path broadcasts through broadcastRaw", () => {
     const src = fs.readFileSync(path.join(__dirname, "../src/services/eth-tx.ts"), "utf8");
-    expect(src.match(/await broadcastRaw\(/g)?.length).toBe(3);
+    // FZ1: the three senders share signAndBroadcast (unresolved-record
+    // refusal, signing, broadcastRaw), which is the one broadcast site.
+    expect(src.match(/await broadcastRaw\(/g)?.length).toBe(1);
+    expect(src.match(/return await signAndBroadcast\(/g)?.length).toBe(3);
+    expect(src).toMatch(/async function signAndBroadcast\([\s\S]*?await broadcastRaw\(network, raw\)/);
     expect(src).not.toMatch(/sendRawTransaction\(\{[^}]*\}\);\s*\n\}/);
   });
 });
@@ -333,6 +340,33 @@ describe("FX1 UI — status unknown shows the hash + Etherscan and blocks an imm
     expect(html).toMatch(/Check the transaction first/i);
     expect(html).toMatch(/I checked; it was not sent/);
     expect(html).toMatch(/type="checkbox"/);
+  });
+
+  it("an in-flight record whose send is running: no status-unknown alert and nothing to acknowledge (R3 t13)", () => {
+    const other = renderToStaticMarkup(
+      createElement(EthBroadcastUnknown, {
+        network: "mainnet",
+        state: { hash: HASH, what: "ETH transfer", acknowledged: false, sending: "other-tab" },
+        onAcknowledge: () => {},
+      }),
+    );
+    expect(other).toMatch(/Sending from another tab/);
+    expect(other).toMatch(/role="status"/);
+    expect(other).not.toMatch(/role="alert"/);
+    expect(other).not.toMatch(/status unknown/i);
+    expect(other).not.toMatch(/I checked; it was not sent/);
+    expect(other).not.toMatch(/type="checkbox"/);
+    const mine = renderToStaticMarkup(
+      createElement(EthBroadcastUnknown, {
+        network: "mainnet",
+        state: { hash: HASH, what: "ETH transfer", acknowledged: false, sending: "this-tab" },
+        onAcknowledge: () => {},
+      }),
+    );
+    expect(mine).toBe("");
+    // Still blocks another send meanwhile.
+    expect(ethUnknownBlocksSend({ hash: HASH, what: "x", acknowledged: false, sending: "other-tab" })).toBe(true);
+    expect(ethUnknownBlocksSend({ hash: HASH, what: "x", acknowledged: false, sending: "this-tab" })).toBe(true);
   });
 
   it("send is blocked until acknowledged", () => {

@@ -27,11 +27,19 @@ export const WALLET_TABS_STORAGE_KEY = "pearl-wallet-tabs-v1";
 export const LOCK_WAIT_MS = 15_000;
 const LOCK_NAME = "pearl-wallet-broadcast";
 
+/** The cross-tab lock every Ethereum send (ETH, WPRL, approve, burn) from
+ *  this network + address holds from its unresolved-record check through
+ *  nonce read, signing, broadcast and outcome recording (services/eth-tx). */
+export function ethBroadcastLockName(network: string, from: string): string {
+  return `pearl-wallet-eth-broadcast:${network}:${from.toLowerCase()}`;
+}
+
 const busy = () => new BroadcastRefusedError("busy", "E_BROADCAST_BUSY: another wallet tab is broadcasting");
 
 type LockOptions = { mode: "exclusive"; signal?: AbortSignal; ifAvailable?: boolean };
 interface LockManagerLike {
   request<T>(name: string, opts: LockOptions, cb: (lock: unknown) => Promise<T>): Promise<T>;
+  query?: () => Promise<{ held?: Array<{ name?: string }> }>;
 }
 
 function lockManager(): LockManagerLike | null {
@@ -46,10 +54,11 @@ function lockManager(): LockManagerLike | null {
 /** Runs `fn` holding the wallet's exclusive broadcast lock, waiting at most
  *  `waitMs` (with `ifAvailable`: not at all). Not granted → "busy" refusal
  *  and `fn` never runs. Without Web Locks: an in-tab queue with the same
- *  rules plus the single-tab guard below. */
+ *  rules plus the single-tab guard below. `name` picks another lock (the
+ *  Ethereum sends lock per network + address: ethBroadcastLockName). */
 export async function withBroadcastLock<T>(
   fn: () => Promise<T>,
-  opts: { waitMs?: number; ifAvailable?: boolean } = {},
+  opts: { waitMs?: number; ifAvailable?: boolean; name?: string } = {},
 ): Promise<T> {
   const locks = lockManager();
   if (!locks) return withTabGuard(fn, opts);
@@ -58,7 +67,7 @@ export async function withBroadcastLock<T>(
   let granted = false;
   try {
     const how = opts.ifAvailable ? { ifAvailable: true } : { signal: ctrl.signal };
-    return await locks.request(LOCK_NAME, { mode: "exclusive", ...how }, async (lock) => {
+    return await locks.request(opts.name ?? LOCK_NAME, { mode: "exclusive", ...how }, async (lock) => {
       granted = true;
       clearTimeout(timer);
       if (lock === null) throw busy();
@@ -69,6 +78,20 @@ export async function withBroadcastLock<T>(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** With Web Locks: whether some context (any tab) holds lock `name` now.
+ *  Reads navigator.locks.query() (takes nothing); where query is missing,
+ *  tries the lock with `ifAvailable` and lets it go at once. Throws if
+ *  neither works; the caller decides how to fail. */
+export async function webLockHeld(name: string): Promise<boolean> {
+  const locks = lockManager();
+  if (!locks) throw new Error("no Web Locks");
+  if (typeof locks.query === "function") {
+    const snap = await locks.query();
+    return (snap.held ?? []).some((l) => l.name === name);
+  }
+  return locks.request(name, { mode: "exclusive", ifAvailable: true }, async (lock) => lock === null);
 }
 
 // ─── Single-tab guard (no Web Locks) ─────────────────────────────────────
@@ -104,6 +127,20 @@ if (!lockManager() && typeof window !== "undefined" && typeof window.addEventLis
     if ((e as { persisted?: boolean }).persisted !== true) listTabs(others());
   });
   window.addEventListener("pageshow", () => listTabs([...others(), tabId]));
+}
+
+/** This page's id (one per page load), as listed by the single-tab guard
+ *  and as the owner of an in-flight Ethereum broadcast record. */
+export const thisTabId = tabId;
+
+/** Whether this browser has Web Locks (navigator.locks.request). */
+export const hasWebLocks = (): boolean => lockManager() !== null;
+
+/** Without Web Locks: whether tab `id` is (or may be) still open — listed
+ *  by the single-tab guard, or the list is unreadable (fail closed). */
+export function walletTabMayBeOpen(id: string): boolean {
+  const tabs = listedTabs();
+  return tabs === null || tabs.includes(id);
 }
 
 /** Without Web Locks: another wallet tab is (or may be) open. */

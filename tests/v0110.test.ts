@@ -20,7 +20,7 @@ import * as ethRpc from "../src/chains/ethereum/rpc";
 import * as pearlRpc from "../src/services/pearl-rpc";
 import * as workerClient from "../src/crypto/worker-client";
 import * as bridge from "../src/services/bridge";
-import { useMemoryStorage } from "./helpers/broadcast-env";
+import { useFakeLocks, useMemoryStorage } from "./helpers/broadcast-env";
 import { keccak256 } from "viem";
 
 const SIGNED_RAW = "0x02c0ffee" as const;
@@ -70,7 +70,10 @@ describe("v0.1.11 / suggestGas — fee-market sanity ceiling", () => {
 describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // ETH sends run inside the per-address cross-tab lock (R3 FZ1).
+    useFakeLocks();
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("skips re-quote when given a fresh frozen preview", async () => {
     const getTxCount = vi.fn(async () => 7);
@@ -172,7 +175,10 @@ describe("v0.1.11 / sendNative — sign-what-you-saw", () => {
 describe("v0.1.11 / sendWprl — sign-what-you-saw", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    // ETH sends run inside the per-address cross-tab lock (R3 FZ1).
+    useFakeLocks();
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("skips re-quote when given a fresh frozen preview", async () => {
     vi.spyOn(bridge, "bridgeConfig").mockReturnValue({

@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useWallet, E_WALLET_EXISTS_ELSEWHERE } from "../../state/wallet-store";
+import { useWallet, E_WALLET_EXISTS_ELSEWHERE, subscribeStoredWalletChange, WalletExistsError } from "../../state/wallet-store";
+import type { KeystoreBlobJSON } from "../../storage/db";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { passwordAcceptable, passwordStrength } from "../../lib/validate";
 import TopBar from "../components/TopBar";
@@ -28,7 +29,20 @@ export default function OnboardingCreate() {
   // See OnboardingRestore for the rationale — a user creating a fresh wallet
   // may also hit E_WALLET_EXISTS, and the only Settings → Danger Zone path
   // out requires being unlocked. (v0.1.10.)
-  const [overwriteOpen, setOverwriteOpen] = useState(false);
+  // The stored wallet the dialog was opened over (from E_WALLET_EXISTS):
+  // the overwrite replaces only that exact record (else E_WALLET_CHANGED),
+  // and the dialog closes if this tab sees the stored wallet change.
+  const [overwriteOver, setOverwriteOver] = useState<KeystoreBlobJSON | null>(null);
+  const overwriteOpen = overwriteOver !== null;
+  const submittingOverwrite = useRef(false);
+  useEffect(() => {
+    if (!overwriteOver) return;
+    return subscribeStoredWalletChange(() => {
+      if (submittingOverwrite.current) return; // our own replace finishing
+      setOverwriteOver(null);
+      setError("The wallet stored in this browser changed in another tab, so the replace was cancelled and nothing was replaced. Submit again to review the wallet stored now.");
+    });
+  }, [overwriteOver]);
 
   // Generate mnemonic on mount (and on strength change).
   // Timer ref lives outside the async IIFE so the useEffect cleanup can
@@ -87,6 +101,7 @@ export default function OnboardingCreate() {
       return;
     }
     setBusy(true);
+    submittingOverwrite.current = allowOverwrite;
     setError(null);
     try {
       // We already have a mnemonic from step 1 — use restoreWallet path to preserve it.
@@ -94,23 +109,29 @@ export default function OnboardingCreate() {
       // mnemonic so the words shown in step 1 are the words backing the keystore.
       const out = await useWallet
         .getState()
-        .restoreWallet(mnemonic, password, allowOverwrite ? { allowOverwrite: true } : undefined);
+        .restoreWallet(mnemonic, password, allowOverwrite && overwriteOver ? { allowOverwrite: true, observedBlob: overwriteOver } : undefined);
       setAddresses(out.addresses);
-      setOverwriteOpen(false);
+      setOverwriteOver(null);
       setStep("done");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg === E_WALLET_EXISTS_ELSEWHERE) {
         // Another tab stored a wallet while this one was saving: nothing
         // was saved here and the other wallet is untouched.
-        setOverwriteOpen(false);
+        setOverwriteOver(null);
         setError("A wallet was just created in another tab, so nothing was saved here. Reload this page to use that wallet.");
-      } else if (msg === "E_WALLET_EXISTS") {
-        setOverwriteOpen(true);
+      } else if (msg === "E_WALLET_CHANGED") {
+        // Overwrite confirmed, but another tab stored, replaced or removed
+        // a wallet while this one was saving: nothing was saved here.
+        setOverwriteOver(null);
+        setError("The wallet stored in this browser changed in another tab while this one was saving, so nothing was saved and nothing was replaced. Reload this page and check the stored wallet before replacing it.");
+      } else if (e instanceof WalletExistsError) {
+        setOverwriteOver(e.observedBlob);
       } else {
         setError(msg);
       }
     } finally {
+      submittingOverwrite.current = false;
       setBusy(false);
     }
   }
@@ -312,7 +333,7 @@ export default function OnboardingCreate() {
               <div className="mt-4 flex gap-3">
                 <button
                   type="button"
-                  onClick={() => setOverwriteOpen(false)}
+                  onClick={() => setOverwriteOver(null)}
                   disabled={busy}
                   className="btn-secondary flex-1"
                 >

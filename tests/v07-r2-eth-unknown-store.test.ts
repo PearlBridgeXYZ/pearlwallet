@@ -86,19 +86,21 @@ describe("FY5 store logic (pure)", () => {
   });
 });
 
-// sessionStorage double for the live store.
+// localStorage double for the live store (FZ1 moved it from sessionStorage
+// to origin-wide localStorage; this suite's assertions are otherwise
+// unchanged).
 let session: ReturnType<typeof kv>;
 beforeEach(() => {
   session = kv();
-  (globalThis as { sessionStorage?: KVStorage }).sessionStorage = session;
+  (globalThis as { localStorage?: KVStorage }).localStorage = session;
 });
 afterEach(() => {
-  delete (globalThis as { sessionStorage?: KVStorage }).sessionStorage;
+  delete (globalThis as { localStorage?: KVStorage }).localStorage;
   vi.restoreAllMocks();
 });
 
 describe("FY5 live store", () => {
-  it("record / current / clear go through sessionStorage and notify subscribers", () => {
+  it("record / current / clear go through localStorage and notify subscribers", () => {
     const seen = vi.fn();
     const off = subscribeEthUnknown(seen);
     recordEthUnknown({ network: "mainnet", from: ME, hash: H1, what: "WPRL transfer" });

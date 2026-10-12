@@ -66,8 +66,8 @@ describe("Landing page visitor states", () => {
     expect(html).toContain("No paid third-party audit has taken place yet.");
     expect(html).toContain("AI-assisted multi-model reviews");
     expect(html).toContain("36 public review reports");
-    expect(html).toContain("0.1% developer tip, minimum 1 PRL");
-    expect(html).toContain("You can turn it off in Settings.");
+    expect(html).toContain("a flat 1 PRL on sends of 1 to 1,000 PRL, and 0.1% above 1,000 PRL");
+    expect(html).toContain("you can turn it off for any send or in Settings.");
     expect(html).toContain("Experimental, pre-1.0");
     expect(html).not.toMatch(/BTX|trustless|reproducible builds|MIT licensed/i);
   });

@@ -15,6 +15,18 @@ import { bridgeConfig } from "./bridge";
 import type { EthNetwork } from "../chains/ethereum/network";
 import { cryptoWorker } from "../crypto/worker-client";
 import type { EthTxRequest } from "../crypto/worker";
+import {
+  assertNoRunningEthSend,
+  assertNoUnresolvedEthBroadcast,
+  beginEthBroadcast,
+  clearEthUnknown,
+  markEthUnknownSent,
+  recordEthUnknown,
+  unresolvedEthUnknown,
+} from "../state/eth-unknown";
+import { ethBroadcastLockName, withBroadcastLock } from "./broadcast-lock";
+
+export { EthUnresolvedBroadcastError } from "../state/eth-unknown";
 
 export interface GasParams {
   maxFeePerGas: bigint;
@@ -281,6 +293,94 @@ async function txKnownByHash(network: EthNetwork, hash: `0x${string}`): Promise<
   return false;
 }
 
+// Hashes whose mount-time lookup is running (one lookup per hash at a time,
+// e.g. under React StrictMode's double effects or two pages mounting).
+const probing = new Set<string>();
+
+/**
+ * Looks up each unresolved status-unknown record of this network + address
+ * once (the bounded single-attempt client above). A hash the network has
+ * is marked sent ("it was sent") and no longer blocks; one not found keeps
+ * blocking until the user acknowledges it. Never throws.
+ */
+export async function probeEthUnknownRecords(network: EthNetwork, from: string | undefined): Promise<void> {
+  if (!from) return;
+  const recs = unresolvedEthUnknown(network, from);
+  await Promise.all(
+    recs.map(async (r) => {
+      const key = `${network}:${r.hash.toLowerCase()}`;
+      if (probing.has(key)) return;
+      probing.add(key);
+      try {
+        if (await txKnownByHash(network, r.hash)) markEthUnknownSent(network, from, r.hash);
+      } catch {
+        /* lookup failed: keep blocking */
+      } finally {
+        probing.delete(key);
+      }
+    }),
+  );
+}
+
+/**
+ * Sign + broadcast for every ETH send path. Refuses (nothing signed) while
+ * an unresolved status-unknown broadcast is recorded for this network +
+ * address, read from storage shared by every tab, so a page that never
+ * mounted the warning still cannot pay twice.
+ *
+ * Everything from that check to the saved outcome runs inside one
+ * cross-tab exclusive lock for this network + address
+ * (ethBroadcastLockName; broadcast-lock.ts, with its bounded wait and its
+ * fallbacks): no other tab reads a pending nonce, signs or broadcasts from
+ * this address while a broadcast here is in flight — it waits, or is
+ * refused "busy" with nothing signed. The signed tx is recorded (by its
+ * locally computed hash) BEFORE it is submitted, so a tab closed or crashed
+ * mid-submission or mid-lookup still leaves the block; the record is
+ * removed only on a confirmed send or a definitive rejection, and stays
+ * (status unknown) otherwise.
+ */
+async function signAndBroadcast(
+  network: EthNetwork,
+  from: `0x${string}`,
+  what: string,
+  build: (nonce: number) => EthTxRequest,
+): Promise<SendResult> {
+  // Before the lock, an in-flight record whose send may still be running
+  // (another tab) refuses "busy". Inside the lock (no other send running)
+  // every unresolved record refuses, in-flight ones included: their sender
+  // is gone, so their outcome is unknown.
+  assertNoUnresolvedEthBroadcast(network, from, { exceptInflight: true });
+  await assertNoRunningEthSend(network, from);
+  return withBroadcastLock(
+    async () => {
+      assertNoUnresolvedEthBroadcast(network, from);
+      const nonce = await ethClient(network).getTransactionCount({ address: from, blockTag: "pending" });
+      const composed = build(nonce);
+      assertNoUnresolvedEthBroadcast(network, from);
+      const { raw } = await cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", {
+        tx: composed,
+      });
+      const hash = keccak256(raw);
+      assertNoUnresolvedEthBroadcast(network, from);
+      // Throws (nothing sent) if the record can't be saved.
+      beginEthBroadcast({ network, from, hash, what });
+      let outcome: "sent" | "unknown" | "rejected" = "unknown";
+      try {
+        const txHash = await broadcastRaw(network, raw);
+        outcome = "sent";
+        return { txHash, composed };
+      } catch (e) {
+        outcome = e instanceof EthBroadcastStatusUnknownError ? "unknown" : "rejected";
+        throw e;
+      } finally {
+        if (outcome === "unknown") recordEthUnknown({ network, from, hash, what });
+        else clearEthUnknown(network, from, hash);
+      }
+    },
+    { name: ethBroadcastLockName(network, from) },
+  );
+}
+
 /** The JSON-RPC error object of a 2xx response, or null (non-2xx, no
  *  error member, unreadable body). Never throws; reads a clone so viem
  *  still parses the original. */
@@ -358,8 +458,8 @@ async function chainIdFor(network: EthNetwork): Promise<number> {
 }
 
 export async function sendNative(p: SendNativeParams): Promise<SendResult> {
+  assertNoUnresolvedEthBroadcast(p.network, p.from, { exceptInflight: true });
   const chainId = await chainIdFor(p.network);
-  const client = ethClient(p.network);
   let gas: bigint;
   let fees: { maxFeePerGas: bigint; maxPriorityFeePerGas: bigint };
   if (p.frozen) {
@@ -375,8 +475,7 @@ export async function sendNative(p: SendNativeParams): Promise<SendResult> {
       suggestGas(p.network, p.tier),
     ]);
   }
-  const nonce = await client.getTransactionCount({ address: p.from, blockTag: "pending" });
-  const composed: EthTxRequest = {
+  return await signAndBroadcast(p.network, p.from, "ETH transfer", (nonce) => ({
     chainId,
     nonce,
     to: p.to,
@@ -384,12 +483,7 @@ export async function sendNative(p: SendNativeParams): Promise<SendResult> {
     gas: gas.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
-  };
-  const { raw } = await cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", {
-    tx: composed,
-  });
-  const txHash = await broadcastRaw(p.network, raw);
-  return { txHash, composed };
+  }));
 }
 
 export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
@@ -397,8 +491,8 @@ export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
   if (cfg.wprl === "0x0000000000000000000000000000000000000000") {
     throw new Error("E_WPRL_NOT_DEPLOYED");
   }
+  assertNoUnresolvedEthBroadcast(p.network, p.from, { exceptInflight: true });
   const chainId = await chainIdFor(p.network);
-  const client = ethClient(p.network);
   const data = encodeFunctionData({
     abi: erc20Abi,
     functionName: "transfer",
@@ -419,8 +513,7 @@ export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
       suggestGas(p.network, p.tier),
     ]);
   }
-  const nonce = await client.getTransactionCount({ address: p.from, blockTag: "pending" });
-  const composed: EthTxRequest = {
+  return await signAndBroadcast(p.network, p.from, "WPRL transfer", (nonce) => ({
     chainId,
     nonce,
     to: cfg.wprl,
@@ -429,12 +522,7 @@ export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
     gas: gas.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
-  };
-  const { raw } = await cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", {
-    tx: composed,
-  });
-  const txHash = await broadcastRaw(p.network, raw);
-  return { txHash, composed };
+  }));
 }
 
 /**
@@ -611,7 +699,7 @@ export async function approveWprlForBridge(
   p: ContractCallParams & { amount: bigint },
 ): Promise<SendResult> {
   const cfg = bridgeConfig(p.network);
-  return await sendContractCall(p.network, p.from, cfg.wprl, approveCalldata(p.network, p.amount), p.tier, p.ceiling);
+  return await sendContractCall(p.network, p.from, cfg.wprl, approveCalldata(p.network, p.amount), p.tier, p.ceiling, "approval");
 }
 
 /** BridgeController.requestBurn(grossAmount, pearlAddress), signed locally. */
@@ -619,7 +707,7 @@ export async function requestBurn(
   p: ContractCallParams & { amount: bigint; pearlAddress: string },
 ): Promise<SendResult> {
   const cfg = bridgeConfig(p.network);
-  return await sendContractCall(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress), p.tier, p.ceiling);
+  return await sendContractCall(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress), p.tier, p.ceiling, "burn");
 }
 
 async function sendContractCall(
@@ -629,9 +717,10 @@ async function sendContractCall(
   data: Hex,
   tier: FeeTier,
   ceiling: EthGasCeiling,
+  what: string,
 ): Promise<SendResult> {
+  assertNoUnresolvedEthBroadcast(network, from, { exceptInflight: true });
   const chainId = await chainIdFor(network);
-  const client = ethClient(network);
   // 20% headroom (contractGas): requestBurn's gas varies with daily-window
   // storage writes (first burn of a window pays for slot init). An
   // exact-estimate tx that lands second pays slightly less gas but never
@@ -640,8 +729,7 @@ async function sendContractCall(
   if (fees.maxFeePerGas > ceiling.maxFeePerGas || gas * fees.maxFeePerGas > ceiling.maxCostWei) {
     throw new Error("E_ETH_GAS_ABOVE_REVIEW");
   }
-  const nonce = await client.getTransactionCount({ address: from, blockTag: "pending" });
-  const composed: EthTxRequest = {
+  return await signAndBroadcast(network, from, what, (nonce) => ({
     chainId,
     nonce,
     to,
@@ -650,10 +738,5 @@ async function sendContractCall(
     gas: gas.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
-  };
-  const { raw } = await cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", {
-    tx: composed,
-  });
-  const txHash = await broadcastRaw(network, raw);
-  return { txHash, composed };
+  }));
 }

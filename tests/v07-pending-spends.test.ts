@@ -93,7 +93,7 @@ function spec(branch: HdBranch, index: number, value: bigint, n: number): PearlU
 /** A real signed tx: two inputs (txids n0, n0+1), one output to DEST. */
 function signedFixture(n0 = 1) {
   const ins = [spec(0, 1, 60_000n, n0), spec(1, 2, 41_000n, n0 + 1)];
-  const req: PearlTxRequest = { utxos: ins, outputs: [{ address: DEST, amountGrains: "100000" }], network: "mainnet" };
+  const req: PearlTxRequest = { utxos: ins, outputs: [{ address: DEST, amountGrains: "100000" }], network: "mainnet", maxFeeGrains: (ins.reduce((a, u) => a + BigInt(u.valueGrains), 0n) - 100_000n).toString() };
   const { raw } = signPearlTxWithSeed(seed, req);
   return { raw, ins, txid: rawTxId(raw)! };
 }
@@ -239,6 +239,8 @@ describe("G6 — one versioned record, written before submission, failing closed
 
   it("wipe removes the record", async () => {
     addRecord(T, [{ txid: C1, vout: 0 }]);
+    // FZ2: the IndexedDB part of the wipe is one transaction; run its body.
+    vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args[args.length - 1] as () => Promise<unknown>)()) as never);
     for (const t of ["keystore", "addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const) {
       const tbl = db[t] as unknown as { clear?: () => Promise<void>; delete?: () => Promise<void> };
       if (tbl.clear) vi.spyOn(tbl, "clear").mockResolvedValue(undefined as never);
@@ -267,6 +269,7 @@ describe("G1 / G3 — recorded coins stay out of selection; nothing expires an u
       utxos: [f.ins[0]!],
       outputs: [{ address: DEST, amountGrains: "59000" }],
       network: "mainnet",
+      maxFeeGrains: (BigInt(f.ins[0]!.valueGrains) - 59_000n).toString(),
     }).raw;
     calls.length = 0;
     await expect(offline(other)).rejects.toBeInstanceOf(PendingSpendConflictError);

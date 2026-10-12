@@ -13,6 +13,18 @@ vi.mock("../src/storage/db", () => ({
   saveKeystore: async (r: KeystoreRecord) => {
     mem.rec = structuredClone(r);
   },
+  // Mirrors the real compare-and-replace transaction (FZ3).
+  replaceKeystoreIfUnchanged: async (r: KeystoreRecord, observed: KeystoreRecord["blob"] | null) => {
+    const same = !!mem.rec && observed !== null && JSON.stringify(mem.rec.blob) === JSON.stringify(observed);
+    if (observed === null ? mem.rec !== undefined : !same) return false;
+    mem.rec = structuredClone(r);
+    return true;
+  },
+  addKeystoreIfAbsent: async (r: KeystoreRecord) => {
+    if (mem.rec) return false;
+    mem.rec = structuredClone(r);
+    return true;
+  },
   updateKeystoreAddresses: async (
     lists: { pearlAddress: string; pearlAddressPool: string[]; pearlChangePool: string[] },
     expectedPrimary?: string,
@@ -139,13 +151,13 @@ describe("balance memory is cleared with the session", () => {
 
   it("restoring over an existing wallet (wallet switch) clears it", async () => {
     seedMemory();
-    await useWallet.getState().restoreWallet("m", "pw", { allowOverwrite: true });
+    await useWallet.getState().restoreWallet("m", "pw", { allowOverwrite: true, observedBlob: mem.rec?.blob ?? null });
     expect(sizes()).toEqual(EMPTY);
   });
 
   it("creating a wallet over an existing one (wallet switch) clears it", async () => {
     seedMemory();
-    await useWallet.getState().createWallet(128, "pw", { allowOverwrite: true });
+    await useWallet.getState().createWallet(128, "pw", { allowOverwrite: true, observedBlob: mem.rec?.blob ?? null });
     expect(sizes()).toEqual(EMPTY);
   });
 

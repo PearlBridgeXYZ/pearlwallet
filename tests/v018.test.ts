@@ -241,12 +241,13 @@ describe("v0.1.8 / RPC override allowlist (minimax L)", () => {
 });
 
 describe("v0.1.8 / wipeKeystore clears localStorage (opus2 L)", () => {
+  // FZ2 (v0.7 R2): the scrub runs after the single wipe transaction
+  // commits, and no longer when IndexedDB fails (that wipe deleted nothing,
+  // so the wallet and its broadcast-safety records stay). The original
+  // assertion — the key is gone after a wipe — is kept for a wipe that
+  // commits; the node env has no IndexedDB, so the transaction runs its
+  // body against stubbed tables.
   it("removes the pearl-wallet-ui-v3 key from localStorage", async () => {
-    // Test environment lacks both IndexedDB and localStorage. We stub
-    // localStorage with a minimal map, and accept that the Dexie calls
-    // inside wipeKeystore will throw — what we care about is that the
-    // localStorage cleanup happens BEFORE the function returns
-    // successfully OR is wrapped to survive the Dexie failure.
     const store = new Map<string, string>();
     const fakeLocalStorage = {
       getItem(k: string) { return store.has(k) ? store.get(k)! : null; },
@@ -259,13 +260,16 @@ describe("v0.1.8 / wipeKeystore clears localStorage (opus2 L)", () => {
     vi.stubGlobal("localStorage", fakeLocalStorage);
     fakeLocalStorage.setItem("pearl-wallet-ui-v3", JSON.stringify({ theme: "dark" }));
     expect(fakeLocalStorage.getItem("pearl-wallet-ui-v3")).not.toBeNull();
-    // Dexie throws in node-only test env; that's fine — we only care
-    // that the localStorage cleanup is reachable from the same surface.
-    await wipeKeystore().catch(() => undefined);
-    // If Dexie threw before reaching localStorage, this test would fail
-    // and indicate the localStorage cleanup needs to be split out or
-    // ordered before the Dexie calls.
+    const { db } = await import("../src/storage/db");
+    const tx = vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args[args.length - 1] as () => Promise<unknown>)()) as never);
+    const spies = (["keystore", "addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const).map((t) => {
+      const tbl = db[t] as unknown as { clear?: () => Promise<void>; delete?: () => Promise<void> };
+      return vi.spyOn(tbl, t === "keystore" ? ("delete" as never) : ("clear" as never)).mockResolvedValue(undefined as never);
+    });
+    await expect(wipeKeystore()).resolves.toBe("wiped");
     expect(fakeLocalStorage.getItem("pearl-wallet-ui-v3")).toBeNull();
+    tx.mockRestore();
+    for (const sp of spies) sp.mockRestore();
     vi.unstubAllGlobals();
   });
 });

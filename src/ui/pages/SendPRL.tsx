@@ -7,7 +7,7 @@ import { useUI } from "../../state/ui-store";
 import { validPearl } from "../../lib/validate";
 import { formatGrains, parsePRL } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
-import { tipAddressFor } from "../../chains/pearl/tip";
+import { TIP_POLICY_TEXT, tipAddressFor, tipPercentOfSend } from "../../chains/pearl/tip";
 import {
   broadcastPearlPrecomposed,
   composePearlSend,
@@ -465,7 +465,7 @@ export default function SendPRL() {
                 {composed.tipGrains > 0n && (
                   <div>
                     <dt className="text-text-3">
-                      Developer tip (0.1%, min 1 PRL)
+                      Developer tip ({tipPercentOfSend(composed.tipGrains, composed.amountGrains)} of this send)
                     </dt>
                     <dd className="break-words font-mono tabular-nums">{formatGrains(composed.tipGrains)} PRL</dd>
                   </div>
@@ -674,9 +674,7 @@ export default function SendPRL() {
               className="mt-1"
             />
             <span>
-              Include the optional developer tip of{" "}
-              <span className="font-medium">0.1%</span> (min{" "}
-              <span className="font-medium">1 PRL</span>) on this transaction.
+              Include the optional developer tip on this transaction. {TIP_POLICY_TEXT}
               <span className="ml-1 text-xs text-text-3 leading-relaxed">
                 You can turn this off permanently in{" "}
                 <Link to="/settings" className="underline underline-offset-4">Settings</Link>

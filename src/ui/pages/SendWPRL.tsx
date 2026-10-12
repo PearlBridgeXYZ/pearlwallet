@@ -7,6 +7,7 @@ import { resolveEthDestination } from "../../services/ens";
 import { formatWei, formatWprl, parseWPRL } from "../../lib/format";
 import {
   EthBroadcastStatusUnknownError,
+  EthUnresolvedBroadcastError,
   estimateWprlGas,
   evaluateGasCoverage,
   sendWprl,
@@ -15,7 +16,7 @@ import {
 } from "../../services/eth-tx";
 import { fetchEthBalanceWei } from "../../services/balances";
 import { ethTxExplorerUrl } from "../../chains/ethereum/network";
-import EthBroadcastUnknown, { ethUnknownBlocksSend, useEthUnknown } from "../components/EthBroadcastUnknown";
+import EthBroadcastUnknown, { ethRefusalMessage, ethUnknownBlocksSend, ethUnresolvedMessage, useEthUnknown } from "../components/EthBroadcastUnknown";
 
 const GAS_BY_TIER: Record<FeeTier, string> = {
   low: "1 gwei",
@@ -146,6 +147,12 @@ export default function SendWPRL() {
       const msg = e instanceof Error ? e.message : String(e);
       if (e instanceof EthBroadcastStatusUnknownError) {
         setUnknown({ hash: e.hash, what: "WPRL transfer", acknowledged: false });
+      } else if (e instanceof EthUnresolvedBroadcastError) {
+        // Another tab (or an earlier visit) recorded a status-unknown
+        // broadcast from this address; the warning above shows it.
+        setError(ethUnresolvedMessage(ethNetwork, e.hash));
+      } else if (ethRefusalMessage(e)) {
+        setError(ethRefusalMessage(e));
       } else if (msg === "E_PREVIEW_STALE") {
         setError("Fee estimate is stale — re-confirm to refresh the numbers.");
         previewQ.refetch();

@@ -42,7 +42,7 @@ import {
   BroadcastStatusUnknownError,
   type PrlUtxo,
 } from "./pearl-rpc";
-import { broadcastSignedPearlTx, DUST_LIMIT_GRAINS, HistoryIncompleteError } from "./pearl-tx";
+import { broadcastSignedPearlTx, DUST_LIMIT_GRAINS, HistoryIncompleteError, MAX_SEND_INPUTS, TooManyInputsError } from "./pearl-tx";
 import { BroadcastRefusedError, excludePendingSpends } from "./pending-spends";
 import type {
   PearlMultisigComposePsbtRequest,
@@ -114,6 +114,39 @@ function estimateMultisigFee(
     BigInt(numInputs) * perInputVbytes +
     BigInt(numOutputs) * PER_P2TR_OUTPUT_VBYTES;
   return vbytes * feerate;
+}
+
+/** Standard relay limit on a transaction's virtual size: nodes refuse to
+ *  relay anything larger, so a vault spend above it would collect every
+ *  cosigner's signature and then be refused at broadcast. */
+export const MAX_STANDARD_TX_VBYTES = 100_000n;
+
+/**
+ * Most inputs one vault transaction may spend so that its estimated vsize
+ * (the conservative per-input size above, worst case two outputs) stays
+ * under MAX_STANDARD_TX_VBYTES; never above MAX_SEND_INPUTS. 15-of-15
+ * (426 vB/input): 234 inputs; 2-of-3 (110 vB/input): 908 → capped at 500.
+ */
+export function maxVaultInputs(perInputVbytes: bigint): number {
+  const room = MAX_STANDARD_TX_VBYTES - 1n - FIXED_OVERHEAD_VBYTES - 2n * PER_P2TR_OUTPUT_VBYTES;
+  const n = Number(room / perInputVbytes);
+  return Math.max(1, Math.min(n, MAX_SEND_INPUTS));
+}
+
+/** A vault send that needs more coins than one standard-size transaction
+ *  can spend. `maxSendableGrains`: the most one transaction can send now
+ *  (the largest `maxInputs` coins, less their fee). */
+export class VaultTooManyInputsError extends TooManyInputsError {
+  constructor(
+    inputsNeeded: number,
+    maxInputs: number,
+    utxoCount: number,
+    spendableGrains: bigint,
+    maxSendableGrains: bigint,
+  ) {
+    super(inputsNeeded, maxInputs, utxoCount, spendableGrains, maxSendableGrains);
+    this.name = "VaultTooManyInputsError";
+  }
 }
 
 function newUuid(): string {
@@ -405,6 +438,20 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
   let fee = estimateMultisigFee(picked.length, numOutputs, feerate, perInput);
   let need = opts.amountGrains + fee;
   if (sum < need) throw new Error("E_INSUFFICIENT_FUNDS");
+  // Size cap: largest-first selection minimises the input count, so if the
+  // covering prefix is longer than the cap, no selection within it exists.
+  const maxInputs = maxVaultInputs(perInput);
+  if (picked.length > maxInputs) {
+    const top = sorted.slice(0, maxInputs);
+    const topSum = top.reduce((a, u) => a + u.valueGrains, 0n);
+    // Priced with the two-output fee the selection above stops on, so
+    // composing exactly this amount selects these coins (any sub-dust
+    // leftover then goes to the fee as usual).
+    const maxFee = estimateMultisigFee(top.length, 2, feerate, perInput);
+    const maxSendable = topSum > maxFee + DUST_LIMIT_GRAINS ? topSum - maxFee : 0n;
+    const total = sorted.reduce((a, u) => a + u.valueGrains, 0n);
+    throw new VaultTooManyInputsError(picked.length, maxInputs, sorted.length, total, maxSendable);
+  }
 
   let change = sum - need;
   if (change < DUST_LIMIT_GRAINS) {

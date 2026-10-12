@@ -94,7 +94,7 @@ function spec(branch: HdBranch, index: number, value: bigint, n: number): PearlU
 /** A real signed raw tx: two inputs, one output, fee = 1,000 grains. */
 function signedFixture(n0 = 1) {
   const ins = [spec(0, 1, 60_000n, n0), spec(1, 2, 41_000n, n0 + 1)];
-  const req: PearlTxRequest = { utxos: ins, outputs: [{ address: DEST, amountGrains: "100000" }], network: "mainnet" };
+  const req: PearlTxRequest = { utxos: ins, outputs: [{ address: DEST, amountGrains: "100000" }], network: "mainnet", maxFeeGrains: (ins.reduce((a, u) => a + BigInt(u.valueGrains), 0n) - 100_000n).toString() };
   const { raw } = signPearlTxWithSeed(seed, req);
   return { raw, ins, txid: rawTxId(raw)! };
 }

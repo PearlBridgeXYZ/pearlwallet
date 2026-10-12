@@ -50,6 +50,12 @@ function installFakeIdb(db: { transaction: unknown; keystore: unknown }) {
   vi.spyOn(ks as never, "delete" as never).mockImplementation((async () => {
     row.rec = undefined;
   }) as never);
+  // A consented overwrite with a different wallet also clears the replaced
+  // wallet's tables in its transaction (FZ3 round 3): empty here.
+  for (const t of ["addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"]) {
+    const table = (db as unknown as Record<string, unknown>)[t];
+    if (table) vi.spyOn(table as never, "clear" as never).mockImplementation((async () => undefined) as never);
+  }
 }
 
 function deferred<T = void>() {
@@ -157,9 +163,10 @@ describe("FY2 — concurrent create/restore into an empty keystore", () => {
       publicData: { pearlAddress: "o-ext-0", pearlAddressPool: list("o-ext", 20), pearlChangePool: list("o-int", 20), ethAddress: "0x2222222222222222222222222222222222222222", pearlNetwork: "mainnet", ethNetwork: "mainnet", createdAt: 1 },
     };
     A.store.setState({ status: "locked", blob: blob("wallet-old"), addresses: null });
-    await expect(A.store.getState().restoreWallet("words", "pw")).rejects.toThrow("E_WALLET_EXISTS");
+    const exists = await A.store.getState().restoreWallet("words", "pw").catch((e) => e);
+    expect(exists).toBeInstanceOf(A.ws.WalletExistsError);
     expect(row.rec!.blob).toEqual(blob("wallet-old"));
-    await A.store.getState().restoreWallet("words", "pw", { allowOverwrite: true });
+    await A.store.getState().restoreWallet("words", "pw", { allowOverwrite: true, observedBlob: exists.observedBlob });
     expect(row.rec!.blob).toEqual(blob("wallet-new"));
   });
 });

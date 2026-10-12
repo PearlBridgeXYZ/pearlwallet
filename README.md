@@ -24,7 +24,7 @@ Keep your 12- or 24-word phrase somewhere safe. There is no password reset or su
 - **Multisig vaults**: m-of-n Taproot vaults with co-signing.
 - **Offline signing** (experimental, off by default): compose on an online device, sign in the offline build, broadcast from the online device.
 - Combine many small coins into fewer, and see recent activity.
-- An **optional developer tip** on PRL sends: 0.1%, minimum 1 PRL. It is on by default and can be turned off in Settings. Network and bridge fees are separate.
+- An **optional developer tip** on PRL sends: no tip on sends under 1 PRL, a flat 1 PRL on sends of 1 to 1,000 PRL, and 0.1% above 1,000 PRL. It is on by default and can be turned off in Settings. Network and bridge fees are separate.
 
 Before you sign, a PRL send shows the destination, amount and network fee; a bridge transfer shows the bridge fee and the Pearl network fee or Ethereum gas of the transaction being signed.
 

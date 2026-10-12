@@ -5,6 +5,7 @@ import { useUI } from "../../state/ui-store";
 import { useWallet } from "../../state/wallet-store";
 import {
   composeVaultSend,
+  VaultTooManyInputsError,
   DUST_LIMIT_GRAINS,
   getVault,
   persistComposedAsPending,
@@ -29,6 +30,16 @@ export function vaultHistoryCapMessage(deep: boolean): string {
 }
 
 /** Same copy as Send PRL for a destination output at or below dust. */
+/** Readable refusal for a vault send above the standard size limit. */
+export function vaultTooManyInputsMessage(e: VaultTooManyInputsError): string {
+  return (
+    `This send needs ${e.inputsNeeded} vault coins, but one transaction can spend at most ${e.maxInputs} ` +
+    `(the network won't relay a transaction over 100,000 vbytes). ` +
+    `The most you can send in one transaction is ${formatGrains(e.maxSendableGrains)} PRL. ` +
+    `Send a smaller amount, or first send that maximum to this vault's own address to combine coins.`
+  );
+}
+
 export function vaultDustMessage(): string {
   return `Amount is too small: the network won't relay a payment of ${formatGrains(DUST_LIMIT_GRAINS)} PRL or less.`;
 }
@@ -134,7 +145,9 @@ export default function SendFromVault() {
       setStage("preview");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("E_HISTORY_INCOMPLETE")) {
+      if (e instanceof VaultTooManyInputsError) {
+        setError(vaultTooManyInputsMessage(e));
+      } else if (msg.includes("E_HISTORY_INCOMPLETE")) {
         setError(vaultHistoryCapMessage(deep));
         setOfferDeeper(!deep);
       } else if (msg.includes("E_NO_UTXOS: every vault coin"))

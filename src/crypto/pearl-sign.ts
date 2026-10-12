@@ -40,10 +40,11 @@ export interface PearlTxRequest {
   utxos: PearlUtxoSpec[];
   outputs: PearlTxOutput[];
   network: PearlNetwork;
-  /** Fee ceiling (decimal grains) — the fee the user reviewed. When set,
-   *  the signer refuses (E_PEARL_FEE_ABOVE_LIMIT) a tx whose real fee,
+  /** Fee ceiling (decimal grains) — the fee the user reviewed. Required:
+   *  a request without it is refused (E_FEE_CAP_REQUIRED), and the signer
+   *  refuses (E_PEARL_FEE_ABOVE_LIMIT) a tx whose real fee,
    *  sum(inputs) − sum(outputs), exceeds it. */
-  maxFeeGrains?: string;
+  maxFeeGrains: string;
 }
 
 /** Max inputs per signing request (bounds key derivations per call). */
@@ -135,10 +136,11 @@ export function signPearlTxWithSeed(seed: Uint8Array, r: PearlTxRequest): { raw:
   // here is the fee the network would really collect.
   const fee = pearlTxFeeGrains(r);
   if (fee <= 0n) throw new Error("E_PEARL_FEE");
-  if (r.maxFeeGrains !== undefined) {
-    if (typeof r.maxFeeGrains !== "string" || !/^[0-9]+$/.test(r.maxFeeGrains)) throw new Error("E_PEARL_FEE_LIMIT_SHAPE");
-    if (fee > BigInt(r.maxFeeGrains)) throw new Error("E_PEARL_FEE_ABOVE_LIMIT");
-  }
+  // Never sign without the reviewed fee ceiling (a caller that forgot it
+  // would otherwise get an unbounded-fee signature).
+  if (r.maxFeeGrains === undefined || r.maxFeeGrains === null) throw new Error("E_FEE_CAP_REQUIRED");
+  if (typeof r.maxFeeGrains !== "string" || !/^[0-9]+$/.test(r.maxFeeGrains)) throw new Error("E_PEARL_FEE_LIMIT_SHAPE");
+  if (fee > BigInt(r.maxFeeGrains)) throw new Error("E_PEARL_FEE_ABOVE_LIMIT");
 
   const toWipe: HDKey[] = [];
   try {
@@ -280,5 +282,6 @@ export function signPearlConsolidationWithSeed(seed: Uint8Array, r: PearlConsoli
   if (fee <= 0n || fee * CONSOLIDATION_MAX_FEE_DEN > inSum * CONSOLIDATION_MAX_FEE_NUM) {
     throw new Error("E_CONSOLIDATION_FEE");
   }
-  return signPearlTxWithSeed(seed, { utxos: r.utxos, outputs: [out], network: r.network });
+  // The ceiling is the fee just bounded above (the exact fee of this tx).
+  return signPearlTxWithSeed(seed, { utxos: r.utxos, outputs: [out], network: r.network, maxFeeGrains: fee.toString() });
 }

@@ -1,6 +1,7 @@
-import { useMemo, useState, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
-import { useWallet, E_WALLET_EXISTS_ELSEWHERE } from "../../state/wallet-store";
+import { useWallet, E_WALLET_EXISTS_ELSEWHERE, subscribeStoredWalletChange, WalletExistsError } from "../../state/wallet-store";
+import type { KeystoreBlobJSON } from "../../storage/db";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { passwordAcceptable, passwordStrength } from "../../lib/validate";
 import { applyMnemonicPaste, parseMnemonicPaste } from "../../lib/mnemonic-paste";
@@ -24,7 +25,20 @@ export default function OnboardingRestore() {
   // phrase the user is typing IS the recovery for the wallet they're
   // restoring; the wallet that gets erased is whichever was in this
   // browser before. (v0.1.10 — bug reported on first deploy.)
-  const [overwriteOpen, setOverwriteOpen] = useState(false);
+  // The stored wallet the dialog was opened over (from E_WALLET_EXISTS):
+  // the overwrite replaces only that exact record (else E_WALLET_CHANGED),
+  // and the dialog closes if this tab sees the stored wallet change.
+  const [overwriteOver, setOverwriteOver] = useState<KeystoreBlobJSON | null>(null);
+  const overwriteOpen = overwriteOver !== null;
+  const submittingOverwrite = useRef(false);
+  useEffect(() => {
+    if (!overwriteOver) return;
+    return subscribeStoredWalletChange(() => {
+      if (submittingOverwrite.current) return; // our own replace finishing
+      setOverwriteOver(null);
+      setError("The wallet stored in this browser changed in another tab, so the replace was cancelled and nothing was replaced. Submit again to review the wallet stored now.");
+    });
+  }, [overwriteOver]);
   const pwStrength = useMemo(() => passwordStrength(password), [password]);
 
   function setLen(n: 12 | 24) {
@@ -79,23 +93,30 @@ export default function OnboardingRestore() {
       return;
     }
     setBusy(true);
+    submittingOverwrite.current = allowOverwrite;
     try {
-      await restore(mnemonic, password, allowOverwrite ? { allowOverwrite: true } : undefined);
-      setOverwriteOpen(false);
+      await restore(mnemonic, password, allowOverwrite && overwriteOver ? { allowOverwrite: true, observedBlob: overwriteOver } : undefined);
+      setOverwriteOver(null);
       navigate("/dashboard");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg === E_WALLET_EXISTS_ELSEWHERE) {
         // Another tab stored a wallet while this one was saving: nothing
         // was saved here and the other wallet is untouched.
-        setOverwriteOpen(false);
+        setOverwriteOver(null);
         setError("A wallet was just created in another tab, so nothing was saved here. Reload this page to use that wallet.");
-      } else if (msg === "E_WALLET_EXISTS") {
-        setOverwriteOpen(true);
+      } else if (msg === "E_WALLET_CHANGED") {
+        // Overwrite confirmed, but another tab stored, replaced or removed
+        // a wallet while this one was saving: nothing was saved here.
+        setOverwriteOver(null);
+        setError("The wallet stored in this browser changed in another tab while this one was saving, so nothing was saved and nothing was replaced. Reload this page and check the stored wallet before replacing it.");
+      } else if (e instanceof WalletExistsError) {
+        setOverwriteOver(e.observedBlob);
       } else {
         setError(msg);
       }
     } finally {
+      submittingOverwrite.current = false;
       setBusy(false);
     }
   }
@@ -217,7 +238,7 @@ export default function OnboardingRestore() {
             <div className="mt-4 flex gap-3">
               <button
                 type="button"
-                onClick={() => setOverwriteOpen(false)}
+                onClick={() => setOverwriteOver(null)}
                 disabled={busy}
                 className="btn-secondary flex-1"
               >

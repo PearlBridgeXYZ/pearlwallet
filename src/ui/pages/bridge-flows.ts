@@ -16,6 +16,7 @@
 import type { ComposedPearlTx, FrozenPearlTx } from "../../services/pearl-tx";
 import {
   EthBroadcastStatusUnknownError,
+  EthUnresolvedBroadcastError,
   approveWprlForBridge,
   previewUnwrapGas,
   readWprlAllowance,
@@ -28,7 +29,7 @@ import { bridgeConfig } from "../../services/bridge";
 import { fetchBurnQuote, type BurnQuote, type MintQuote } from "../../services/bridge-v1";
 import type { BridgeCrossingRecord } from "../../storage/db";
 import type { EthNetwork } from "../../chains/ethereum/network";
-import { ethUnknownMessage, type EthUnknownState } from "../components/EthBroadcastUnknown";
+import { ethRefusalMessage, ethUnknownMessage, ethUnresolvedMessage, type EthUnknownState } from "../components/EthBroadcastUnknown";
 import { recordEthUnknown } from "../../state/eth-unknown";
 
 // ── Wrap ────────────────────────────────────────────────────────────────
@@ -271,6 +272,19 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
       recordEthUnknown({ network, from: ethAddress, hash: e.hash, what: step });
       view.setEthUnknown?.({ hash: e.hash, what: step, acknowledged: false });
       view.setErr(ethUnknownMessage(network, e.hash, step));
+      return;
+    }
+    if (e instanceof EthUnresolvedBroadcastError) {
+      // Refused before signing: an unresolved approve / burn / send from
+      // this address (possibly from another tab) is shown on the card.
+      view.setNotice(null);
+      view.setErr(ethUnresolvedMessage(network, e.hash));
+      return;
+    }
+    const refused = ethRefusalMessage(e);
+    if (refused) {
+      view.setNotice(null);
+      view.setErr(approveTxHash ? `Approve confirmed (${approveTxHash}) but the burn didn't go out. ${refused}` : refused);
       return;
     }
     const raw = (e as Error).message;

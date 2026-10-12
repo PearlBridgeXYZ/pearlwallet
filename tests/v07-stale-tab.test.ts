@@ -24,6 +24,12 @@ vi.mock("../src/storage/db", () => ({
   saveKeystore: async (r: KeystoreRecord) => {
     mem.rec = structuredClone(r);
   },
+  // Mirrors the real compare-and-replace transaction (FZ3).
+  replaceKeystoreIfUnchanged: async (r: KeystoreRecord, observed: KeystoreBlobJSON | null) => {
+    if (observed === null ? mem.rec !== undefined : !mem.rec || !same(mem.rec.blob, observed)) return false;
+    mem.rec = structuredClone(r);
+    return true;
+  },
   // Mirrors the real add-if-absent transaction (FY2).
   addKeystoreIfAbsent: async (r: KeystoreRecord) => {
     if (mem.rec) return false;
@@ -146,8 +152,8 @@ describe("FX2 — a stale tab never acts on the wallet another tab stored", () =
     const peer = new BroadcastChannel(__broadcastChannelNameForTests());
     const seen: { type: string }[] = [];
     peer.onmessage = (ev) => seen.push(ev.data);
-    if (op === "createWallet") await useWallet.getState().createWallet(128, "pw", { allowOverwrite: true });
-    else await useWallet.getState().restoreWallet("m", "pw", { allowOverwrite: true });
+    if (op === "createWallet") await useWallet.getState().createWallet(128, "pw", { allowOverwrite: true, observedBlob: mem.rec?.blob ?? null });
+    else await useWallet.getState().restoreWallet("m", "pw", { allowOverwrite: true, observedBlob: mem.rec?.blob ?? null });
     await vi.waitFor(() => expect(seen.map((m) => m.type)).toEqual(["blob-updated"]));
     peer.close();
   });

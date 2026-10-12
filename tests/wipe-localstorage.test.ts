@@ -42,6 +42,8 @@ describe("wipeKeystore localStorage scrub (audit C2)", () => {
 
     const { db, wipeKeystore } = await import("../src/storage/db");
     // Stub the table ops so the Dexie path resolves cleanly.
+    // FZ2: the IndexedDB part is one transaction; run its body directly.
+    vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args[args.length - 1] as () => Promise<unknown>)()) as never);
     for (const t of ["keystore", "addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const) {
       const tbl = db[t] as unknown as { clear?: () => Promise<void>; delete?: () => Promise<void> };
       if (tbl.clear) vi.spyOn(tbl, "clear").mockResolvedValue(undefined as never);
@@ -56,13 +58,21 @@ describe("wipeKeystore localStorage scrub (audit C2)", () => {
     expect(localStorage.getItem("unrelated-key")).toBe("keepme"); // not a ui key, preserved
   });
 
-  it("still scrubs localStorage even if the Dexie wipe throws (finally runs)", async () => {
+  // FZ2 (GPT-6 R2-A2) intentionally reverses the old "scrub even if the
+  // Dexie wipe throws": the scrub now runs only after the one wipe
+  // transaction commits. A failed transaction deleted nothing — the wallet
+  // is still stored — so scrubbing would erase its broadcast-safety records
+  // (Pearl broadcast records, Ethereum "may already be sent" blocks) while
+  // its keys remain. The failure is reported (rejects) instead.
+  it("a failed wipe transaction rejects and scrubs nothing (the wallet is still stored)", async () => {
     localStorage.setItem("pearl-wallet-ui-v6", "{}");
+    localStorage.setItem("pearl-wallet-broadcasts-v1", "{}");
     const { db, wipeKeystore } = await import("../src/storage/db");
-    vi.spyOn(db.keystore, "delete").mockRejectedValue(new Error("IDB locked"));
+    vi.spyOn(db, "transaction").mockRejectedValue(new Error("IDB locked") as never);
 
-    await wipeKeystore().catch(() => {}); // may reject from the Dexie side
-    expect(localStorage.getItem("pearl-wallet-ui-v6")).toBeNull();
+    await expect(wipeKeystore()).rejects.toThrow("IDB locked");
+    expect(localStorage.getItem("pearl-wallet-ui-v6")).toBe("{}");
+    expect(localStorage.getItem("pearl-wallet-broadcasts-v1")).toBe("{}");
   });
 
   // R2 FY4 (reverts R1 FX5): the single-tab guard's open-tab list lists
@@ -74,6 +84,8 @@ describe("wipeKeystore localStorage scrub (audit C2)", () => {
     localStorage.setItem(WALLET_TABS_STORAGE_KEY, JSON.stringify(["stale-tab"]));
     localStorage.setItem("unrelated-key", "keepme");
     const { db, wipeKeystore } = await import("../src/storage/db");
+    // FZ2: the IndexedDB part is one transaction; run its body directly.
+    vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args[args.length - 1] as () => Promise<unknown>)()) as never);
     for (const t of ["keystore", "addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const) {
       const tbl = db[t] as unknown as { clear?: () => Promise<void>; delete?: () => Promise<void> };
       if (tbl.clear) vi.spyOn(tbl, "clear").mockResolvedValue(undefined as never);

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { useWallet } from "../../state/wallet-store";
+import { useWallet, E_LOCKED_DURING_UNLOCK } from "../../state/wallet-store";
 import TopBar from "../components/TopBar";
 
 // Whitelist of paths the `?next=` redirect honours. We never want to
@@ -44,7 +44,9 @@ export default function Unlock() {
           ? "The wallet stored in this browser changed in another tab. Unlock again with that wallet's password."
           : e instanceof Error && e.message === "E_WALLET_WIPED"
             ? "The wallet was removed from this browser in another tab."
-            : e instanceof Error ? e.message : "Unlock failed.");
+            : e instanceof Error && e.message === E_LOCKED_DURING_UNLOCK
+              ? "The wallet was locked again while unlocking. Enter your password again."
+              : e instanceof Error ? e.message : "Unlock failed.");
     } finally {
       setBusy(false);
     }
