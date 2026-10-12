@@ -608,11 +608,29 @@ function inflightEntryAt(storage: KVStorage, key: string): EthUnknownRecord | nu
  *
  * Plain, sent and unreadable records go at once (localStorage
  * synchronously, the IndexedDB copy in one transaction); each in-flight
- * one is removed only after its sender is found gone (from IndexedDB only
- * if its entry is still exactly the one seen). Keys saved after the
- * snapshot (a send that starts meanwhile) are never touched.
+ * one is removed only after its sender is found gone, and then from either
+ * store only if its entry is still exactly the one seen (an in-flight
+ * record that turned status-unknown meanwhile, or any other change, stays).
+ * Keys saved after the snapshot (a send that starts meanwhile) are never
+ * touched.
+ *
+ * `recordedUpTo` (ms since epoch; the wipe / replace passes the time it
+ * started): a valid record saved after it (ts greater) is kept. Between the
+ * keystore transaction committing and this clear running, another tab can
+ * restore a wallet and send from it; that send's record belongs to the
+ * restored wallet, not the one wiped, and is its only block against paying
+ * twice.
  */
-export async function clearAllEthUnknown(): Promise<void> {
+export async function clearAllEthUnknown(opts: { recordedUpTo?: number } = {}): Promise<void> {
+  const upTo = opts.recordedUpTo;
+  /** A valid record under `key` saved after `upTo`: not this clear's. */
+  const newer = (s: KVStorage, key: string): boolean => {
+    if (upTo === undefined) return false;
+    const p = parseRecordKey(key);
+    if (!p) return false;
+    const e = readEntry(s, key, p.network, p.addr);
+    return !!e?.valid && e.rec.ts > upTo;
+  };
   const stores: KVStorage[] = [];
   for (const s of [
     (globalThis as { localStorage?: KVStorage }).localStorage,
@@ -632,7 +650,10 @@ export async function clearAllEthUnknown(): Promise<void> {
     try {
       for (const k of keysWithPrefix(s, ETH_UNKNOWN_KEY_PREFIX)) {
         let rec: EthUnknownRecord | null = null;
+        let value: string | null = null;
         try {
+          if (newer(s, k)) continue;
+          value = s.getItem(k);
           rec = inflightEntryAt(s, k);
         } catch {
           rec = null;
@@ -640,9 +661,11 @@ export async function clearAllEthUnknown(): Promise<void> {
         if (rec) {
           pending.push({
             rec,
+            // Compare-and-remove: only the exact entry seen in the snapshot
+            // (the IndexedDB copy below follows the same rule).
             remove: async () => {
               try {
-                s.removeItem(k);
+                if (s.getItem(k) === value) s.removeItem(k);
               } catch {
                 /* ignore */
               }
@@ -662,6 +685,7 @@ export async function clearAllEthUnknown(): Promise<void> {
       for (const k of keysWithPrefix(s, "")) {
         let rec: EthUnknownRecord | null = null;
         try {
+          if (newer(s, k)) continue;
           rec = inflightEntryAt(s, k);
         } catch {
           rec = null;

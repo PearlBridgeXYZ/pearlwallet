@@ -216,7 +216,10 @@ describe("S4 — the sign-time re-quote must match what was reviewed", () => {
     const page = src("src/ui/pages/Bridge.tsx");
     const check = page.indexOf("if (quoteChanged(review.quote, q2)) {");
     expect(check).toBeGreaterThan(0);
-    expect(check).toBeLessThan(page.indexOf("await broadcastPearlPrecomposed(frozen, pearlNetwork)"));
+    // (R6 N2: the call now also passes the signing session of the click.)
+    const call = page.indexOf("await broadcastPearlPrecomposed(frozen, pearlNetwork, Date.now(), [], session)");
+    expect(call).toBeGreaterThan(0);
+    expect(check).toBeLessThan(call);
     expect(page).toMatch(/amount: grains, quote, gas \}/);
     expect(page).toMatch(/setNeedsApprove, setQuote, onStarted \}/);
   });

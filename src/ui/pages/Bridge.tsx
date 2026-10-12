@@ -3,7 +3,8 @@ import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { refusalMessage } from "../components/PendingBroadcasts";
 import EthBroadcastUnknown, { ethUnknownBlocksSend, useEthUnknown } from "../components/EthBroadcastUnknown";
-import { sessionWalletPrimary, useWallet } from "../../state/wallet-store";
+import { captureSigningSession, sessionWalletPrimary, useWallet } from "../../state/wallet-store";
+import { dustErrorMessage } from "../pearl-messages";
 import { db, putBridgeCrossingForWallet, putDepositPinForWallet, type BridgeCrossingRecord } from "../../storage/db";
 import { bridgeConfig } from "../../services/bridge";
 import {
@@ -184,6 +185,11 @@ export default function Bridge() {
           // best-effort; recovery retries next tick
         }
       }
+      try {
+        await reopenLegacyDroppedBurns();
+      } catch {
+        // best-effort; retried next tick
+      }
       const open = await db.bridgeCrossings
         .where("phase")
         .anyOf("confirming", "relay", "review")
@@ -318,6 +324,38 @@ export async function pollWrap(c: BridgeCrossingRecord, requiredConfs: number): 
   await db.bridgeCrossings.update(c.id, patch);
 }
 
+/** After this long without a relay record, an unwrap whose burn receipt
+ *  is missing or unreadable shows a "check the burn tx" notice. */
+export const BURN_CHECK_AFTER_MS = 30 * 60_000;
+export const BURN_NOT_MINED_NOTICE =
+  "The burn tx has not confirmed after 30 minutes. It can still confirm, so do not unwrap again: check the burn tx on Etherscan. This updates automatically.";
+export const BURN_STATUS_UNREADABLE_NOTICE =
+  "The burn tx's status could not be read from Ethereum. It may already be confirmed or still pending, so do not unwrap again: check the burn tx on Etherscan. This updates automatically.";
+export function isBurnCheckNotice(s: string | null | undefined): boolean {
+  return s === BURN_NOT_MINED_NOTICE || s === BURN_STATUS_UNREADABLE_NOTICE;
+}
+
+/** v0.4.3–v0.6.1 marked an unwrap "failed" after 30 minutes without a
+ *  receipt and told the user their WPRL was untouched and to retry, with
+ *  no evidence the burn could no longer execute. Such rows stopped being
+ *  polled. Reopen them into the check state so polling settles them on
+ *  real evidence (a reverted receipt still ends "failed"). */
+export const LEGACY_DROPPED_BURN_PREFIX = "burn tx not mined (~30m)";
+export function isLegacyDroppedBurn(c: BridgeCrossingRecord): boolean {
+  return c.direction === "unwrap" && c.phase === "failed" &&
+    typeof c.relayState === "string" && c.relayState.startsWith(LEGACY_DROPPED_BURN_PREFIX);
+}
+export async function reopenLegacyDroppedBurns(): Promise<number> {
+  const failed = await db.bridgeCrossings.where("phase").equals("failed").toArray();
+  let n = 0;
+  for (const c of failed) {
+    if (!isLegacyDroppedBurn(c)) continue;
+    await saveBridgeCrossing({ ...c, phase: "relay", relayState: BURN_NOT_MINED_NOTICE, updatedAt: Date.now() });
+    n++;
+  }
+  return n;
+}
+
 export async function pollUnwrap(
   c: BridgeCrossingRecord,
   ethNetwork: "mainnet" | "sepolia" = "mainnet",
@@ -345,17 +383,20 @@ export async function pollUnwrap(
     // otherwise hang in "bridging" forever while the WPRL never left.
     const receipt = await getEthReceiptStatus(ethNetwork, c.id as `0x${string}`);
     if (receipt === "reverted") {
+      // The only terminal verdict: the receipt says it failed.
       patch.phase = "failed";
       patch.relayState = "burn tx reverted on-chain — WPRL not spent";
-    } else if (receipt === null) {
-      // Not mined. After a grace window, surface "likely dropped".
-      const ageMs = Date.now() - c.createdAt;
-      if (ageMs > 30 * 60_000) {
-        patch.phase = "failed";
-        patch.relayState = "burn tx not mined (~30m) — likely dropped; your WPRL is untouched, retry";
-      }
+    } else if (receipt === "success") {
+      // Mined; the relay not having indexed it yet is normal lag. A check
+      // notice shown earlier no longer applies.
+      if (isBurnCheckNotice(c.relayState)) patch.relayState = null;
+    } else if (Date.now() - c.createdAt > BURN_CHECK_AFTER_MS) {
+      // No receipt yet ("not-found") or none readable ("lookup-failed"):
+      // NOT evidence of failure. The burn can still confirm (or already
+      // has), so the crossing stays open and keeps being polled; the card
+      // shows the burn tx to check and never suggests another unwrap.
+      patch.relayState = receipt === "not-found" ? BURN_NOT_MINED_NOTICE : BURN_STATUS_UNREADABLE_NOTICE;
     }
-    // receipt === "success" but relay null = normal indexing lag; leave as-is.
   }
   await db.bridgeCrossings.update(c.id, patch);
 }
@@ -483,7 +524,7 @@ function WrapCard(props: {
       });
       if (r && !stale()) setReview(r);
     } catch (e) {
-      if (!stale()) setErr(refusalMessage(e) ?? (e as Error).message);
+      if (!stale()) setErr(refusalMessage(e) ?? dustErrorMessage(e) ?? (e as Error).message);
     } finally {
       inFlight.current = false;
       setBusy(false);
@@ -494,6 +535,8 @@ function WrapCard(props: {
   const wrap = async () => {
     if (!wrapReviewSignable(review) || !ethAddress || inFlight.current) return;
     inFlight.current = true;
+    // The session this click confirmed in (checked again before signing).
+    const session = captureSigningSession();
     setBusy(true);
     setErr(null);
     const { frozen, deposit } = review;
@@ -508,7 +551,7 @@ function WrapCard(props: {
         setErr(QUOTE_CHANGED_MESSAGE);
         return;
       }
-      const res = await broadcastPearlPrecomposed(frozen, pearlNetwork);
+      const res = await broadcastPearlPrecomposed(frozen, pearlNetwork, Date.now(), [], session);
       setReview(null);
       const now = Date.now();
       try {
@@ -852,7 +895,7 @@ function UnwrapCard(props: {
 
 // ── Activity ────────────────────────────────────────────────────────────
 
-function ActivityCard(props: {
+export function ActivityCard(props: {
   crossings: BridgeCrossingRecord[];
   requiredConfs: number;
   ethNetwork: ReturnType<typeof useWallet.getState>["ethNetwork"];
@@ -883,8 +926,11 @@ function ActivityCard(props: {
                 Confirming on Pearl: {c.confirmations}/{requiredConfs}
               </div>
             )}
-            {c.phase === "relay" && (
+            {c.phase === "relay" && !isBurnCheckNotice(c.relayState) && (
               <div>Bridge processing{c.relayState ? ` — ${c.relayState}` : "…"}</div>
+            )}
+            {(c.phase === "relay" || c.phase === "confirming") && isBurnCheckNotice(c.relayState) && (
+              <div className="text-warn">{c.relayState}</div>
             )}
             {c.phase === "review" && (
               <div className="text-warn">
@@ -906,6 +952,19 @@ function ActivityCard(props: {
             <div className="break-all">
               {c.direction === "wrap" ? "Pearl tx: " : "Burn tx: "}
               <span className="font-mono break-all min-w-0 tabular-nums">{c.id}</span>
+              {c.direction === "unwrap" && (
+                <>
+                  {" "}
+                  <a
+                    className="text-accent underline underline-offset-4"
+                    href={ethTxExplorerUrl(ethNetwork, c.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Etherscan ↗
+                  </a>
+                </>
+              )}
             </div>
             {c.settledRef && (
               <div className="break-all">

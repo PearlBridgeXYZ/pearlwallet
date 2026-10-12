@@ -30,6 +30,7 @@ import { BroadcastStatusUnknownError, MAX_UTXO_WALK_PAGES_HARD } from "../../ser
 import { prlScanQueryKey } from "../hooks/useWalletBalances";
 import { PendingSpendConflictError, unresolvedBroadcasts } from "../../services/pending-spends";
 import { refusalMessage } from "../components/PendingBroadcasts";
+import { dustAmountMessage } from "../pearl-messages";
 import { usePendingSpendsVersion } from "../hooks/usePendingSpends";
 
 type FeeTier = "low" | "normal" | "high";
@@ -324,7 +325,7 @@ export default function SendPRL() {
       return { ok: false, reason: "Amount must be greater than 0." };
     }
     if (grains <= DUST_LIMIT_GRAINS) {
-      return { ok: false, reason: `Amount is too small: the network won't relay a payment of ${formatGrains(DUST_LIMIT_GRAINS)} PRL or less.` };
+      return { ok: false, reason: dustAmountMessage() };
     }
     return { ok: true, v: { dest: destination.trim(), grains, max: false } };
   }

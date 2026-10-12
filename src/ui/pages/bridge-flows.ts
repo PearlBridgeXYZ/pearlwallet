@@ -25,6 +25,7 @@ import {
   waitForEthSuccess,
   type UnwrapGasPreview,
 } from "../../services/eth-tx";
+import { captureSigningSession, type SigningSession } from "../../state/wallet-store";
 import { bridgeConfig } from "../../services/bridge";
 import { fetchBurnQuote, type BurnQuote, type MintQuote } from "../../services/bridge-v1";
 import type { BridgeCrossingRecord } from "../../storage/db";
@@ -146,11 +147,14 @@ export function createUnwrapFlow(): (input: UnwrapInput, view: UnwrapView) => Pr
       return;
     }
     unwrapInFlight = true;
+    // The session this click confirmed in: the approval and the burn are
+    // signed only while it is still the unlocked one.
+    const session = captureSigningSession();
     view.setBusy("checking");
     view.setErr(null);
     view.setNotice(null);
     try {
-      await runUnwrap(input, view);
+      await runUnwrap(input, view, session);
     } finally {
       unwrapInFlight = false;
       view.setBusy("idle");
@@ -166,7 +170,11 @@ function assertPlan(q: BurnQuote, network: EthNetwork, amount: bigint): void {
   if (q.amount !== amount) throw new Error("E_QUOTE_AMOUNT_MISMATCH — refusing to sign.");
 }
 
-async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas }: UnwrapInput, view: UnwrapView): Promise<void> {
+async function runUnwrap(
+  { network, ethAddress, pearlAddress, amount, quote, gas }: UnwrapInput,
+  view: UnwrapView,
+  session: SigningSession,
+): Promise<void> {
   // Set only once the approve is mined successfully.
   let approveTxHash: `0x${string}` | null = null;
   let step = "approval";
@@ -204,6 +212,7 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
         amount,
         tier: "normal",
         ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: approveWei },
+        session,
       });
       // Wait for the approve to MINE: the burn's gas estimate reverts
       // against pre-approve state (audit C1).
@@ -241,6 +250,7 @@ async function runUnwrap({ network, ethAddress, pearlAddress, amount, quote, gas
       pearlAddress,
       tier: "normal",
       ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: burnWei },
+      session,
     });
     const now = Date.now();
     try {

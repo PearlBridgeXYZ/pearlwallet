@@ -203,7 +203,8 @@ describe("S4 — Bridge fees are shown before anything is signed", () => {
     const page = src("src/ui/pages/Bridge.tsx");
     expect(page).not.toMatch(/sendPearl\(/);
     expect(page).toMatch(/composePearlSend\(/);
-    expect(page).toMatch(/broadcastPearlPrecomposed\(frozen, pearlNetwork\)/);
+    // (R6 N2: the call now also passes the signing session of the click.)
+    expect(page).toMatch(/broadcastPearlPrecomposed\(frozen, pearlNetwork, Date\.now\(\), \[\], session\)/);
     expect(page).toMatch(/Pearl network fee/);
     expect(page).not.toMatch(/is not\s+shown here/);
     expect(page).not.toMatch(/pearlAddress\.slice\(/);

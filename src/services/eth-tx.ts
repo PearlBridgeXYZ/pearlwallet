@@ -8,6 +8,7 @@ import {
   encodeFunctionData,
   erc20Abi,
   keccak256,
+  TransactionReceiptNotFoundError,
   type Hex,
 } from "viem";
 import { ethClient } from "../chains/ethereum/rpc";
@@ -27,8 +28,10 @@ import {
   unresolvedEthUnknown,
 } from "../state/eth-unknown";
 import { ethBroadcastLockName, withBroadcastLock } from "./broadcast-lock";
+import { assertSigningSession, captureSigningSession, type SigningSession } from "../state/wallet-store";
 
 export { EthUnresolvedBroadcastError } from "../state/eth-unknown";
+export { SigningSessionChangedError, type SigningSession } from "../state/wallet-store";
 
 export interface GasParams {
   maxFeePerGas: bigint;
@@ -153,6 +156,9 @@ export interface SendNativeParams {
    *  re-quoting at broadcast. Throws `E_PREVIEW_STALE` if older than
    *  `PREVIEW_FRESHNESS_MS`. v0.1.9 audit O2-H-1 ≡ M2-H-2. */
   frozen?: FrozenEthGas;
+  /** The signing session the user confirmed in (wallet-store
+   *  captureSigningSession); captured when this is called if omitted. */
+  session?: SigningSession;
 }
 
 export interface SendWprlParams {
@@ -163,6 +169,8 @@ export interface SendWprlParams {
   tier: FeeTier;
   /** See SendNativeParams.frozen. */
   frozen?: FrozenEthGas;
+  /** See SendNativeParams.session. */
+  session?: SigningSession;
 }
 
 function assertFreshOrThrow(frozen: FrozenEthGas, now = Date.now()): void {
@@ -344,13 +352,21 @@ export async function probeEthUnknownRecords(network: EthNetwork, from: string |
  * record is removed (from both) only on a confirmed send or a definitive
  * rejection, and stays (status unknown) otherwise. The checks read both
  * stores (the IndexedDB copy re-read first).
+ *
+ * `session` is the signing session the user confirmed in: checked here
+ * (after the caller's fee / gas preparation) and again, inside the lock,
+ * right before the worker is asked to sign. If the wallet was locked (or
+ * another wallet unlocked) meanwhile: SigningSessionChangedError, nothing
+ * signed, nothing recorded.
  */
 async function signAndBroadcast(
   network: EthNetwork,
   from: `0x${string}`,
   what: string,
   build: (nonce: number) => EthTxRequest,
+  session: SigningSession,
 ): Promise<SendResult> {
+  assertSigningSession(session);
   // Before the lock, an in-flight record whose send may still be running
   // (another tab) refuses "busy". Inside the lock (no other send running)
   // every unresolved record refuses, in-flight ones included: their sender
@@ -363,6 +379,8 @@ async function signAndBroadcast(
       const nonce = await ethClient(network).getTransactionCount({ address: from, blockTag: "pending" });
       const composed = build(nonce);
       assertNoUnresolvedEthBroadcast(network, from);
+      // Nothing awaited between this check and the sign request.
+      assertSigningSession(session);
       const { raw } = await cryptoWorker.call<"signEthTx", { raw: Hex }>("signEthTx", {
         tx: composed,
       });
@@ -467,6 +485,7 @@ async function chainIdFor(network: EthNetwork): Promise<number> {
 }
 
 export async function sendNative(p: SendNativeParams): Promise<SendResult> {
+  const session = p.session ?? captureSigningSession();
   await assertNoUnresolvedEthBroadcastDurable(p.network, p.from, { exceptInflight: true });
   const chainId = await chainIdFor(p.network);
   let gas: bigint;
@@ -492,10 +511,11 @@ export async function sendNative(p: SendNativeParams): Promise<SendResult> {
     gas: gas.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
-  }));
+  }), session);
 }
 
 export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
+  const session = p.session ?? captureSigningSession();
   const cfg = bridgeConfig(p.network);
   if (cfg.wprl === "0x0000000000000000000000000000000000000000") {
     throw new Error("E_WPRL_NOT_DEPLOYED");
@@ -531,7 +551,7 @@ export async function sendWprl(p: SendWprlParams): Promise<SendResult> {
     gas: gas.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
-  }));
+  }), session);
 }
 
 /**
@@ -624,16 +644,27 @@ export async function waitForEthSuccess(
   return receipt.status === "success";
 }
 
-/** Read an ETH tx receipt status, or null if not mined yet (audit C5). */
-export async function getEthReceiptStatus(
-  network: EthNetwork,
-  hash: `0x${string}`,
-): Promise<"success" | "reverted" | null> {
+/**
+ * An ETH tx's receipt status (audit C5): "success" / "reverted" from its
+ * receipt; "not-found" when the node answered that it has no receipt (not
+ * mined yet — it may still be, or the tx was replaced or dropped);
+ * "lookup-failed" when the lookup itself failed (RPC error, timeout): the
+ * tx may be mined, pending or gone. Only "reverted" is evidence that the
+ * tx failed.
+ */
+export type EthReceiptStatus = "success" | "reverted" | "not-found" | "lookup-failed";
+
+export async function getEthReceiptStatus(network: EthNetwork, hash: `0x${string}`): Promise<EthReceiptStatus> {
   try {
     const r = await ethClient(network).getTransactionReceipt({ hash });
     return r.status;
-  } catch {
-    return null;
+  } catch (e) {
+    let cur: unknown = e;
+    for (let i = 0; i < 10 && cur; i++) {
+      if (cur instanceof TransactionReceiptNotFoundError) return "not-found";
+      cur = (cur as { cause?: unknown }).cause;
+    }
+    return "lookup-failed";
   }
 }
 
@@ -644,6 +675,9 @@ export interface ContractCallParams {
   /** The gas ceiling the user reviewed (previewUnwrapGas). A call whose
    *  fresh fees or total cost exceed it is refused unsigned. */
   ceiling: EthGasCeiling;
+  /** See SendNativeParams.session (the unwrap passes the one captured on
+   *  its click to both the approval and the burn). */
+  session?: SigningSession;
 }
 
 /** What the user saw before signing a bridge contract call. */
@@ -707,16 +741,18 @@ export async function previewUnwrapGas(p: {
 export async function approveWprlForBridge(
   p: ContractCallParams & { amount: bigint },
 ): Promise<SendResult> {
+  const session = p.session ?? captureSigningSession();
   const cfg = bridgeConfig(p.network);
-  return await sendContractCall(p.network, p.from, cfg.wprl, approveCalldata(p.network, p.amount), p.tier, p.ceiling, "approval");
+  return await sendContractCall(p.network, p.from, cfg.wprl, approveCalldata(p.network, p.amount), p.tier, p.ceiling, "approval", session);
 }
 
 /** BridgeController.requestBurn(grossAmount, pearlAddress), signed locally. */
 export async function requestBurn(
   p: ContractCallParams & { amount: bigint; pearlAddress: string },
 ): Promise<SendResult> {
+  const session = p.session ?? captureSigningSession();
   const cfg = bridgeConfig(p.network);
-  return await sendContractCall(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress), p.tier, p.ceiling, "burn");
+  return await sendContractCall(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress), p.tier, p.ceiling, "burn", session);
 }
 
 async function sendContractCall(
@@ -727,6 +763,7 @@ async function sendContractCall(
   tier: FeeTier,
   ceiling: EthGasCeiling,
   what: string,
+  session: SigningSession,
 ): Promise<SendResult> {
   await assertNoUnresolvedEthBroadcastDurable(network, from, { exceptInflight: true });
   const chainId = await chainIdFor(network);
@@ -747,5 +784,5 @@ async function sendContractCall(
     gas: gas.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
-  }));
+  }), session);
 }

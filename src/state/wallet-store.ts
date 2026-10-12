@@ -227,6 +227,46 @@ export function sessionWalletPrimary(): string | null {
   return status === "unlocked" && addresses ? addresses.pearl : null;
 }
 
+/**
+ * The signing session a send was confirmed in: this tab's lock generation
+ * and the unlocked wallet's primary ETH address (lowercase; null while not
+ * unlocked). A send captures it when the user confirms and checks it again
+ * after its asynchronous preparation (fees, nonce, another tab's broadcast)
+ * and immediately before asking the worker to sign: a Lock (or a wipe, a
+ * forced lock from another tab, or another wallet unlocked) in between
+ * ends that session, and a send confirmed in it must be reviewed again —
+ * never signed by the session unlocked afterwards.
+ */
+export interface SigningSession {
+  readonly generation: number;
+  readonly eth: string | null;
+}
+
+/** The current signing session (see SigningSession). */
+export function captureSigningSession(): SigningSession {
+  const { status, addresses } = useWallet.getState();
+  return { generation: lockGeneration, eth: status === "unlocked" && addresses ? addresses.eth.toLowerCase() : null };
+}
+
+/** Message of the refusal below (nothing signed, nothing recorded). */
+export const E_SESSION_CHANGED = "E_SESSION_CHANGED: the wallet was locked before this send was signed";
+/** What the user is shown for it. */
+export const SESSION_CHANGED_MESSAGE = "The wallet was locked before this send was signed. Nothing was sent; review it again.";
+
+export class SigningSessionChangedError extends Error {
+  constructor() {
+    super(E_SESSION_CHANGED);
+    this.name = "SigningSessionChangedError";
+  }
+}
+
+/** Throws SigningSessionChangedError unless `s` is still the current
+ *  signing session (same lock generation, same unlocked wallet). */
+export function assertSigningSession(s: SigningSession): void {
+  const now = captureSigningSession();
+  if (now.generation !== s.generation || now.eth !== s.eth) throw new SigningSessionChangedError();
+}
+
 /** Message of an unlock overtaken by a lock (auto-lock, Lock button). */
 export const E_LOCKED_DURING_UNLOCK = "E_LOCKED: the wallet was locked while unlocking";
 
@@ -278,6 +318,13 @@ function assertOverwriteObserved(existing: KeystoreRecord | undefined, observed:
  * away from the page before it can explain); the page asks for a reload,
  * which picks up the stored wallet.
  */
+/** Create / restore failed after the worker built the new session: drop
+ *  it (and anything remembered for it) before the error propagates. */
+function discardUnsavedSession(): void {
+  cryptoWorker.reset();
+  clearBalanceMemory();
+}
+
 function walletCreatedElsewhere(): never {
   cryptoWorker.reset();
   throw new Error(E_WALLET_EXISTS_ELSEWHERE);
@@ -314,8 +361,10 @@ function replacedOtherWallet(existing: KeystoreRecord | undefined, next: Keystor
  *  Ethereum "may already be sent" records: they belong to addresses the new
  *  wallet does not hold. (An in-flight Ethereum record whose send in another
  *  tab may still be running stays: see clearAllEthUnknown.) */
-async function forgetReplacedWalletLocalData(): Promise<void> {
-  await clearAllEthUnknown();
+async function forgetReplacedWalletLocalData(startedAt: number): Promise<void> {
+  // Records saved after the replace started (the new wallet's sends, in
+  // another tab) are kept.
+  await clearAllEthUnknown({ recordedUpTo: startedAt });
   clearPendingSpends();
 }
 
@@ -447,45 +496,54 @@ export const useWallet = create<WalletState>((set, get) => ({
         blob: KeystoreBlobJSON;
         addresses: Addresses;
       }>("createWallet", { strength, password, network: pearlNetwork });
-
-      const rec: KeystoreRecord = {
-        id: "primary",
-        version: 1,
-        blob: out.blob,
-        publicData: {
-          pearlAddress: out.addresses.pearl,
-          pearlAddressPool: out.addresses.pearlPool,
-          pearlChangePool: out.addresses.pearlChange ?? [],
-          ethAddress: out.addresses.eth,
-          pearlNetwork,
-          ethNetwork,
-          createdAt: Date.now(),
-        },
-      };
-      if (opts?.allowOverwrite) {
-        // Compare-and-replace against the record the overwrite dialog was
-        // opened over (opts.observedBlob), not one read after the click: a
-        // different wallet installed (or a wipe) by another tab while the
-        // dialog was open or the worker ran is never erased by this consent.
-        if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
-        if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData();
-      } else if (!(await addKeystoreIfAbsent(rec))) {
-        walletCreatedElsewhere();
+      // From here the worker holds this wallet's session. Anything that
+      // fails before "unlocked" is published (a keystore write refused,
+      // e.g. QuotaExceededError) must not leave it behind: the tab would
+      // show locked / no wallet while the worker could still sign.
+      try {
+        const rec: KeystoreRecord = {
+          id: "primary",
+          version: 1,
+          blob: out.blob,
+          publicData: {
+            pearlAddress: out.addresses.pearl,
+            pearlAddressPool: out.addresses.pearlPool,
+            pearlChangePool: out.addresses.pearlChange ?? [],
+            ethAddress: out.addresses.eth,
+            pearlNetwork,
+            ethNetwork,
+            createdAt: Date.now(),
+          },
+        };
+        if (opts?.allowOverwrite) {
+          // Compare-and-replace against the record the overwrite dialog was
+          // opened over (opts.observedBlob), not one read after the click: a
+          // different wallet installed (or a wipe) by another tab while the
+          // dialog was open or the worker ran is never erased by this consent.
+          const replaceStartedAt = Date.now();
+          if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
+          if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData(replaceStartedAt);
+        } else if (!(await addKeystoreIfAbsent(rec))) {
+          walletCreatedElsewhere();
+        }
+        // Replaced a stored wallet: peer tabs still hold the former one (its
+        // blob, possibly an unlocked session). Tell them to lock onto the
+        // stored record, as a password change does.
+        if (existing) broadcastKeystoreEvent({ type: "blob-updated" });
+        // New wallet (possibly replacing another): drop the previous one's
+        // remembered per-address balances and scan state.
+        clearBalanceMemory();
+        set({
+          status: "unlocked",
+          addresses: out.addresses,
+          blob: out.blob,
+          lastActivity: monotonicNow(),
+        });
+        return { mnemonic: out.mnemonic, addresses: out.addresses };
+      } catch (e) {
+        discardUnsavedSession();
+        throw e;
       }
-      // Replaced a stored wallet: peer tabs still hold the former one (its
-      // blob, possibly an unlocked session). Tell them to lock onto the
-      // stored record, as a password change does.
-      if (existing) broadcastKeystoreEvent({ type: "blob-updated" });
-      // New wallet (possibly replacing another): drop the previous one's
-      // remembered per-address balances and scan state.
-      clearBalanceMemory();
-      set({
-        status: "unlocked",
-        addresses: out.addresses,
-        blob: out.blob,
-        lastActivity: monotonicNow(),
-      });
-      return { mnemonic: out.mnemonic, addresses: out.addresses };
     });
   },
 
@@ -503,45 +561,54 @@ export const useWallet = create<WalletState>((set, get) => ({
         blob: KeystoreBlobJSON;
         addresses: Addresses;
       }>("restoreWallet", { mnemonic, password, network: pearlNetwork });
-
-      const rec: KeystoreRecord = {
-        id: "primary",
-        version: 1,
-        blob: out.blob,
-        publicData: {
-          pearlAddress: out.addresses.pearl,
-          pearlAddressPool: out.addresses.pearlPool,
-          pearlChangePool: out.addresses.pearlChange ?? [],
-          ethAddress: out.addresses.eth,
-          pearlNetwork,
-          ethNetwork,
-          createdAt: Date.now(),
-        },
-      };
-      if (opts?.allowOverwrite) {
-        // Compare-and-replace against the record the overwrite dialog was
-        // opened over (opts.observedBlob), not one read after the click: a
-        // different wallet installed (or a wipe) by another tab while the
-        // dialog was open or the worker ran is never erased by this consent.
-        if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
-        if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData();
-      } else if (!(await addKeystoreIfAbsent(rec))) {
-        walletCreatedElsewhere();
+      // From here the worker holds this wallet's session. Anything that
+      // fails before "unlocked" is published (a keystore write refused,
+      // e.g. QuotaExceededError) must not leave it behind: the tab would
+      // show locked / no wallet while the worker could still sign.
+      try {
+        const rec: KeystoreRecord = {
+          id: "primary",
+          version: 1,
+          blob: out.blob,
+          publicData: {
+            pearlAddress: out.addresses.pearl,
+            pearlAddressPool: out.addresses.pearlPool,
+            pearlChangePool: out.addresses.pearlChange ?? [],
+            ethAddress: out.addresses.eth,
+            pearlNetwork,
+            ethNetwork,
+            createdAt: Date.now(),
+          },
+        };
+        if (opts?.allowOverwrite) {
+          // Compare-and-replace against the record the overwrite dialog was
+          // opened over (opts.observedBlob), not one read after the click: a
+          // different wallet installed (or a wipe) by another tab while the
+          // dialog was open or the worker ran is never erased by this consent.
+          const replaceStartedAt = Date.now();
+          if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
+          if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData(replaceStartedAt);
+        } else if (!(await addKeystoreIfAbsent(rec))) {
+          walletCreatedElsewhere();
+        }
+        // Replaced a stored wallet: peer tabs still hold the former one (its
+        // blob, possibly an unlocked session). Tell them to lock onto the
+        // stored record, as a password change does.
+        if (existing) broadcastKeystoreEvent({ type: "blob-updated" });
+        // New wallet (possibly replacing another): drop the previous one's
+        // remembered per-address balances and scan state.
+        clearBalanceMemory();
+        set({
+          status: "unlocked",
+          addresses: out.addresses,
+          blob: out.blob,
+          lastActivity: monotonicNow(),
+        });
+        return { addresses: out.addresses };
+      } catch (e) {
+        discardUnsavedSession();
+        throw e;
       }
-      // Replaced a stored wallet: peer tabs still hold the former one (its
-      // blob, possibly an unlocked session). Tell them to lock onto the
-      // stored record, as a password change does.
-      if (existing) broadcastKeystoreEvent({ type: "blob-updated" });
-      // New wallet (possibly replacing another): drop the previous one's
-      // remembered per-address balances and scan state.
-      clearBalanceMemory();
-      set({
-        status: "unlocked",
-        addresses: out.addresses,
-        blob: out.blob,
-        lastActivity: monotonicNow(),
-      });
-      return { addresses: out.addresses };
     });
   },
 
@@ -716,9 +783,10 @@ export const useWallet = create<WalletState>((set, get) => ({
       }
       clearBalanceMemory();
       // Ethereum "may already be sent" records: wipeKeystore removed them
-      // (all but an in-flight one whose sender may still be running); this
-      // also drops the in-memory copy and re-renders open warnings.
-      await clearAllEthUnknown();
+      // (all but an in-flight one whose sender may still be running) and is
+      // their only post-commit clear. A second clear here would remove such
+      // a record once its send ended status-unknown, and a retry after
+      // restoring the same wallet could pay twice.
       // Broadcast records (wipeKeystore removed the key too; this also
       // re-renders the banner). Lock keeps them on purpose: a lock must not
       // forget a broadcast whose fate is unknown.

@@ -503,6 +503,10 @@ export type WipeResult = "wiped" | "changed";
  * its keys remain, and could hit a wallet another tab just stored.
  */
 export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<WipeResult> {
+  // Ethereum send records saved after this point belong to whatever is
+  // stored after the commit (another tab may restore a wallet and send
+  // before the clear below runs): the clear keeps them.
+  const startedAt = Date.now();
   const deleted = await db.transaction(
     "rw",
     [db.keystore, db.addressBook, db.txCache, db.vaults, db.vaultPendingTxs, db.bridgeCrossings, db.bridgeDepositPins],
@@ -531,9 +535,12 @@ export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<Wip
   // Nothing is wiped (no localStorage scrub either) on a refused compare.
   if (!deleted) return "changed";
   scrubLocalStorage();
-  // Ethereum "may already be sent" records: every one, except an in-flight
-  // record whose sender may still be running (state/eth-unknown.ts).
-  await clearAllEthUnknown();
+  // Ethereum "may already be sent" records: every one saved before the
+  // wipe started, except an in-flight record whose sender may still be
+  // running (state/eth-unknown.ts). The single post-commit clear: callers
+  // must not run another one (a record that turned status-unknown after
+  // this snapshot kept it would be lost).
+  await clearAllEthUnknown({ recordedUpTo: startedAt });
   return "wiped";
 }
 

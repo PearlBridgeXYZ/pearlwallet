@@ -27,6 +27,7 @@ import { computeTipGrains, tipAddressFor } from "../chains/pearl/tip";
 import type { PearlNetwork } from "../chains/pearl/network";
 import { cryptoWorker } from "../crypto/worker-client";
 import type { PearlTxRequest } from "../crypto/worker";
+import { assertSigningSession, captureSigningSession, type SigningSession } from "../state/wallet-store";
 
 // Tx-size feerate estimate. A taproot key-path 1-in / 2-out tx is
 // roughly 110 vbytes; each extra input ≈ +57.5 vbytes (taproot keypath
@@ -834,6 +835,11 @@ export async function broadcastSignedPearlTx(
  * (checked on the click and again under the lock, just before signing)
  * so a long-delayed click can't capture a stale UTXO set (a hostile
  * sentry could have returned different coins on the second walk).
+ *
+ * `session`: the signing session the user confirmed in (captured when
+ * this is called if omitted). Checked under the lock right before signing:
+ * a Lock (then an unlock) while this waited for another tab's broadcast
+ * refuses with SigningSessionChangedError, nothing signed or recorded.
  */
 export async function broadcastPearlPrecomposed(
   frozen: FrozenPearlTx,
@@ -841,6 +847,7 @@ export async function broadcastPearlPrecomposed(
   now: number = Date.now(),
   /** "unknown" broadcasts the user explicitly accepted may pay twice. */
   acknowledged: readonly string[] = [],
+  session: SigningSession = captureSigningSession(),
 ): Promise<SendPearlResult> {
   const stale = (t: number) => {
     if (t - frozen.composedAt > PEARL_PREVIEW_FRESHNESS_MS) throw new Error("E_PREVIEW_STALE");
@@ -849,7 +856,10 @@ export async function broadcastPearlPrecomposed(
   // Checked again at signing time: waiting for another tab's broadcast
   // (up to LOCK_WAIT_MS) must not stretch the preview's freshness.
   const skew = now - Date.now();
-  return await signAndBroadcast(frozen.composed, network, acknowledged, () => stale(Date.now() + skew));
+  return await signAndBroadcast(frozen.composed, network, acknowledged, () => {
+    stale(Date.now() + skew);
+    assertSigningSession(session);
+  });
 }
 
 export async function sendPearl(opts: ComposeOptions): Promise<SendPearlResult> {

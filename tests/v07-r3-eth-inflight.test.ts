@@ -452,12 +452,18 @@ describe("R4 — a wipe while another tab's send is in flight keeps that send's 
     expect(A.store.isOwnInflight(rec)).toBe(true);
   });
 
-  it("the wallet store awaits the clear on wipe and on replace", async () => {
+  // Updated (R6 N1): the wipe's clear is wipeKeystore's alone. The former
+  // second clear in wallet-store.wipe removed an in-flight record that
+  // turned status-unknown after wipeKeystore's clear kept it (see
+  // tests/v07-r6-wipe-eth-record.test.ts); this pinned that second call.
+  it("the wallet store awaits the clear on replace; the wipe's clear is wipeKeystore's only", async () => {
     const fs = await import("node:fs");
     const ws = fs.readFileSync("src/state/wallet-store.ts", "utf8");
-    expect(ws.match(/await forgetReplacedWalletLocalData\(\);/g)).toHaveLength(2);
-    // Every call is awaited (forgetReplacedWalletLocalData and the wipe).
-    expect(ws.match(/clearAllEthUnknown\(\);/g)).toHaveLength(2);
-    expect(ws.match(/await clearAllEthUnknown\(\);/g)).toHaveLength(2);
+    expect(ws.match(/await forgetReplacedWalletLocalData\(replaceStartedAt\);/g)).toHaveLength(2);
+    // One call (forgetReplacedWalletLocalData), awaited; none in wipe().
+    expect(ws.match(/clearAllEthUnknown\(/g)).toHaveLength(1);
+    expect(ws.match(/await clearAllEthUnknown\(\{ recordedUpTo: startedAt \}\);/g)).toHaveLength(1);
+    const db = fs.readFileSync("src/storage/db.ts", "utf8");
+    expect(db.match(/await clearAllEthUnknown\(\{ recordedUpTo: startedAt \}\);/g)).toHaveLength(1);
   });
 });

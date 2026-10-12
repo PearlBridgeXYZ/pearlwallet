@@ -288,11 +288,14 @@ describe("FZ1 / Sonnet S2 — wipe removes the record", () => {
     await expect(wipeKeystore()).resolves.toBe("wiped");
     expect(hasV3(shared)).toBe(false);
     expect(shared.map.has(KEY_V2)).toBe(false); // the former single key goes too
-    // The wallet store's wipe calls this after the commit.
-    store.clearAllEthUnknown();
+    // wipeKeystore's clear (the only one: R6 N1 removed the wallet store's
+    // second call, which this test pinned) also removed the v1 session key
+    // and the in-memory copy.
     expect(session.map.has("pearl-wallet-eth-unknown-v1")).toBe(false);
     expect(store.currentEthUnknown("mainnet", ME)).toBeNull();
     const ws = await import("node:fs").then((fs) => fs.readFileSync("src/state/wallet-store.ts", "utf8"));
-    expect(ws).toMatch(/clearAllEthUnknown\(\);/);
+    const wipe = ws.slice(ws.indexOf("  async wipe(password) {"), ws.indexOf("  async exportMnemonic("));
+    expect(wipe).toContain("result = await wipeKeystore(blob);");
+    expect(wipe).not.toMatch(/clearAllEthUnknown\(/);
   });
 });

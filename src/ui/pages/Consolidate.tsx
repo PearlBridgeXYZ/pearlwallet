@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Page from "../components/Page";
-import { useWallet } from "../../state/wallet-store";
+import { captureSigningSession, useWallet } from "../../state/wallet-store";
 import { formatGrains } from "../../lib/format";
 import { pearlTxExplorerUrl } from "../../chains/pearl/network";
 import { HistoryIncompleteError, loadSpendableUtxos, PEARL_PREVIEW_FRESHNESS_MS, type PoolUtxo } from "../../services/pearl-tx";
@@ -245,6 +245,8 @@ export default function Consolidate() {
   async function run() {
     if (!plan || !coins || plan.batches.length === 0 || running) return;
     const batches = plan.batches;
+    // Every batch of this run is signed only in the session it started in.
+    const session = captureSigningSession();
     setFrozen(plan);
     setRunning(true);
     setFinished(false);
@@ -276,7 +278,7 @@ export default function Consolidate() {
         }
         st[i] = { state: "signing" };
         show();
-        const r = await broadcastConsolidationBatch({ batch, verifiedAt }, pearlNetwork);
+        const r = await broadcastConsolidationBatch({ batch, verifiedAt }, pearlNetwork, Date.now(), session);
         st[i] = { state: "sent", txid: r.txid };
         show();
       }

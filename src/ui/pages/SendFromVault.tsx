@@ -14,6 +14,7 @@ import {
 import { MAX_UTXO_WALK_PAGES_HARD } from "../../services/pearl-rpc";
 import { formatGrains, parsePRL } from "../../lib/format";
 import { validPearl } from "../../lib/validate";
+import { dustAmountMessage } from "../pearl-messages";
 import { useProposal } from "../../state/proposal-store";
 import type { VaultRecord } from "../../storage/db";
 
@@ -46,7 +47,7 @@ export function vaultTooManyInputsMessage(e: VaultTooManyInputsError): string {
 
 /** Same copy as Send PRL for a destination output at or below dust. */
 export function vaultDustMessage(): string {
-  return `Amount is too small: the network won't relay a payment of ${formatGrains(DUST_LIMIT_GRAINS)} PRL or less.`;
+  return dustAmountMessage();
 }
 
 export default function SendFromVault() {

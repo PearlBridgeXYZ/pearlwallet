@@ -31,7 +31,8 @@ import {
   recordEthUnknown,
   subscribeEthUnknown,
 } from "../../state/eth-unknown";
-import { probeEthUnknownRecords } from "../../services/eth-tx";
+import { probeEthUnknownRecords, SigningSessionChangedError } from "../../services/eth-tx";
+import { SESSION_CHANGED_MESSAGE } from "../../state/wallet-store";
 import { BroadcastRefusedError } from "../../services/broadcast-lock";
 
 /** A status-unknown broadcast the user has not yet cleared. */
@@ -165,9 +166,11 @@ export function ethUnresolvedMessage(network: EthNetwork, hash: string, what?: s
 }
 
 /** The signing service refused before signing or sending (another tab is
- *  sending from this address, a second tab without Web Locks, or the
- *  record could not be saved); null for any other error. */
+ *  sending from this address, a second tab without Web Locks, the record
+ *  could not be saved, or the wallet was locked after the send was
+ *  confirmed); null for any other error. */
 export function ethRefusalMessage(e: unknown): string | null {
+  if (e instanceof SigningSessionChangedError) return SESSION_CHANGED_MESSAGE;
   if (!(e instanceof BroadcastRefusedError)) return null;
   if (e.reason === "busy") return "Nothing was sent: another wallet tab is sending from this address. Wait for it to finish, then try again.";
   if (e.reason === "second-tab") return "Nothing was sent: another wallet tab is open. Close other wallet tabs, then try again.";

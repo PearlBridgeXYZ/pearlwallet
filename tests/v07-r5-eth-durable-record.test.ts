@@ -277,8 +277,14 @@ describe("M1 — an IndexedDB copy that cannot be written (or read) refuses the 
 
   it.each(["failReads", "failOpen"] as const)("%s: refused before anything is signed", async (how) => {
     const n = node();
-    const A = await openTab();
+    // Set before the page loads (R6: was set after openTab). failOpen only
+    // affects open(), and the page's load-time read opens the connection on
+    // a timer; once eth-tx also imported the wallet store the module loads
+    // took longer than that timer, so the connection was already open and
+    // the flag tested nothing. An IndexedDB that cannot be opened fails for
+    // the whole page.
     idb[how] = true;
+    const A = await openTab();
     for (const [name, call] of fourPaths(A)) {
       const err = await call().catch((e) => e);
       expect(err, name).toBeInstanceOf(A.lock.BroadcastRefusedError);

@@ -24,11 +24,12 @@ import {
   unresolvedBroadcasts,
   type BroadcastRecord,
 } from "../../services/pending-spends";
-import { useWallet } from "../../state/wallet-store";
+import { SESSION_CHANGED_MESSAGE, SigningSessionChangedError, useWallet } from "../../state/wallet-store";
 import { usePendingSpendsVersion } from "../hooks/usePendingSpends";
 
 /** User-facing copy for a broadcast refused before anything was sent. */
 export function refusalMessage(e: unknown): string | null {
+  if (e instanceof SigningSessionChangedError) return SESSION_CHANGED_MESSAGE;
   if (!(e instanceof BroadcastRefusedError)) return null;
   switch (e.reason) {
     case "unresolved":

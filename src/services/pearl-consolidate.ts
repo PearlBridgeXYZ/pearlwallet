@@ -47,6 +47,7 @@ import type { PearlNetwork } from "../chains/pearl/network";
 import type { HdBranch } from "../crypto/hd";
 import { cryptoWorker } from "../crypto/worker-client";
 import type { PearlConsolidationRequest } from "../crypto/worker";
+import { assertSigningSession, captureSigningSession, type SigningSession } from "../state/wallet-store";
 
 /** Inputs per consolidation tx. 500 key-path inputs → 28,806 vB. */
 export const CONSOLIDATION_MAX_INPUTS = MAX_SEND_INPUTS;
@@ -380,6 +381,10 @@ export async function broadcastConsolidationBatch(
   frozen: FrozenConsolidationBatch,
   network: PearlNetwork,
   now: number = Date.now(),
+  /** The signing session the user started the run in (every batch of one
+   *  run passes the same one); checked under the lock right before
+   *  signing (SigningSessionChangedError). */
+  session: SigningSession = captureSigningSession(),
 ): Promise<ConsolidationBroadcast> {
   const stale = (t: number) => {
     if (t - frozen.verifiedAt > PEARL_PREVIEW_FRESHNESS_MS) throw new Error("E_PREVIEW_STALE");
@@ -417,6 +422,7 @@ export async function broadcastConsolidationBatch(
       },
       async () => {
         stale(Date.now() + skew);
+        assertSigningSession(session);
         const { raw } = await cryptoWorker.call<"signPearlConsolidation", { raw: string }>("signPearlConsolidation", {
           req,
         });

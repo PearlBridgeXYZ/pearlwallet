@@ -27,6 +27,7 @@ import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { cryptoWorker } from "../../crypto/worker-client";
 import { broadcastSignedPearlTx, composePearlSend, DUST_LIMIT_GRAINS } from "../../services/pearl-tx";
+import { dustErrorMessage } from "../pearl-messages";
 import { BroadcastStatusUnknownError } from "../../services/pearl-rpc";
 import { PendingSpendConflictError } from "../../services/pending-spends";
 import type { PearlNetwork } from "../../chains/pearl/network";
@@ -207,7 +208,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
       };
       setPayload(p);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(dustErrorMessage(e) ?? (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }
@@ -299,7 +300,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
       };
       setPayload(p);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(dustErrorMessage(e) ?? (e instanceof Error ? e.message : String(e)));
     }
   }
 
