@@ -173,7 +173,7 @@ describe("S12 — comments and landing copy match the code", () => {
   });
 
   it("the landing page says bridge network fees and gas are shown before signing", () => {
-    const s = src("src/ui/pages/landing/LandingPage.tsx");
+    const s = src("src/ui/pages/landing/WalletGuide.tsx");
     expect(s).not.toMatch(/added when the transaction is built/);
     expect(s.match(/Pearl network fee or Ethereum gas before you sign/g)).toHaveLength(2);
   });

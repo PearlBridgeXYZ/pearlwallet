@@ -47,7 +47,7 @@ describe("tip policy text matches computeTipGrains", () => {
 
   it("every page that describes the tip uses TIP_POLICY_TEXT", () => {
     for (const f of [
-      "src/ui/pages/landing/LandingPage.tsx",
+      "src/ui/pages/landing/WalletGuide.tsx",
       "src/ui/pages/About.tsx",
       "src/ui/pages/SendPRL.tsx",
       "src/ui/pages/Settings.tsx",

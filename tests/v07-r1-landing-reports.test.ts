@@ -21,7 +21,7 @@ describe("FX8 — landing review-report claims match the reports in the repo", (
     expect(readFileSync("AUDIT-2026-05-19.md", "utf8").split("\n")[0]).toBe("# PearlWallet v0.1.0 Security & Quality Audit");
     const versions = reports.map(versionOf).filter((v): v is number[] => v !== null).sort(cmp);
     expect(versions.at(-1)).toEqual([0, 4, 3]);
-    const page = readFileSync("src/ui/pages/landing/LandingPage.tsx", "utf8");
+    const page = readFileSync("src/ui/pages/landing/WalletGuide.tsx", "utf8");
     expect(page).toContain("36 public review reports covering v0.1.0 through v0.4.3");
     expect(page).toContain("36 public review reports cover v0.1.0 through v0.4.3");
     expect(page).toContain("AI-assisted · v0.1.0–v0.4.3");

@@ -54,7 +54,7 @@ describe("Landing page visitor states", () => {
     expect(html).not.toMatch(/landing-hero|<details/);
   });
 
-  it("renders the complete first-visit page with accurate disclosures and destinations", () => {
+  it("keeps the simple hero and one-click guide with accurate disclosures and destinations", () => {
     const html = render("no-wallet");
     expect(html).toContain('href="/onboarding/create"');
     expect(html).toContain('href="/onboarding/restore"');
@@ -62,7 +62,12 @@ describe("Landing page visitor states", () => {
     expect(html).toContain('href="https://github.com/PearlBridgeXYZ/pearlwallet"');
     expect(html).toContain('href="https://pearlbridge.xyz/audit"');
     expect(html.match(/<article>/g)).toHaveLength(6);
-    expect(html.match(/<details>/g)).toHaveLength(7);
+    expect(html.match(/<details(?: class="landing-about")?>/g)).toHaveLength(8);
+    expect(html).toContain('<details class="landing-about"><summary>about / FAQ</summary>');
+    expect(html).toContain('aria-label="Create wallet"');
+    expect(html).toContain('aria-label="Import wallet"');
+    expect(html).toContain('class="ascii-pearl" aria-hidden="true"');
+    expect(html).toContain("your keys stay in your browser.");
     expect(html).toContain("No paid third-party audit has taken place yet.");
     expect(html).toContain("AI-assisted multi-model reviews");
     expect(html).toContain("36 public review reports");
