@@ -60,6 +60,34 @@ describe("functions/api/prl-price — OTC with CoinGecko fallback", () => {
     expect(r.headers.get("cache-control")).toBe("public, max-age=5");
   });
 
+  it("OTC down + CoinGecko 429 on Pages egress → the hosted price service answers", async () => {
+    const HOSTED = "https://wallet.pearlbridge.xyz/api/prl-price";
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+      calls.push(String(url));
+      if (String(url) === OTC) return new Response("", { status: 404 });
+      if (String(url) === HOSTED) return new Response(JSON.stringify({ usd_per_prl: 1.5, source: "coingecko", n_active_asks: 0 }));
+      return new Response("", { status: 429 });
+    }));
+    const r = await onRequestGet();
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ usd_per_prl: 1.5, source: "coingecko", n_active_asks: 0 });
+    expect(calls.some((c) => c.includes("coingecko"))).toBe(false);
+  });
+
+  it("a hosted answer in any other shape is ignored and CoinGecko is tried", async () => {
+    const HOSTED = "https://wallet.pearlbridge.xyz/api/prl-price";
+    for (const bad of [{ usd_per_prl: -1, source: "coingecko", n_active_asks: 0 }, { usd_per_prl: 1.5, source: "x", n_active_asks: 0 }, { usd_per_prl: "1.5", source: "coingecko", n_active_asks: 0 }]) {
+      _resetPriceCacheForTests();
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+        if (String(url) === OTC) return new Response("[]");
+        if (String(url) === HOSTED) return new Response(JSON.stringify(bad));
+        return new Response(JSON.stringify({ "pearl-2": { usd: 1.41 } }));
+      }));
+      expect(await (await onRequestGet()).json()).toEqual({ usd_per_prl: 1.41, source: "coingecko", n_active_asks: 0 });
+    }
+  });
+
   it("caches a good price for 30 s and an error for 5 s", async () => {
     vi.useFakeTimers();
     try {

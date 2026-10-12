@@ -12,6 +12,14 @@
 // — native `pearl-2` first, then `wrapped-pearl` (WPRL, 1:1 through the
 // bridge). Only when BOTH sources fail does the endpoint return an error.
 //
+// Between the two (2026-10-12): the hosted wallet's own price service
+// (wallet.pearlbridge.xyz/api/prl-price, nginx → a Node service on our
+// VPS). Pages Functions egress through shared Cloudflare IPs that
+// CoinGecko rate-limits (429), so on Pages the fallback alone is not
+// dependable; the hosted service runs the same OTC → CoinGecko chain
+// from a dedicated IP. Its answer is accepted only in the exact shape
+// below.
+//
 // Response shape (snake_case to mirror the Python alerter):
 //   { "usd_per_prl": number,
 //     "source": "vwap_median" | "lowest_ask" | "coingecko",
@@ -38,6 +46,9 @@ const OTC_URL = "https://api.pearl-otc.com/offers";
 const COINGECKO_URL =
   "https://api.coingecko.com/api/v3/simple/price?ids=pearl-2,wrapped-pearl&vs_currencies=usd";
 const COINGECKO_IDS = ["pearl-2", "wrapped-pearl"] as const;
+const HOSTED_URL = "https://wallet.pearlbridge.xyz/api/prl-price";
+/** The hosted service answers from its own cache; keep its share small. */
+export const HOSTED_TIMEOUT_MS = 3_000;
 /** Per-upstream timeout (CoinGecko). */
 export const UPSTREAM_TIMEOUT_MS = 8_000;
 /** OTC gets less so a slow order book still leaves the fallback time. */
@@ -158,16 +169,36 @@ async function fetchCoingeckoPrice(deadline: number): Promise<PriceResult | null
   return null;
 }
 
+// Second: the hosted wallet's price service. Same response shape; anything
+// else is rejected. Returns a price or throws.
+async function fetchHostedPrice(deadline: number): Promise<PriceResult> {
+  const r = await fetchJson(HOSTED_URL, deadline, HOSTED_TIMEOUT_MS);
+  if (!r.ok) throw new Error(`hosted http ${r.status}`);
+  const b = (r.json ?? {}) as Record<string, unknown>;
+  const usd = b.usd_per_prl;
+  const source = b.source;
+  const n = b.n_active_asks;
+  if (
+    typeof usd !== "number" || !isFinite(usd) || usd <= 0 ||
+    (source !== "vwap_median" && source !== "lowest_ask" && source !== "coingecko") ||
+    typeof n !== "number" || !Number.isInteger(n) || n < 0
+  ) {
+    throw new Error("hosted bad shape");
+  }
+  return { usd_per_prl: usd, source, n_active_asks: n };
+}
+
 function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
 type Upstream = { status: number; body: PriceResult | { error: string } };
 
-// OTC → CoinGecko. First usable price wins.
+// OTC → hosted service → CoinGecko. First usable price wins.
 async function fetchUpstream(): Promise<Upstream> {
   const deadline = Date.now() + UPSTREAM_TOTAL_BUDGET_MS;
   let otcErr: string | null = null;
+  let hostedErr: string;
   try {
     const otc = await fetchOtcPrice(deadline);
     if (otc) return { status: 200, body: otc };
@@ -175,17 +206,22 @@ async function fetchUpstream(): Promise<Upstream> {
     otcErr = errText(e);
   }
   try {
+    return { status: 200, body: await fetchHostedPrice(deadline) };
+  } catch (e) {
+    hostedErr = errText(e);
+  }
+  try {
     const cg = await fetchCoingeckoPrice(deadline);
     if (cg) return { status: 200, body: cg };
   } catch (e) {
     return {
       status: 502,
-      body: { error: `otc: ${otcErr ?? "no asks"}; coingecko: ${errText(e)}` },
+      body: { error: `otc: ${otcErr ?? "no asks"}; hosted: ${hostedErr}; coingecko: ${errText(e)}` },
     };
   }
   return {
     status: 503,
-    body: { error: `no price: otc: ${otcErr ?? "no active SELL_PRL asks"}; coingecko: no PRL/WPRL listing` },
+    body: { error: `no price: otc: ${otcErr ?? "no active SELL_PRL asks"}; hosted: ${hostedErr}; coingecko: no PRL/WPRL listing` },
   };
 }
 
