@@ -1,7 +1,5 @@
 import { Link } from "react-router-dom";
 import Page from "../components/Page";
-import ActivityList from "../components/ActivityList";
-import CopyAddress from "../components/CopyAddress";
 import InstallPWA from "../components/InstallPWA";
 import BtxCard from "../components/BtxCard";
 import UpdatedAgo from "../components/UpdatedAgo";
@@ -50,7 +48,6 @@ export default function Dashboard() {
 
       <h1 className="page-title">Your wallet</h1>
       <div className="dashboard-balance">
-        <div className="text-[11px] font-semibold uppercase tracking-[.14em] text-accent">Total balance</div>
         {b.totalUsd !== null ? (
           <div className="dashboard-total break-words font-mono tabular-nums">{formatUSD(b.totalUsd)}</div>
         ) : b.prl.value !== null && b.price.status === "error" ? (
@@ -78,18 +75,11 @@ export default function Dashboard() {
           </div>
         )}
         <UpdatedAgo at={b.prl.updatedAt} />
-        <p className="mt-3 text-xs leading-6 text-text-3">
-          {ethEnabled ? "Estimated PRL + WPRL value in USD. ETH for network fees is shown separately." : "Estimated PRL value in USD."}
-        </p>
-
-        <div className="dashboard-assets mt-6 divide-y divide-line border-y border-line">
-          <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-start gap-4 py-4">
-            <div>
-              <h2 className="text-sm font-semibold">PRL</h2>
-              <p className="mt-1 text-xs text-text-3">Pearl</p>
-            </div>
-            <div className="min-w-0 text-right">
-              <div className="break-words text-xl font-medium tabular-nums">
+        <div className="dashboard-assets">
+          <div className="dashboard-asset">
+            <h2>PRL</h2>
+            <div className="dashboard-asset-detail">
+              <div className="dashboard-amount">
                 {b.prl.value !== null ? <span className="font-mono tabular-nums">{formatGrains(b.prl.value)}</span> : b.prl.status === "error" ? "Unavailable" : b.prl.status === "loading" ? (
                   <span role="status" className="block">
                     <span className="sr-only">Loading PRL balance</span>
@@ -97,7 +87,7 @@ export default function Dashboard() {
                   </span>
                 ) : "—"}
               </div>
-              <div className="mt-1 font-mono text-xs tabular-nums text-text-3">{usdOf(b.prl.value)}</div>
+              <div className="dashboard-valuation">{usdOf(b.prl.value)}</div>
               {(b.prl.status === "partial" || b.prl.stale) && (
                 <div className="mt-1 text-xs text-warn">
                   {prlIncompleteNote(b.prl)}{" "}
@@ -124,13 +114,10 @@ export default function Dashboard() {
           </div>
           {ethEnabled && (
             <>
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-start gap-4 py-4">
-                <div>
-                  <h2 className="text-sm font-semibold">WPRL</h2>
-                  <p className="mt-1 text-xs text-text-3">Ethereum</p>
-                </div>
-                <div className="min-w-0 text-right">
-                  <div className="break-words text-xl font-medium tabular-nums">
+              <div className="dashboard-asset">
+                <h2>WPRL</h2>
+                <div className="dashboard-asset-detail">
+                  <div className="dashboard-amount">
                     {b.wprl?.value != null ? <span className="font-mono tabular-nums">{formatWprl(b.wprl.value)}</span> : b.wprl?.status === "error" ? "Unavailable" : b.wprl?.status === "loading" ? (
                       <span role="status" className="block">
                         <span className="sr-only">Loading WPRL balance</span>
@@ -138,7 +125,7 @@ export default function Dashboard() {
                       </span>
                     ) : "—"}
                   </div>
-                  <div className="mt-1 font-mono text-xs tabular-nums text-text-3">{usdOf(b.wprl?.value ?? null)}</div>
+                  <div className="dashboard-valuation">{usdOf(b.wprl?.value ?? null)}</div>
                   {(b.wprl?.status === "partial" || b.wprl?.stale) && (
                     <div className="mt-1 text-xs text-warn">Showing last known balance — retrying.</div>
                   )}
@@ -150,13 +137,10 @@ export default function Dashboard() {
                   )}
                 </div>
               </div>
-              <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,2fr)] items-start gap-4 py-4">
-                <div>
-                  <h2 className="text-sm font-semibold">ETH</h2>
-                  <p className="mt-1 text-xs text-text-3">Network fees</p>
-                </div>
-                <div className="min-w-0 text-right">
-                  <div className="break-words text-xl font-medium tabular-nums">
+              <div className="dashboard-asset">
+                <h2>ETH</h2>
+                <div className="dashboard-asset-detail">
+                  <div className="dashboard-amount">
                     {b.eth?.value != null ? <span className="font-mono tabular-nums">{formatWei(b.eth.value)}</span> : b.eth?.status === "error" ? "Unavailable" : b.eth?.status === "loading" ? (
                       <span role="status" className="block">
                         <span className="sr-only">Loading ETH balance</span>
@@ -164,6 +148,7 @@ export default function Dashboard() {
                       </span>
                     ) : "—"}
                   </div>
+                  <div className="dashboard-valuation">network fees</div>
                   {(b.eth?.status === "partial" || b.eth?.stale) && (
                     <div className="mt-1 text-xs text-warn">Showing last known balance — retrying.</div>
                   )}
@@ -205,37 +190,11 @@ export default function Dashboard() {
           {offlineSigningEnabled && (
             <Link to="/offline-sign">Offline signing <span className="text-warn">(experimental)</span></Link>
           )}
-        </div>
-      </div>
-
-      <div className="mt-8 border-t border-line pt-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-normal">Your addresses</h2>
-          <Link to="/receive" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">View QR</Link>
-        </div>
-        <div className="mt-3 space-y-3 text-sm">
-          <CopyAddress label="Pearl L1" value={addresses?.pearl ?? "—"} />
-          {ethEnabled && (
-            <CopyAddress label="Ethereum (WPRL + ETH)" value={addresses?.eth ?? "—"} />
-          )}
+          <Link to="/history">Activity</Link>
         </div>
       </div>
 
       {btxOn && <BtxCard />}
-
-      <div className="mt-8 border-t border-line pt-5">
-        <div className="flex items-center justify-between">
-          <h2 className="text-base font-normal">Recent activity</h2>
-          <Link to="/history" className="inline-flex min-h-11 items-center text-sm text-accent underline decoration-line underline-offset-4 hover:decoration-accent">See all</Link>
-        </div>
-        {/* Start the activity scan once the first PRL scan has settled so
-            it doesn't compete with the balance scan for the RPC budget. */}
-        <ActivityList limit={5} truncate enabled={b.prl.status !== "loading"} />
-      </div>
-
-      <div className="mt-4 text-center text-xs text-text-3">
-        <Link to="/about" className="inline-flex min-h-11 items-center hover:underline">About this wallet</Link>
-      </div>
     </Page>
   );
 }
