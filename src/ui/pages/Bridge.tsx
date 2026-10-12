@@ -3,8 +3,8 @@ import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { refusalMessage } from "../components/PendingBroadcasts";
 import EthBroadcastUnknown, { ethUnknownBlocksSend, useEthUnknown } from "../components/EthBroadcastUnknown";
-import { useWallet } from "../../state/wallet-store";
-import { db, type BridgeCrossingRecord } from "../../storage/db";
+import { sessionWalletPrimary, useWallet } from "../../state/wallet-store";
+import { db, putDepositPinForWallet, type BridgeCrossingRecord } from "../../storage/db";
 import { bridgeConfig } from "../../services/bridge";
 import {
   getEthReceiptStatus,
@@ -48,13 +48,17 @@ import {
 
 // TOFU store for the wrap deposit address (audit H-2/N3), backed by a
 // DEDICATED table keyed on the eth address — idempotent put(), never
-// pollutes the user-facing address book.
-const depositTofu: DepositTofuStore = {
+// pollutes the user-facing address book. A pin is bound to the session's
+// wallet: refused (E_WALLET_WIPED / E_WALLET_CHANGED) if another tab wiped
+// or replaced it meanwhile, so it never lands under the next wallet.
+export const depositTofu: DepositTofuStore = {
   async get(key) {
     return (await db.bridgeDepositPins.get(key))?.pearlAddress ?? null;
   },
   async set(key, value) {
-    await db.bridgeDepositPins.put({ ethAddress: key, pearlAddress: value, pinnedAt: Date.now() });
+    const walletPrimary = sessionWalletPrimary();
+    if (!walletPrimary) throw new Error("E_LOCKED");
+    await putDepositPinForWallet({ ethAddress: key, pearlAddress: value, pinnedAt: Date.now() }, walletPrimary);
   },
 };
 

@@ -19,7 +19,16 @@
 // copy keeps the block for this page load. The records are public chain
 // data; wiping the wallet removes them.
 //
-// v1 of this key lived in sessionStorage; it is not migrated.
+// One localStorage key per record (ETH_UNKNOWN_KEY_PREFIX + network +
+// address + hash), never one shared key rewritten whole: each tab's
+// localStorage view is updated from the others asynchronously, so a tab
+// rewriting a shared key from a stale view would erase a record another
+// tab had just saved (and with it the only block against a second
+// payment). Reads enumerate the keys by prefix. An entry that is not a
+// valid record for its key fails closed: it blocks its address as an
+// unreadable status-unknown record until acknowledged. The v2 (one
+// shared key) and v1 (sessionStorage) layouts are not read or migrated;
+// wipe removes them.
 //
 // In-flight records: services/eth-tx.ts saves every signed tx here BEFORE
 // submitting it (beginEthBroadcast), marked `inflight` with the sending
@@ -44,7 +53,13 @@ import {
   withBroadcastLock,
 } from "../services/broadcast-lock";
 
-export const ETH_UNKNOWN_STORAGE_KEY = "pearl-wallet-eth-unknown-v2";
+/** Prefix of the per-record keys: `${prefix}<network>:<address>:<hash>`
+ *  (address and hash lowercase), one key per record. */
+export const ETH_UNKNOWN_KEY_PREFIX = "pearl-wallet-eth-unknown-v3:";
+/** The former single-key layout (one JSON object holding every record,
+ *  rewritten whole on each change): not read, not migrated; only removed
+ *  on wipe. */
+export const ETH_UNKNOWN_STORAGE_KEY_V2 = "pearl-wallet-eth-unknown-v2";
 /** The former, tab-local (sessionStorage) key; only removed on wipe. */
 export const ETH_UNKNOWN_SESSION_KEY_V1 = "pearl-wallet-eth-unknown-v1";
 
@@ -69,16 +84,30 @@ export interface EthUnknownRecord {
 
 type Records = Record<string, EthUnknownRecord[]>;
 
-/** Minimal Storage surface (localStorage, or a test double). */
+/** Minimal Storage surface (localStorage, or a test double). `key` /
+ *  `length` enumerate the per-record keys. */
 export interface KVStorage {
   getItem(k: string): string | null;
   setItem(k: string, v: string): void;
   removeItem(k: string): void;
+  key(i: number): string | null;
+  readonly length: number;
 }
 
 export function ethUnknownKey(network: string, from: string): string {
   return `${network}:${from.toLowerCase()}`;
 }
+
+/** Storage key of one record. */
+export function ethUnknownRecordKey(network: string, from: string, hash: string): string {
+  return `${ETH_UNKNOWN_KEY_PREFIX}${network}:${from.toLowerCase()}:${hash.toLowerCase()}`;
+}
+
+/** Shown (and blocking) in place of an entry that is not a valid record. */
+export const ETH_UNKNOWN_UNREADABLE = "unreadable record";
+const ZERO_HASH = `0x${"0".repeat(64)}` as const;
+const HASH_RE = /^0x[0-9a-f]{64}$/;
+const ADDR_RE = /^0x[0-9a-f]{40}$/;
 
 function isRecord(x: unknown): x is EthUnknownRecord {
   const r = x as EthUnknownRecord;
@@ -97,61 +126,127 @@ function isRecord(x: unknown): x is EthUnknownRecord {
   );
 }
 
-/** All records, validated (malformed entries are dropped, never trusted). */
-export function readEthUnknownRecords(storage: KVStorage): Records {
-  let raw: string | null;
-  try {
-    raw = storage.getItem(ETH_UNKNOWN_STORAGE_KEY);
-  } catch {
-    return {};
-  }
-  if (!raw) return {};
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return {};
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
-  const out: Records = {};
-  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-    if (!Array.isArray(v)) continue;
-    // A record only counts under the key it belongs to.
-    const recs = v.filter((r): r is EthUnknownRecord => isRecord(r) && ethUnknownKey(r.network, r.from) === k);
-    if (recs.length > 0) out[k] = recs;
+interface Entry {
+  /** The storage key it was read from. */
+  key: string;
+  rec: EthUnknownRecord;
+  /** False: not a valid record (rec stands in for it, failing closed). */
+  valid: boolean;
+}
+
+/** Every key under `prefix` (a snapshot; read before anything changes). */
+function keysWithPrefix(storage: KVStorage, prefix: string): string[] {
+  const out: string[] = [];
+  const n = storage.length;
+  for (let i = 0; i < n; i++) {
+    const k = storage.key(i);
+    if (k !== null && k.startsWith(prefix)) out.push(k);
   }
   return out;
 }
 
-function writeRecords(storage: KVStorage, recs: Records): void {
-  if (Object.keys(recs).length === 0) storage.removeItem(ETH_UNKNOWN_STORAGE_KEY);
-  else storage.setItem(ETH_UNKNOWN_STORAGE_KEY, JSON.stringify(recs));
+/**
+ * The entry stored under `key`, which belongs to `network` + `from`
+ * (lowercase). Anything that is not a valid record for exactly that key
+ * (unparseable, another shape, another network / address / hash, a bad
+ * hash in the key) FAILS CLOSED: it reads as an unresolved status-unknown
+ * record for that address (what = ETH_UNKNOWN_UNREADABLE, the key's hash
+ * when it has one), so it blocks signing until the user checks and
+ * acknowledges it, never silently unblocks. Null: the key is gone.
+ */
+function readEntry(storage: KVStorage, key: string, network: string, from: string): Entry | null {
+  const raw = storage.getItem(key);
+  if (raw === null) return null;
+  const hashPart = key.slice(ETH_UNKNOWN_KEY_PREFIX.length + network.length + 1 + from.length + 1);
+  const keyHash = HASH_RE.test(hashPart) ? (hashPart as `0x${string}`) : null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    parsed = undefined;
+  }
+  if (
+    keyHash &&
+    isRecord(parsed) &&
+    parsed.network === network &&
+    parsed.from.toLowerCase() === from &&
+    parsed.hash.toLowerCase() === keyHash
+  ) {
+    return { key, rec: { ...parsed, from }, valid: true };
+  }
+  return {
+    key,
+    rec: { network: network as EthNetwork, from, hash: keyHash ?? ZERO_HASH, what: ETH_UNKNOWN_UNREADABLE, ts: 0 },
+    valid: false,
+  };
+}
+
+const byAge = (a: Entry, b: Entry) => a.rec.ts - b.rec.ts || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+
+/** Entries for this network + address, oldest first. Throws if the
+ *  storage cannot be read. */
+function entriesFor(storage: KVStorage, network: string, from: string): Entry[] {
+  const addr = from.toLowerCase();
+  const out: Entry[] = [];
+  for (const k of keysWithPrefix(storage, `${ETH_UNKNOWN_KEY_PREFIX}${network}:${addr}:`)) {
+    const e = readEntry(storage, k, network, addr);
+    if (e) out.push(e);
+  }
+  return out.sort(byAge);
+}
+
+/** All records, grouped by ethUnknownKey (each entry read as
+ *  entriesFor does: an invalid one fails closed for its address). Keys
+ *  that name no network + address cannot block any send and are skipped. */
+export function readEthUnknownRecords(storage: KVStorage): Records {
+  let keys: string[];
+  try {
+    keys = keysWithPrefix(storage, ETH_UNKNOWN_KEY_PREFIX);
+  } catch {
+    return {};
+  }
+  const groups = new Map<string, Entry[]>();
+  for (const k of keys) {
+    const [network, addr] = k.slice(ETH_UNKNOWN_KEY_PREFIX.length).split(":");
+    if (!network || !addr || !ADDR_RE.test(addr)) continue;
+    let e: Entry | null;
+    try {
+      e = readEntry(storage, k, network, addr);
+    } catch {
+      continue;
+    }
+    if (!e) continue;
+    const g = ethUnknownKey(network, addr);
+    groups.set(g, [...(groups.get(g) ?? []), e]);
+  }
+  const out: Records = {};
+  for (const [g, es] of groups) out[g] = es.sort(byAge).map((e) => e.rec);
+  return out;
 }
 
 /** Records (blocking and sent) for this network + address, oldest first. */
 export function ethUnknownFor(storage: KVStorage, network: string, from: string | undefined): EthUnknownRecord[] {
   if (!from) return [];
-  return readEthUnknownRecords(storage)[ethUnknownKey(network, from)] ?? [];
+  return entriesFor(storage, network, from).map((e) => e.rec);
 }
 
 /** Records a status-unknown broadcast (idempotent per hash). A plain
  *  record for a hash saved in flight turns that record status-unknown (a
- *  record already found sent stays sent). */
+ *  record already found sent stays sent). Writes only this record's own
+ *  key, so a concurrent write by another tab never erases it or is erased
+ *  by it. */
 export function putEthUnknown(storage: KVStorage, rec: EthUnknownRecord): void {
   const r: EthUnknownRecord = { ...rec, from: rec.from.toLowerCase() };
-  const all = readEthUnknownRecords(storage);
-  const k = ethUnknownKey(r.network, r.from);
-  const list = all[k] ?? [];
-  const i = list.findIndex((x) => x.hash.toLowerCase() === r.hash.toLowerCase());
-  if (i >= 0) {
-    const x = list[i]!;
+  const key = ethUnknownRecordKey(r.network, r.from, r.hash);
+  const e = readEntry(storage, key, r.network, r.from);
+  // (An unreadable entry under this key is replaced by the valid record.)
+  if (e?.valid) {
+    const x = e.rec;
     if (!x.inflight || x.sent || r.inflight) return;
-    const settled: EthUnknownRecord = { network: x.network, from: x.from, hash: x.hash, what: x.what, ts: x.ts };
-    all[k] = list.map((y, j) => (j === i ? settled : y));
-  } else {
-    all[k] = [...list, r];
+    storage.setItem(key, JSON.stringify({ network: x.network, from: x.from, hash: x.hash, what: x.what, ts: x.ts }));
+    return;
   }
-  writeRecords(storage, all);
+  storage.setItem(key, JSON.stringify(r));
 }
 
 /** Unresolved (blocking) records for this network + address, oldest first. */
@@ -161,28 +256,20 @@ export function unresolvedEthUnknownFor(storage: KVStorage, network: string, fro
 
 /** A lookup found `hash` on the network: marks that record sent. */
 export function markEthUnknownSentIn(storage: KVStorage, network: string, from: string, hash: string): boolean {
-  const all = readEthUnknownRecords(storage);
-  const k = ethUnknownKey(network, from);
-  const list = all[k];
-  if (!list) return false;
   let changed = false;
-  all[k] = list.map((x) => {
-    if (x.hash.toLowerCase() !== hash.toLowerCase() || x.sent) return x;
+  for (const { key, rec: x } of entriesFor(storage, network, from)) {
+    if (x.hash.toLowerCase() !== hash.toLowerCase() || x.sent) continue;
+    storage.setItem(key, JSON.stringify({ network: x.network, from: x.from, hash: x.hash, what: x.what, ts: x.ts, sent: true }));
     changed = true;
-    return { network: x.network, from: x.from, hash: x.hash, what: x.what, ts: x.ts, sent: true as const };
-  });
-  if (changed) writeRecords(storage, all);
+  }
   return changed;
 }
 
 /** The user checked `hash` and it was not sent: clears that record only. */
 export function acknowledgeEthUnknown(storage: KVStorage, network: string, from: string, hash: string): void {
-  const all = readEthUnknownRecords(storage);
-  const k = ethUnknownKey(network, from);
-  const list = (all[k] ?? []).filter((x) => x.hash.toLowerCase() !== hash.toLowerCase());
-  if (list.length > 0) all[k] = list;
-  else delete all[k];
-  writeRecords(storage, all);
+  for (const { key, rec } of entriesFor(storage, network, from)) {
+    if (rec.hash.toLowerCase() === hash.toLowerCase()) storage.removeItem(key);
+  }
 }
 
 // ── Live store (localStorage + change listeners) ────────────────────────
@@ -193,6 +280,10 @@ function memoryStorage(): KVStorage {
     getItem: (k) => m.get(k) ?? null,
     setItem: (k, v) => void m.set(k, v),
     removeItem: (k) => void m.delete(k),
+    key: (i) => [...m.keys()][i] ?? null,
+    get length() {
+      return m.size;
+    },
   };
 }
 
@@ -202,7 +293,7 @@ function liveStorage(): KVStorage {
     const s = (globalThis as { localStorage?: KVStorage }).localStorage;
     if (s) {
       // Probe: localStorage can exist but throw (blocked storage).
-      s.getItem(ETH_UNKNOWN_STORAGE_KEY);
+      s.getItem(ETH_UNKNOWN_KEY_PREFIX);
       return s;
     }
   } catch {
@@ -223,7 +314,7 @@ function notify(): void {
   if (typeof g.addEventListener === "function") {
     try {
       g.addEventListener("storage", (e) => {
-        if (!e || e.key === null || e.key === undefined || e.key === ETH_UNKNOWN_STORAGE_KEY) notify();
+        if (!e || e.key === null || e.key === undefined || e.key.startsWith(ETH_UNKNOWN_KEY_PREFIX)) notify();
       });
     } catch {
       /* no storage events: this tab still reads storage before every send */
@@ -325,22 +416,76 @@ export function markEthUnknownSent(network: string, from: string, hash: string):
   notify();
 }
 
-/** Wipe: forgets every record (live storage, the v1 session key and the
- *  in-memory copy). */
-export function clearAllEthUnknown(): void {
+/** The in-flight record stored under `key`, when that key holds a valid
+ *  one (null otherwise: a plain, sent or unreadable entry). */
+function inflightEntryAt(storage: KVStorage, key: string): EthUnknownRecord | null {
+  const [network, addr] = key.slice(ETH_UNKNOWN_KEY_PREFIX.length).split(":");
+  if (!network || !addr || !ADDR_RE.test(addr)) return null;
+  const e = readEntry(storage, key, network, addr);
+  return e?.valid && e.rec.inflight && !e.rec.sent ? e.rec : null;
+}
+
+/**
+ * Wipe / replace-wallet: forgets every record (every per-record key in
+ * live storage, the former v2 key and v1 session key, and the in-memory
+ * copy) EXCEPT an in-flight record whose send may still be running
+ * (ethInflightSenderActive: this tab's own running send, or the
+ * per-address broadcast lock held by another tab). That send has signed
+ * and may have submitted; its record is the only block that survives the
+ * sender dying mid-flight, so removing it then would let a later tab (the
+ * same wallet restored) sign a second payment. Once its sender is gone the
+ * record reads status-unknown and a later wipe removes it.
+ *
+ * Plain, sent and unreadable records go at once (synchronously); each
+ * in-flight one is removed only after its sender is found gone. Keys saved
+ * after the snapshot (a send that starts meanwhile) are never touched.
+ */
+export async function clearAllEthUnknown(): Promise<void> {
+  const stores: KVStorage[] = [];
   for (const s of [
     (globalThis as { localStorage?: KVStorage }).localStorage,
     (globalThis as { sessionStorage?: KVStorage }).sessionStorage,
   ]) {
     try {
-      s?.removeItem(ETH_UNKNOWN_STORAGE_KEY);
+      s?.removeItem(ETH_UNKNOWN_STORAGE_KEY_V2);
       s?.removeItem(ETH_UNKNOWN_SESSION_KEY_V1);
+      if (s) stores.push(s);
     } catch {
       /* ignore */
     }
   }
-  fallback = null;
-  ownInflight.clear();
+  if (fallback) stores.push(fallback);
+  const pending: Array<{ s: KVStorage; key: string; rec: EthUnknownRecord }> = [];
+  for (const s of stores) {
+    try {
+      for (const k of keysWithPrefix(s, ETH_UNKNOWN_KEY_PREFIX)) {
+        let rec: EthUnknownRecord | null = null;
+        try {
+          rec = inflightEntryAt(s, k);
+        } catch {
+          rec = null;
+        }
+        if (rec) pending.push({ s, key: k, rec });
+        else s.removeItem(k);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  const kept = new Set<string>();
+  for (const { s, key, rec } of pending) {
+    if (await ethInflightSenderActive(rec)) {
+      kept.add(ownKey(rec.network, rec.hash));
+      continue;
+    }
+    try {
+      s.removeItem(key);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (fallback && fallback.length === 0) fallback = null;
+  for (const k of [...ownInflight]) if (!kept.has(k)) ownInflight.delete(k);
   notify();
 }
 

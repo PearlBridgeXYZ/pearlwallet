@@ -29,6 +29,26 @@ import type { PearlNetworkParams } from "./network";
 export const MULTISIG_MIN_THRESHOLD = 1;
 export const MULTISIG_MAX_COSIGNERS = 15;
 
+/**
+ * The one ceiling on the inputs of a vault transaction, shared by every
+ * path that handles one: composing (services/multisig maxVaultInputs,
+ * which may go lower to stay under the 100,000 vB relay limit), cosigning
+ * (crypto/worker signPearlMultisigPsbt) and importing a vault from a
+ * cosign request (services/vault-import recoverVaultFromPsbt). So every
+ * PSBT this wallet composes is accepted by its own import and cosign
+ * paths, and nothing larger is signed or walked.
+ *
+ * 256 is the import path's existing main-thread backstop. Composing was
+ * lowered to it rather than import raised to compose's former 500: the
+ * import binding walk and the cosign signing loop run on PSBTs from other
+ * parties, so their bound stays where it was; compose only loses
+ * one-transaction capacity for vaults with small per-input witnesses
+ * (2-of-3: 500 → 256, 8-of-15: 319 → 256; 15-of-15 stays 234, its size
+ * limit), and a larger send gets the usual "too many coins" refusal with
+ * the most one transaction can send.
+ */
+export const MAX_VAULT_INPUTS = 256;
+
 export interface VaultDescriptor {
   /** Required signatures (m). */
   threshold: number;

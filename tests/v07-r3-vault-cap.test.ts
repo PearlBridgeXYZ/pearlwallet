@@ -89,7 +89,8 @@ describe("FZ5 — vault sends are capped below the 100,000 vB standard limit", (
     const per = perInput(rec);
     const cap = multisig.maxVaultInputs(per);
     expect(estVsize(cap, 2, per)).toBeLessThan(100_000n);
-    expect(cap === 500 || estVsize(cap + 1, 2, per) >= 100_000n).toBe(true);
+    // The shared vault input ceiling (R4 L4), or the size limit.
+    expect(cap === multisig.MAX_VAULT_INPUTS || estVsize(cap + 1, 2, per) >= 100_000n).toBe(true);
     const spy = mockCoins(rec, count, value);
     try {
       // Needs (almost) every coin: far above the cap.
@@ -122,7 +123,7 @@ describe("FZ5 — vault sends are capped below the 100,000 vB standard limit", (
     const rec = vaultRecord(15, 15);
     const per = perInput(rec);
     expect(multisig.maxVaultInputs(per)).toBe(234);
-    expect(multisig.maxVaultInputs(perInput(vaultRecord(2, 3)))).toBe(500); // MAX_SEND_INPUTS binds first
+    expect(multisig.maxVaultInputs(perInput(vaultRecord(2, 3)))).toBe(256); // the shared vault input ceiling binds first (R4 L4; was MAX_SEND_INPUTS = 500)
     // Sign + finalise a 4-input spend: the per-input estimate the cap is
     // computed from is at least the real per-input size (so 234 real
     // inputs stay under the limit too). Signing all 234 × 15 is too slow
@@ -153,7 +154,7 @@ describe("FZ5 — vault sends are capped below the 100,000 vB standard limit", (
 
   it("the vault send page shows the refusal readably", async () => {
     const { vaultTooManyInputsMessage } = await import("../src/ui/pages/SendFromVault");
-    const msg = vaultTooManyInputsMessage(new multisig.VaultTooManyInputsError(293, 236, 300, 300_000_000n, 230_000_000n));
+    const msg = vaultTooManyInputsMessage(new multisig.VaultTooManyInputsError(293, 236, 300, 300_000_000n, 230_000_000n, "size"));
     expect(msg).toContain("needs 293 vault coins");
     expect(msg).toContain("at most 236");
     expect(msg).toContain("100,000 vbytes");

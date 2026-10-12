@@ -34,7 +34,7 @@ import { deriveBtxAddressFromSeed, deriveBtxAccount, btxMasterIkm, clearBtxAccou
 import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput } from "../chains/btx/tx";
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { assertBtxUiEnabled } from "../lib/features";
-import { vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
+import { MAX_VAULT_INPUTS, vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
@@ -663,6 +663,9 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       if (!Array.isArray(r.utxos) || r.utxos.length === 0) {
         throw new Error("E_PEARL_NO_INPUTS");
       }
+      // The shared vault input ceiling: never compose what this wallet's
+      // own cosign / import paths would refuse.
+      if (r.utxos.length > MAX_VAULT_INPUTS) throw new Error("E_MULTISIG_TOO_MANY_INPUTS");
       if (!Array.isArray(r.outputs) || r.outputs.length === 0) {
         throw new Error("E_PEARL_NO_OUTPUTS");
       }
@@ -781,6 +784,8 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         );
       }
       if (tx.inputsLength === 0) throw new Error("E_PEARL_NO_INPUTS");
+      // The shared vault input ceiling (compose and import use it too).
+      if (tx.inputsLength > MAX_VAULT_INPUTS) throw new Error("E_MULTISIG_TOO_MANY_INPUTS");
 
       // Per-input vault binding check.
       for (let i = 0; i < tx.inputsLength; i++) {

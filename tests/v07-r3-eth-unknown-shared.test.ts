@@ -24,6 +24,15 @@ const ME = account.address;
 const OTHER = "0x0000000000000000000000000000000000000002" as const;
 const H1 = `0x${"11".repeat(32)}` as const;
 const KEY_V2 = "pearl-wallet-eth-unknown-v2";
+// One localStorage key per record (L1: a shared key rewritten whole lost
+// other tabs' records).
+const V3 = "pearl-wallet-eth-unknown-v3:";
+type RawRec = { network: string; from: string; hash: string; what: string; ts: number; sent?: true };
+const putRaw = (s: { setItem(k: string, v: string): void }, r: RawRec) =>
+  s.setItem(`${V3}${r.network}:${r.from.toLowerCase()}:${r.hash.toLowerCase()}`, JSON.stringify(r));
+const rawFor = (s: { map: Map<string, string> }, network: string, from: string): RawRec[] =>
+  [...s.map].filter(([k]) => k.startsWith(`${V3}${network}:${from.toLowerCase()}:`)).map(([, v]) => JSON.parse(v) as RawRec).sort((a, b) => a.ts - b.ts);
+const hasV3 = (s: { map: Map<string, string> }) => [...s.map.keys()].some((k) => k.startsWith(V3));
 
 type KV = { getItem(k: string): string | null; setItem(k: string, v: string): void; removeItem(k: string): void; key(i: number): string | null; readonly length: number; clear(): void };
 function kv(onWrite?: (k: string) => void): KV & { map: Map<string, string> } {
@@ -95,7 +104,7 @@ describe("FZ1 — the block is shared by every tab and survives a closed browser
     // Other address / network: not blocked.
     expect(inTab(C, () => C.m.currentEthUnknown("mainnet", OTHER))).toBeNull();
     expect(inTab(C, () => C.m.currentEthUnknown("sepolia", ME))).toBeNull();
-    expect(shared.map.has(KEY_V2)).toBe(true);
+    expect(hasV3(shared)).toBe(true);
     // Acknowledged in B → gone in A, live.
     const seenA = vi.fn();
     A.m.subscribeEthUnknown(seenA);
@@ -164,7 +173,7 @@ describe("FZ1 — the signing service refuses while a record is unresolved", () 
     const { ethTx, store, sign } = await services();
     installFetch((req) => ok(req.id, req.method === "eth_estimateGas" ? "0x5208" : req.method === "eth_getBlockByNumber" ? null : "0x0"));
     // Recorded by ANOTHER tab: present only in shared localStorage.
-    shared.setItem(KEY_V2, JSON.stringify({ [`mainnet:${ME.toLowerCase()}`]: [{ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "ETH transfer", ts: 1 }] }));
+    putRaw(shared, { network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "ETH transfer", ts: 1 });
     const ceiling = { maxFeePerGas: 10n ** 18n, maxCostWei: 10n ** 30n };
     const calls: Array<[string, () => Promise<unknown>]> = [
       ["sendNative", () => ethTx.sendNative({ network: "mainnet", from: ME, to: OTHER, value: 1n, tier: "normal", frozen: frozen() })],
@@ -187,7 +196,7 @@ describe("FZ1 — the signing service refuses while a record is unresolved", () 
     const { ethTx, store, sign } = await services();
     installFetch((req) => {
       if (req.method === "eth_getTransactionCount") {
-        shared.setItem(KEY_V2, JSON.stringify({ [`mainnet:${ME.toLowerCase()}`]: [{ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "burn", ts: 1 }] }));
+        putRaw(shared, { network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "burn", ts: 1 });
         return ok(req.id, "0x5");
       }
       return ok(req.id, null);
@@ -202,7 +211,7 @@ describe("FZ1 — the signing service refuses while a record is unresolved", () 
     const raw = await signedRaw(5);
     const local = keccak256(raw);
     sign.mockResolvedValue({ raw } as never);
-    shared.setItem(KEY_V2, JSON.stringify({ [`mainnet:${OTHER}`]: [{ network: "mainnet", from: OTHER, hash: H1, what: "ETH transfer", ts: 1 }] }));
+    putRaw(shared, { network: "mainnet", from: OTHER, hash: H1, what: "ETH transfer", ts: 1 });
     installFetch((req) => {
       if (req.method === "eth_getTransactionCount") return ok(req.id, "0x5");
       if (req.method === "eth_sendRawTransaction") return new Response("Service Unavailable", { status: 503 });
@@ -213,7 +222,7 @@ describe("FZ1 — the signing service refuses while a record is unresolved", () 
     expect(sign).toHaveBeenCalledTimes(1);
     // Recorded in shared storage: every tab now refuses a second payment.
     expect(store.unresolvedEthUnknown("mainnet", ME).map((r) => r.hash)).toEqual([local]);
-    expect(JSON.parse(shared.getItem(KEY_V2)!)[`mainnet:${ME.toLowerCase()}`][0]).toMatchObject({ hash: local, what: "ETH transfer" });
+    expect(rawFor(shared, "mainnet", ME)[0]).toMatchObject({ hash: local, what: "ETH transfer" });
     const again = await ethTx.sendNative({ network: "mainnet", from: ME, to: OTHER, value: 1n, tier: "normal", frozen: frozen() }).catch((e) => e);
     expect(again).toBeInstanceOf(store.EthUnresolvedBroadcastError);
     expect(sign).toHaveBeenCalledTimes(1);
@@ -238,7 +247,7 @@ describe("FZ1 — on mount each unresolved hash is looked up once", () => {
     const recs = store.unresolvedEthUnknown("mainnet", ME);
     expect(recs.map((r) => r.hash)).toEqual([H2]);
     // The H1 record is kept as "sent" (shown, not blocking) until dismissed.
-    const raw = JSON.parse(shared.getItem(KEY_V2)!)[`mainnet:${ME.toLowerCase()}`];
+    const raw = rawFor(shared, "mainnet", ME);
     expect(raw.find((r: { hash: string }) => r.hash === H1)).toMatchObject({ sent: true });
     expect(store.currentEthUnknown("mainnet", ME)?.hash).toBe(H2); // unresolved shown first
     // H2 found later → nothing blocks; the "sent" notice remains.
@@ -260,14 +269,16 @@ describe("FZ1 — on mount each unresolved hash is looked up once", () => {
 });
 
 describe("FZ1 / Sonnet S2 — wipe removes the record", () => {
-  it("wipeKeystore scrubs the v2 key; the store's wipe also clears the in-memory copy and the v1 session key", async () => {
+  it("wipeKeystore scrubs every record key (and the former v2 key); the store's wipe also clears the in-memory copy and the v1 session key", async () => {
     vi.resetModules();
     const session = kv();
     g.sessionStorage = session;
     session.setItem("pearl-wallet-eth-unknown-v1", "{}");
     const store = await import("../src/state/eth-unknown");
     store.recordEthUnknown({ network: "mainnet", from: ME, hash: H1, what: "ETH transfer" });
-    expect(shared.map.has(KEY_V2)).toBe(true);
+    store.recordEthUnknown({ network: "sepolia", from: OTHER, hash: H1, what: "burn" });
+    shared.setItem(KEY_V2, "{}");
+    expect(hasV3(shared)).toBe(true);
     const { db, wipeKeystore } = await import("../src/storage/db");
     vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args[args.length - 1] as () => Promise<unknown>)()) as never);
     for (const t of ["keystore", "addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const) {
@@ -275,7 +286,8 @@ describe("FZ1 / Sonnet S2 — wipe removes the record", () => {
       vi.spyOn(tbl as never, (t === "keystore" ? "delete" : "clear") as never).mockResolvedValue(undefined as never);
     }
     await expect(wipeKeystore()).resolves.toBe("wiped");
-    expect(shared.map.has(KEY_V2)).toBe(false);
+    expect(hasV3(shared)).toBe(false);
+    expect(shared.map.has(KEY_V2)).toBe(false); // the former single key goes too
     // The wallet store's wipe calls this after the commit.
     store.clearAllEthUnknown();
     expect(session.map.has("pearl-wallet-eth-unknown-v1")).toBe(false);

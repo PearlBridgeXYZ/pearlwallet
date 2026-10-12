@@ -36,6 +36,7 @@ import {
   vaultDescriptorFromPubkeys,
   PEARL_MULTISIG_NUMS_INTERNAL_KEY,
   MULTISIG_MAX_COSIGNERS,
+  MAX_VAULT_INPUTS,
 } from "../chains/pearl/multisig";
 import { pearlParams } from "../chains/pearl/network";
 import { bytesToHex } from "../crypto/descriptor";
@@ -51,9 +52,10 @@ import type { VaultRecord } from "../storage/db";
 export const IMPORT_SCAN_MAX_ACCOUNT = 50;
 export const IMPORT_SCAN_MAX_INDEX = 10;
 
-// Upper bound on PSBT inputs we'll walk during recovery (main-thread loop).
-// Far above any real vault spend; a backstop against a self-inflicted hang.
-const MAX_RECOVER_INPUTS = 256;
+// Upper bound on PSBT inputs we'll walk during recovery (main-thread loop):
+// the shared vault input ceiling, so every PSBT this wallet composes can be
+// imported (and a hostile one cannot hang the tab).
+const MAX_RECOVER_INPUTS = MAX_VAULT_INPUTS;
 
 export type VaultRecoveryCode =
   | "E_RECOVER_PSBT_PARSE"

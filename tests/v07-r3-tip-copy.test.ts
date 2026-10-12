@@ -64,6 +64,13 @@ describe("tipPercentOfSend", () => {
     [PRL, 3n * PRL, "33.33%"],
     [PRL, 1000n * PRL, "0.1%"],
     [5n * PRL, 5000n * PRL, "0.1%"],
+    // L6: rounded half-up at the 2 decimals shown, trailing zeros trimmed
+    // after rounding (pre-fix: truncated, "66.66%" / "14.28%" / "0.10%").
+    [computeTipGrains(PRL + PRL / 2n), PRL + PRL / 2n, "66.67%"], // 1.5 PRL
+    [computeTipGrains(7n * PRL), 7n * PRL, "14.29%"], // 7 PRL
+    [computeTipGrains(999n * PRL), 999n * PRL, "0.1%"], // 999 PRL: 0.1001%
+    [PRL, 8n * PRL, "12.5%"],
+    [PRL, 20_000n * PRL, "0.01%"], // 0.005% rounds up
     [0n, PRL, ""],
   ])("tip %s of amount %s -> %s", (tip, amount, pct) => {
     expect(tipPercentOfSend(tip, amount)).toBe(pct);

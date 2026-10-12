@@ -346,11 +346,12 @@ describe("FZ3 (round 3) — a consented overwrite with a different wallet takes 
       const p = A.store.getState().restoreWallet("words", "pw", { allowOverwrite: true, observedBlob: blob("wallet-X") });
       for (let i = 0; i < 50 && !reached.has("bridgeDepositPins.clear"); i++) await tick(2);
       expect(reached.has("bridgeDepositPins.clear")).toBe(true);
-      expect(ls.has("pearl-wallet-eth-unknown-v2")).toBe(true); // not before the commit
+      const ethKeys = () => [...ls.keys()].filter((k) => k.startsWith("pearl-wallet-eth-unknown-v3:"));
+      expect(ethKeys()).toHaveLength(1); // not before the commit
       expect(ls.has("pearl-wallet-broadcasts-v1")).toBe(true);
       gate.resolve();
       await p;
-      expect(ls.has("pearl-wallet-eth-unknown-v2")).toBe(false);
+      expect(ethKeys()).toEqual([]);
       expect(ls.has("pearl-wallet-broadcasts-v1")).toBe(false);
       expect(A.eu.currentEthUnknown("mainnet", "0x1111111111111111111111111111111111111111")).toBeNull();
       expect(ls.has("pearl-wallet-ui-v6")).toBe(true); // settings are kept

@@ -18,13 +18,17 @@ import { base64 } from "@scure/base";
 import * as btc from "@scure/btc-signer";
 import {
   db,
+  putVaultForWallet,
   type VaultRecord,
   type VaultPendingTxRecord,
 } from "../storage/db";
 import {
+  MAX_VAULT_INPUTS,
   vaultDescriptorFromPubkeys,
   type VaultDescriptor,
 } from "../chains/pearl/multisig";
+
+export { MAX_VAULT_INPUTS };
 import { pearlParams } from "../chains/pearl/network";
 import { encodeTaprootAddress } from "../chains/pearl/address";
 import { cryptoWorker } from "../crypto/worker-client";
@@ -42,7 +46,8 @@ import {
   BroadcastStatusUnknownError,
   type PrlUtxo,
 } from "./pearl-rpc";
-import { broadcastSignedPearlTx, DUST_LIMIT_GRAINS, HistoryIncompleteError, MAX_SEND_INPUTS, TooManyInputsError } from "./pearl-tx";
+import { sessionWalletPrimary } from "../state/wallet-store";
+import { broadcastSignedPearlTx, DUST_LIMIT_GRAINS, HistoryIncompleteError, TooManyInputsError } from "./pearl-tx";
 import { BroadcastRefusedError, excludePendingSpends } from "./pending-spends";
 import type {
   PearlMultisigComposePsbtRequest,
@@ -121,21 +126,32 @@ function estimateMultisigFee(
  *  cosigner's signature and then be refused at broadcast. */
 export const MAX_STANDARD_TX_VBYTES = 100_000n;
 
+/** Which limit sets a vault's per-transaction input cap: the shared input
+ *  count ceiling (MAX_VAULT_INPUTS) or the 100,000 vB relay size limit. */
+export type VaultInputLimit = "count" | "size";
+
 /**
- * Most inputs one vault transaction may spend so that its estimated vsize
- * (the conservative per-input size above, worst case two outputs) stays
- * under MAX_STANDARD_TX_VBYTES; never above MAX_SEND_INPUTS. 15-of-15
- * (426 vB/input): 234 inputs; 2-of-3 (110 vB/input): 908 → capped at 500.
+ * Most inputs one vault transaction may spend: the shared ceiling
+ * MAX_VAULT_INPUTS (what this wallet's own cosign and import paths
+ * accept), or fewer where its estimated vsize (the conservative per-input
+ * size above, worst case two outputs) would otherwise reach
+ * MAX_STANDARD_TX_VBYTES. 15-of-15 (426 vB/input): 234 inputs (size);
+ * 2-of-3 (110 vB/input): 908 by size → 256 (count).
  */
-export function maxVaultInputs(perInputVbytes: bigint): number {
+export function vaultInputLimit(perInputVbytes: bigint): { maxInputs: number; binding: VaultInputLimit } {
   const room = MAX_STANDARD_TX_VBYTES - 1n - FIXED_OVERHEAD_VBYTES - 2n * PER_P2TR_OUTPUT_VBYTES;
-  const n = Number(room / perInputVbytes);
-  return Math.max(1, Math.min(n, MAX_SEND_INPUTS));
+  const bySize = Math.max(1, Number(room / perInputVbytes));
+  return bySize < MAX_VAULT_INPUTS ? { maxInputs: bySize, binding: "size" } : { maxInputs: MAX_VAULT_INPUTS, binding: "count" };
 }
 
-/** A vault send that needs more coins than one standard-size transaction
- *  can spend. `maxSendableGrains`: the most one transaction can send now
- *  (the largest `maxInputs` coins, less their fee). */
+export function maxVaultInputs(perInputVbytes: bigint): number {
+  return vaultInputLimit(perInputVbytes).maxInputs;
+}
+
+/** A vault send that needs more coins than one vault transaction can
+ *  spend. `maxSendableGrains`: the most one transaction can send now (the
+ *  largest `maxInputs` coins, less their fee). `binding`: which limit sets
+ *  `maxInputs`. */
 export class VaultTooManyInputsError extends TooManyInputsError {
   constructor(
     inputsNeeded: number,
@@ -143,6 +159,7 @@ export class VaultTooManyInputsError extends TooManyInputsError {
     utxoCount: number,
     spendableGrains: bigint,
     maxSendableGrains: bigint,
+    readonly binding: VaultInputLimit,
   ) {
     super(inputsNeeded, maxInputs, utxoCount, spendableGrains, maxSendableGrains);
     this.name = "VaultTooManyInputsError";
@@ -237,6 +254,12 @@ export async function createVault(input: CreateVaultInput): Promise<VaultRecord>
   const isMember = descriptor.sortedPubkeys.some((p) => bytesToHex(p) === myHex);
   if (!isMember) throw new Error("E_VAULT_NOT_A_COSIGNER");
 
+  // The wallet this vault belongs to: the session whose key derives the
+  // pubkey below. The save is refused (E_WALLET_WIPED / E_WALLET_CHANGED)
+  // if another tab wiped or replaced that wallet meanwhile.
+  const walletPrimary = sessionWalletPrimary();
+  if (!walletPrimary) throw new Error("E_LOCKED");
+
   // Audit pass 3 M2: defend against a race in CreateVault where the user
   // adjusts (vaultAccount, keyIndex) AFTER the wizard derived a pubkey at
   // the previous slot. Re-derive at the slot we're about to PERSIST and
@@ -272,7 +295,7 @@ export async function createVault(input: CreateVaultInput): Promise<VaultRecord>
     createdAt: Date.now(),
     importedFrom: input.importedFrom ?? "manual",
   };
-  await db.vaults.put(record);
+  await putVaultForWallet(record, walletPrimary);
   return record;
 }
 
@@ -440,7 +463,7 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
   if (sum < need) throw new Error("E_INSUFFICIENT_FUNDS");
   // Size cap: largest-first selection minimises the input count, so if the
   // covering prefix is longer than the cap, no selection within it exists.
-  const maxInputs = maxVaultInputs(perInput);
+  const { maxInputs, binding } = vaultInputLimit(perInput);
   if (picked.length > maxInputs) {
     const top = sorted.slice(0, maxInputs);
     const topSum = top.reduce((a, u) => a + u.valueGrains, 0n);
@@ -450,7 +473,7 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
     const maxFee = estimateMultisigFee(top.length, 2, feerate, perInput);
     const maxSendable = topSum > maxFee + DUST_LIMIT_GRAINS ? topSum - maxFee : 0n;
     const total = sorted.reduce((a, u) => a + u.valueGrains, 0n);
-    throw new VaultTooManyInputsError(picked.length, maxInputs, sorted.length, total, maxSendable);
+    throw new VaultTooManyInputsError(picked.length, maxInputs, sorted.length, total, maxSendable, binding);
   }
 
   let change = sum - need;

@@ -5,6 +5,7 @@ import Dexie, { type Table } from "dexie";
 import type { PearlNetwork } from "../chains/pearl/network";
 import type { EthNetwork } from "../chains/ethereum/network";
 import { sameKeystoreBlob } from "./keystore-blob";
+import { clearAllEthUnknown } from "../state/eth-unknown";
 
 export { sameKeystoreBlob };
 
@@ -280,6 +281,41 @@ export async function replaceKeystoreIfUnchanged(
   );
 }
 
+/**
+ * Wallet-bound writes: a vault or a bridge deposit pin belongs to the
+ * wallet of the session that made it. A tab can still be unlocked on a
+ * wallet that another tab has just wiped or replaced (the cross-tab
+ * notice has not reached it yet); a plain put from it would queue behind
+ * the other tab's wipe / replace transaction, land after it and then show
+ * under the next wallet stored here. So the write and a check of the
+ * stored keystore share one read-write transaction: the row is written
+ * only while the stored wallet is still `walletPrimary` (the session's
+ * primary Pearl address); otherwise nothing is written and it throws
+ * E_WALLET_WIPED (nothing stored) or E_WALLET_CHANGED (another wallet).
+ */
+async function assertStoredWallet(walletPrimary: string): Promise<void> {
+  const rec = await db.keystore.get("primary");
+  if (!rec) throw new Error("E_WALLET_WIPED");
+  if (rec.publicData.pearlAddress !== walletPrimary) throw new Error("E_WALLET_CHANGED");
+}
+
+/** Stores a vault for the wallet `walletPrimary` (see assertStoredWallet). */
+export async function putVaultForWallet(record: VaultRecord, walletPrimary: string): Promise<void> {
+  await db.transaction("rw", [db.keystore, db.vaults], async () => {
+    await assertStoredWallet(walletPrimary);
+    await db.vaults.put(record);
+  });
+}
+
+/** Stores a bridge deposit pin for the wallet `walletPrimary` (see
+ *  assertStoredWallet). */
+export async function putDepositPinForWallet(pin: BridgeDepositPin, walletPrimary: string): Promise<void> {
+  await db.transaction("rw", [db.keystore, db.bridgeDepositPins], async () => {
+    await assertStoredWallet(walletPrimary);
+    await db.bridgeDepositPins.put(pin);
+  });
+}
+
 /** Same wallet: the same primary Pearl and Ethereum addresses (both are
  *  derived from the seed, so a different seed never matches). */
 export function sameWalletRecord(
@@ -396,8 +432,11 @@ const LOCAL_STORAGE_KEYS: readonly string[] = [
   "pearl-wallet-pending-attempts-v1",
   // Ethereum broadcasts of unknown outcome (state/eth-unknown.ts): public
   // chain data (address + tx hash), removed because a wipe is the user's
-  // choice to leave nothing behind. The v1 key lived in sessionStorage;
-  // the wallet store's wipe clears that and the in-memory copy.
+  // choice to leave nothing behind. The current layout is one key per
+  // record, removed by clearAllEthUnknown after the scrub — except an
+  // in-flight record whose send (in another tab) may still be running:
+  // it is the only block that survives that tab dying mid-send. This is
+  // the former single key; the v1 key lived in sessionStorage.
   "pearl-wallet-eth-unknown-v2",
   // NOT listed: WALLET_TABS_STORAGE_KEY ("pearl-wallet-tabs-v1"). It is
   // not wallet data but the list of LIVE tabs that the no-Web-Locks
@@ -460,6 +499,9 @@ export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<Wip
   // Nothing is wiped (no localStorage scrub either) on a refused compare.
   if (!deleted) return "changed";
   scrubLocalStorage();
+  // Ethereum "may already be sent" records: every one, except an in-flight
+  // record whose sender may still be running (state/eth-unknown.ts).
+  await clearAllEthUnknown();
   return "wiped";
 }
 

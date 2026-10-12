@@ -218,6 +218,15 @@ const walletLock = makeAsyncLock();
 // would publish "unlocked", discards its fresh session and stays locked.
 let lockGeneration = 0;
 
+/** The primary Pearl address of this tab's unlocked session (the wallet
+ *  its keys belong to), or null while locked. Wallet-bound writes
+ *  (storage/db putVaultForWallet / putDepositPinForWallet) are checked
+ *  against it. */
+export function sessionWalletPrimary(): string | null {
+  const { status, addresses } = useWallet.getState();
+  return status === "unlocked" && addresses ? addresses.pearl : null;
+}
+
 /** Message of an unlock overtaken by a lock (auto-lock, Lock button). */
 export const E_LOCKED_DURING_UNLOCK = "E_LOCKED: the wallet was locked while unlocking";
 
@@ -303,9 +312,10 @@ function replacedOtherWallet(existing: KeystoreRecord | undefined, next: Keystor
 
 /** The replaced wallet's broadcast records (its coins and payees) and its
  *  Ethereum "may already be sent" records: they belong to addresses the new
- *  wallet does not hold. */
-function forgetReplacedWalletLocalData(): void {
-  clearAllEthUnknown();
+ *  wallet does not hold. (An in-flight Ethereum record whose send in another
+ *  tab may still be running stays: see clearAllEthUnknown.) */
+async function forgetReplacedWalletLocalData(): Promise<void> {
+  await clearAllEthUnknown();
   clearPendingSpends();
 }
 
@@ -458,7 +468,7 @@ export const useWallet = create<WalletState>((set, get) => ({
         // different wallet installed (or a wipe) by another tab while the
         // dialog was open or the worker ran is never erased by this consent.
         if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
-        if (replacedOtherWallet(existing, rec)) forgetReplacedWalletLocalData();
+        if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData();
       } else if (!(await addKeystoreIfAbsent(rec))) {
         walletCreatedElsewhere();
       }
@@ -514,7 +524,7 @@ export const useWallet = create<WalletState>((set, get) => ({
         // different wallet installed (or a wipe) by another tab while the
         // dialog was open or the worker ran is never erased by this consent.
         if (!(await replaceKeystoreIfUnchanged(rec, opts.observedBlob))) walletChangedDuringOverwrite();
-        if (replacedOtherWallet(existing, rec)) forgetReplacedWalletLocalData();
+        if (replacedOtherWallet(existing, rec)) await forgetReplacedWalletLocalData();
       } else if (!(await addKeystoreIfAbsent(rec))) {
         walletCreatedElsewhere();
       }
@@ -650,7 +660,11 @@ export const useWallet = create<WalletState>((set, get) => ({
     clearBalanceMemory();
     // Bump the address generation too: an address write still awaiting
     // the keystore (extend / reset) must not publish its lists after this.
-    set({ status: "locked", addresses: null, pearlAddressGeneration: get().pearlAddressGeneration + 1 });
+    // A wipe (this tab's, or another tab's 'wiped' notice) that committed
+    // while the worker call above ran has already set "no-wallet": nothing
+    // is stored any more, so "locked" would be a dead-end Unlock page.
+    const status = get().status === "no-wallet" ? "no-wallet" : "locked";
+    set({ status, addresses: null, pearlAddressGeneration: get().pearlAddressGeneration + 1 });
   },
 
   async wipe(password) {
@@ -701,10 +715,10 @@ export const useWallet = create<WalletState>((set, get) => ({
         throw new Error("E_WALLET_WIPED");
       }
       clearBalanceMemory();
-      // Ethereum "may already be sent" records: the localStorage key went
-      // with the scrub; this also drops the in-memory copy and the former
-      // sessionStorage key and re-renders open warnings.
-      clearAllEthUnknown();
+      // Ethereum "may already be sent" records: wipeKeystore removed them
+      // (all but an in-flight one whose sender may still be running); this
+      // also drops the in-memory copy and re-renders open warnings.
+      await clearAllEthUnknown();
       // Broadcast records (wipeKeystore removed the key too; this also
       // re-renders the banner). Lock keeps them on purpose: a lock must not
       // forget a broadcast whose fate is unknown.

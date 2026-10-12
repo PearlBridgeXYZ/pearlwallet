@@ -28,7 +28,8 @@ const MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abando
 const account = mnemonicToAccount(MNEMONIC);
 const ME = account.address;
 const TO = "0x000000000000000000000000000000000000dEaD" as const;
-const KEY_V2 = "pearl-wallet-eth-unknown-v2";
+// One localStorage key per record: `${V3}<network>:<address>:<hash>`.
+const V3 = "pearl-wallet-eth-unknown-v3:";
 const g = globalThis as unknown as Record<string, unknown>;
 
 interface RpcReq { id?: number; method: string; params?: unknown[] }
@@ -120,7 +121,8 @@ function fourPaths(t: Tab): Array<[string, () => Promise<unknown>]> {
     ["burn", () => t.ethTx.requestBurn({ network: "mainnet", from: ME, tier: "normal", ceiling, amount: 1n, pearlAddress: "prl1pme" })],
   ];
 }
-const stored = () => JSON.parse(ls.getItem(KEY_V2) ?? "{}")[`mainnet:${ME.toLowerCase()}`] ?? [];
+const stored = () =>
+  [...ls.data].filter(([k]) => k.startsWith(`${V3}mainnet:${ME.toLowerCase()}:`)).map(([, v]) => JSON.parse(v)).sort((a, b) => a.ts - b.ts);
 const until = async (cond: () => boolean) => {
   for (let i = 0; i < 400 && !cond(); i++) await new Promise((r) => setTimeout(r, 5));
   expect(cond()).toBe(true);
@@ -375,7 +377,7 @@ describe("FZ1 — an in-flight record is not status-unknown while its sender run
     vi.stubGlobal("navigator", {});
     const B = await openTab();
     const rec = { network: "mainnet" as const, from: ME.toLowerCase(), hash: `0x${"cd".repeat(32)}` as `0x${string}`, what: "ETH transfer", ts: 1, inflight: true as const, owner: "tab-A" };
-    ls.setItem(KEY_V2, JSON.stringify({ [`mainnet:${ME.toLowerCase()}`]: [rec] }));
+    ls.setItem(`${V3}mainnet:${ME.toLowerCase()}:${rec.hash}`, JSON.stringify(rec));
     ls.setItem("pearl-wallet-tabs-v1", JSON.stringify(["tab-A"]));
     expect(await B.store.ethInflightSenderActive(rec)).toBe(true);
     expect(await B.store.acknowledgeEthUnknownChecked("mainnet", ME, rec.hash)).toBe(false);
@@ -383,5 +385,79 @@ describe("FZ1 — an in-flight record is not status-unknown while its sender run
     expect(await B.store.ethInflightSenderActive(rec)).toBe(false);
     expect(await B.store.acknowledgeEthUnknownChecked("mainnet", ME, rec.hash)).toBe(true);
     expect(stored()).toEqual([]);
+  });
+});
+
+// R4 (verifier N1): a wipe or a wallet replace in another tab removed every
+// record key, including tab A's in-flight record while A's send was still
+// running (A holds the address lock). B then restored the same wallet, A
+// closed mid-flight, and a fresh tab C found no block and signed nonce 6
+// while A's nonce-5 payment was already at the node: paid twice.
+// Now the wipe / replace clear keeps an in-flight record whose sender may
+// still be running and removes everything else; once the sender is gone the
+// record is status-unknown and a later wipe removes it.
+describe("R4 — a wipe while another tab's send is in flight keeps that send's record", () => {
+  async function inflightA() {
+    const n = node();
+    n.sendAnswer = async () => new Promise<Response>(() => {}); // A's send never returns
+    const A = await openTab();
+    void A.ethTx.sendNative({ network: "mainnet", from: ME, to: TO, value: 1n, tier: "normal", frozen: frozen() }).catch(() => {});
+    await until(() => n.accepted.size === 1);
+    return { n, A, hashA: [...n.accepted.keys()][0] as `0x${string}` };
+  }
+  async function wipeIn(t: Tab) {
+    const { db, wipeKeystore } = await import("../src/storage/db");
+    vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args[args.length - 1] as () => Promise<unknown>)()) as never);
+    for (const name of ["keystore", "addressBook", "txCache", "vaults", "vaultPendingTxs", "bridgeCrossings", "bridgeDepositPins"] as const) {
+      vi.spyOn(db[name] as never, (name === "keystore" ? "delete" : "clear") as never).mockResolvedValue(undefined as never);
+    }
+    void t;
+    return wipeKeystore();
+  }
+  const SETTLED = `0x${"ee".repeat(32)}` as const;
+
+  it("tab B's wipe and replace-wallet clear keep A's in-flight record (and drop a settled one); after A dies, C refuses unsigned", async () => {
+    const { n, hashA } = await inflightA();
+    const B = await openTab();
+    B.store.recordEthUnknown({ network: "mainnet", from: ME, hash: SETTLED, what: "ETH transfer" });
+    ls.setItem("pearl-wallet-ui-v6", "{}");
+    expect(await wipeIn(B)).toBe("wiped");
+    expect(stored().map((r: { hash: string }) => r.hash)).toEqual([hashA]);
+    expect(stored()[0]).toMatchObject({ inflight: true });
+    expect(ls.data.has("pearl-wallet-ui-v6")).toBe(false); // the rest of the scrub still ran
+    // Restoring a wallet over "no wallet" runs the replace-wallet clear: same rule.
+    await B.store.clearAllEthUnknown();
+    expect(stored().map((r: { hash: string }) => r.hash)).toEqual([hashA]);
+    // Tab A dies mid-flight: the browser frees its locks.
+    vi.stubGlobal("navigator", { locks: fakeLocks() });
+    const C = await openTab();
+    const n2 = node();
+    n2.accepted = n.accepted;
+    for (const [name, call] of fourPaths(C)) {
+      const err = await call().catch((e) => e);
+      expect(err, name).toBeInstanceOf(C.store.EthUnresolvedBroadcastError);
+    }
+    expect(C.sign).not.toHaveBeenCalled();
+    expect(n2.accepted.size).toBe(1);
+    // Its sender is gone now: a later wipe removes it like any record.
+    expect(await wipeIn(C)).toBe("wiped");
+    expect(stored()).toEqual([]);
+  });
+
+  it("the sending tab's own wipe while its send runs keeps the record (still its own)", async () => {
+    const { A, hashA } = await inflightA();
+    await A.store.clearAllEthUnknown();
+    const rec = A.store.currentEthUnknown("mainnet", ME)!;
+    expect(rec).toMatchObject({ hash: hashA, inflight: true });
+    expect(A.store.isOwnInflight(rec)).toBe(true);
+  });
+
+  it("the wallet store awaits the clear on wipe and on replace", async () => {
+    const fs = await import("node:fs");
+    const ws = fs.readFileSync("src/state/wallet-store.ts", "utf8");
+    expect(ws.match(/await forgetReplacedWalletLocalData\(\);/g)).toHaveLength(2);
+    // Every call is awaited (forgetReplacedWalletLocalData and the wipe).
+    expect(ws.match(/clearAllEthUnknown\(\);/g)).toHaveLength(2);
+    expect(ws.match(/await clearAllEthUnknown\(\);/g)).toHaveLength(2);
   });
 });

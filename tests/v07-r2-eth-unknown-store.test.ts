@@ -8,7 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import {
-  ETH_UNKNOWN_STORAGE_KEY,
+  ETH_UNKNOWN_KEY_PREFIX,
+  ETH_UNKNOWN_UNREADABLE,
+  ethUnknownRecordKey,
   acknowledgeEthUnknown,
   clearEthUnknown,
   currentEthUnknown,
@@ -27,7 +29,10 @@ import { createUnwrapFlow, type UnwrapView } from "../src/ui/pages/bridge-flows"
 
 function kv(): KVStorage & { map: Map<string, string> } {
   const map = new Map<string, string>();
-  return { map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => void map.set(k, v), removeItem: (k) => void map.delete(k) };
+  return {
+    map, getItem: (k) => map.get(k) ?? null, setItem: (k, v) => void map.set(k, v), removeItem: (k) => void map.delete(k),
+    key: (i) => [...map.keys()][i] ?? null, get length() { return map.size; },
+  };
 }
 const H1 = `0x${"11".repeat(32)}` as const;
 const H2 = `0x${"22".repeat(32)}` as const;
@@ -49,13 +54,12 @@ describe("FY5 store logic (pure)", () => {
   it("survives a 'remount': a fresh read of the same storage still sees it", () => {
     const s = kv();
     putEthUnknown(s, { network: "mainnet", from: ME, hash: H1, what: "burn", ts: 5 });
-    const persisted = s.map.get(ETH_UNKNOWN_STORAGE_KEY)!;
     const s2 = kv();
-    s2.setItem(ETH_UNKNOWN_STORAGE_KEY, persisted);
+    for (const [k, v] of s.map) s2.setItem(k, v);
     expect(ethUnknownFor(s2, "mainnet", ME)[0]!.hash).toBe(H1);
   });
 
-  it("idempotent per hash; acknowledging clears only that hash; last one removes the key", () => {
+  it("idempotent per hash; acknowledging clears only that hash; the last one leaves no record key", () => {
     const s = kv();
     putEthUnknown(s, { network: "mainnet", from: ME, hash: H1, what: "approval", ts: 1 });
     putEthUnknown(s, { network: "mainnet", from: ME, hash: H1, what: "approval", ts: 2 });
@@ -68,20 +72,46 @@ describe("FY5 store logic (pure)", () => {
     acknowledgeEthUnknown(s, "mainnet", ME, H2);
     expect(ethUnknownFor(s, "mainnet", ME)).toEqual([]);
     acknowledgeEthUnknown(s, "mainnet", OTHER, H1);
-    expect(s.map.has(ETH_UNKNOWN_STORAGE_KEY)).toBe(false);
+    expect([...s.map.keys()].filter((k) => k.startsWith(ETH_UNKNOWN_KEY_PREFIX))).toEqual([]);
   });
 
-  it("malformed or mis-keyed storage is ignored, never trusted", () => {
+  // L1: an entry under an address's prefix that is not a valid record for
+  // exactly its key is never trusted as "nothing recorded": it fails
+  // CLOSED (blocks that address as an unreadable status-unknown record,
+  // acknowledgeable like any other). Before (v2) a malformed or mis-keyed
+  // record was dropped, i.e. it unblocked.
+  it("malformed, unknown-shape or mis-keyed entries fail closed for their address, never trusted as data", () => {
     const s = kv();
-    s.setItem(ETH_UNKNOWN_STORAGE_KEY, "{not json");
-    expect(readEthUnknownRecords(s)).toEqual({});
-    s.setItem(
-      ETH_UNKNOWN_STORAGE_KEY,
-      JSON.stringify({
-        [ethUnknownKey("mainnet", OTHER)]: [{ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "x", ts: 1 }],
-        [ethUnknownKey("mainnet", ME)]: [{ network: "mainnet", from: ME.toLowerCase(), hash: "0x12", what: "x", ts: 1 }],
-      }),
-    );
+    const unreadable = (hash: string) => ({ network: "mainnet", from: ME.toLowerCase(), hash, what: ETH_UNKNOWN_UNREADABLE, ts: 0 });
+    s.setItem(ethUnknownRecordKey("mainnet", ME, H1), "{not json");
+    expect(ethUnknownFor(s, "mainnet", ME)).toEqual([unreadable(H1)]);
+    // A record of another shape (a field of the wrong type).
+    s.setItem(ethUnknownRecordKey("mainnet", ME, H1), JSON.stringify({ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "x", ts: "1" }));
+    expect(ethUnknownFor(s, "mainnet", ME)).toEqual([unreadable(H1)]);
+    // A valid record under another record's key (address / hash mismatch).
+    s.setItem(ethUnknownRecordKey("mainnet", ME, H1), JSON.stringify({ network: "mainnet", from: OTHER, hash: H1, what: "x", ts: 1 }));
+    s.setItem(ethUnknownRecordKey("mainnet", ME, H2), JSON.stringify({ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "x", ts: 1, sent: true }));
+    // A key whose hash part is not a hash.
+    s.setItem(`${ETH_UNKNOWN_KEY_PREFIX}mainnet:${ME.toLowerCase()}:0x12`, JSON.stringify({ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "x", ts: 1 }));
+    const recs = ethUnknownFor(s, "mainnet", ME);
+    expect(recs).toHaveLength(3);
+    for (const r of recs) expect(r).toMatchObject({ what: ETH_UNKNOWN_UNREADABLE, ts: 0 });
+    expect(recs.every((r) => !r.sent)).toBe(true); // a mis-keyed "sent" never unblocks
+    expect(recs.map((r) => r.hash).sort()).toEqual([`0x${"0".repeat(64)}`, H1, H2].sort());
+    expect(readEthUnknownRecords(s)[ethUnknownKey("mainnet", ME)]).toHaveLength(3);
+    // Not shown for another address.
+    expect(ethUnknownFor(s, "mainnet", OTHER)).toEqual([]);
+    // Acknowledging each clears it; a valid write over an unreadable one replaces it.
+    acknowledgeEthUnknown(s, "mainnet", ME, `0x${"0".repeat(64)}`);
+    acknowledgeEthUnknown(s, "mainnet", ME, H2);
+    putEthUnknown(s, { network: "mainnet", from: ME, hash: H1, what: "burn", ts: 9 });
+    expect(ethUnknownFor(s, "mainnet", ME)).toEqual([{ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "burn", ts: 9 }]);
+  });
+
+  it("the former v2 single key is not read (not migrated)", () => {
+    const s = kv();
+    s.setItem("pearl-wallet-eth-unknown-v2", JSON.stringify({ [ethUnknownKey("mainnet", ME)]: [{ network: "mainnet", from: ME.toLowerCase(), hash: H1, what: "x", ts: 1 }] }));
+    expect(ethUnknownFor(s, "mainnet", ME)).toEqual([]);
     expect(readEthUnknownRecords(s)).toEqual({});
   });
 });
@@ -104,7 +134,7 @@ describe("FY5 live store", () => {
     const seen = vi.fn();
     const off = subscribeEthUnknown(seen);
     recordEthUnknown({ network: "mainnet", from: ME, hash: H1, what: "WPRL transfer" });
-    expect(session.map.has(ETH_UNKNOWN_STORAGE_KEY)).toBe(true);
+    expect(session.map.has(ethUnknownRecordKey("mainnet", ME, H1))).toBe(true);
     expect(currentEthUnknown("mainnet", ME)?.hash).toBe(H1);
     expect(currentEthUnknown("mainnet", OTHER)).toBeNull();
     clearEthUnknown("mainnet", ME, H1);

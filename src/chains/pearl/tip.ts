@@ -42,14 +42,15 @@ export const TIP_POLICY_TEXT =
   "No tip on sends under 1 PRL, a flat 1 PRL on sends of 1 to 1,000 PRL, and 0.1% above 1,000 PRL.";
 
 /** The tip as a percentage of the amount sent, for the review screen
- *  (e.g. "100%", "10%", "0.1%"). Empty when there is no tip. */
+ *  (e.g. "100%", "66.67%", "0.1%"): rounded half-up to the 2 decimals
+ *  shown, then trailing zeros trimmed. Empty when there is no tip. */
 export function tipPercentOfSend(tipGrains: bigint, amountGrains: bigint): string {
   if (tipGrains <= 0n || amountGrains <= 0n) return "";
-  // Basis points with half-up rounding, then trim trailing zeros.
-  const bp = (tipGrains * 1_000_000n + amountGrains / 2n) / amountGrains; // hundredths of a basis point
-  const whole = bp / 10_000n;
-  const frac = (bp % 10_000n).toString().padStart(4, "0").replace(/0+$/, "");
-  return frac ? `${whole}.${frac.slice(0, 2)}%` : `${whole}%`;
+  // Hundredths of a percent (basis points), rounded half-up.
+  const bp = (tipGrains * 10_000n + amountGrains / 2n) / amountGrains;
+  const whole = bp / 100n;
+  const frac = (bp % 100n).toString().padStart(2, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}%` : `${whole}%`;
 }
 
 export function tipAddressFor(_net: PearlNetwork = "mainnet"): string {

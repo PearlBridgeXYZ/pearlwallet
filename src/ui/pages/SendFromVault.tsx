@@ -29,17 +29,22 @@ export function vaultHistoryCapMessage(deep: boolean): string {
     : `This vault has more history than the standard search reads, so its coins can't be proven unspent yet. Nothing was composed. "Search deeper" reads up to ${deepest} transactions (slower).`;
 }
 
-/** Same copy as Send PRL for a destination output at or below dust. */
-/** Readable refusal for a vault send above the standard size limit. */
+/** Readable refusal for a vault send that needs more coins than one vault
+ *  transaction can spend, naming the limit that binds: the input count
+ *  ceiling, or the 100,000 vbyte relay size limit. */
 export function vaultTooManyInputsMessage(e: VaultTooManyInputsError): string {
+  const why =
+    e.binding === "count"
+      ? `(the wallet's limit on coins per vault transaction, which every cosigner's wallet also enforces)`
+      : `(the network won't relay a transaction over 100,000 vbytes)`;
   return (
-    `This send needs ${e.inputsNeeded} vault coins, but one transaction can spend at most ${e.maxInputs} ` +
-    `(the network won't relay a transaction over 100,000 vbytes). ` +
+    `This send needs ${e.inputsNeeded} vault coins, but one transaction can spend at most ${e.maxInputs} ${why}. ` +
     `The most you can send in one transaction is ${formatGrains(e.maxSendableGrains)} PRL. ` +
     `Send a smaller amount, or first send that maximum to this vault's own address to combine coins.`
   );
 }
 
+/** Same copy as Send PRL for a destination output at or below dust. */
 export function vaultDustMessage(): string {
   return `Amount is too small: the network won't relay a payment of ${formatGrains(DUST_LIMIT_GRAINS)} PRL or less.`;
 }
