@@ -16,8 +16,10 @@ import { PEARL_MAINNET } from "../src/chains/pearl/network";
 import { scanPrlPool } from "../src/services/balances";
 import { fetchActivity } from "../src/services/activity";
 import { _setPearlRpcTuningForTests, _resetPearlRpcHealthForTests } from "../src/services/pearl-rpc";
+import { useLiveRpc } from "./live-rpc-guard";
 
 const LIVE = process.env.PEARL_LIVE === "1";
+useLiveRpc(LIVE);
 const BUSY_ADDR = process.env.PEARL_TEST_ADDRESS
   ?? "prl1ptzrunj28tua9uklxa3ses9nsl7g22s2qx2fdu9gf7wgvup58s94q9ldnxh";
 
