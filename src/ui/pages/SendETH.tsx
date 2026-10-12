@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import Page from "../components/Page";
+import AsciiPulse from "../components/AsciiPulse";
 import { useWallet } from "../../state/wallet-store";
 import { resolveEthDestination } from "../../services/ens";
 import { formatWei, parseEth } from "../../lib/format";
@@ -180,6 +181,7 @@ export default function SendETH() {
     return (
       <Page title="Send ETH">
         <div className="card">
+          <AsciiPulse />
           <h2 className="text-lg font-semibold tracking-tight">Transaction broadcast</h2>
           <p className="mt-2 text-sm leading-relaxed break-words">
             Tx hash: <span className="break-all font-mono min-w-0 tabular-nums">{txHash}</span>

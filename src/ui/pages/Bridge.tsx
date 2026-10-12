@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Page from "../components/Page";
+import AsciiPulse from "../components/AsciiPulse";
 import { refusalMessage } from "../components/PendingBroadcasts";
 import EthBroadcastUnknown, { ethUnknownBlocksSend, useEthUnknown } from "../components/EthBroadcastUnknown";
 import { captureSigningSession, sessionWalletPrimary, useWallet } from "../../state/wallet-store";
@@ -911,6 +912,9 @@ export function ActivityCard(props: {
   }
   return (
     <div className="flex flex-col gap-3">
+      {["confirming", "relay", "done"].includes(crossings[0].phase) && (
+        <AsciiPulse key={crossings[0].id} receipt={crossings[0]} />
+      )}
       {crossings.map((c) => (
         <div key={c.id} className="card text-sm leading-relaxed">
           <div className="flex flex-wrap items-center justify-between gap-3">

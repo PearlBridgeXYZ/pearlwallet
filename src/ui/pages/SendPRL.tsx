@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import Page from "../components/Page";
+import AsciiPulse from "../components/AsciiPulse";
 import { useWallet } from "../../state/wallet-store";
 import { useUI } from "../../state/ui-store";
 import { validPearl } from "../../lib/validate";
@@ -386,6 +387,7 @@ export default function SendPRL() {
     return (
       <Page title="Send PRL">
         <div className="card">
+          <AsciiPulse />
           <h2 className="text-lg font-semibold tracking-tight">Transaction broadcast</h2>
           <p className="mt-2 text-sm text-text-3 leading-relaxed break-words">
             Txid: <span className="break-all font-mono min-w-0 tabular-nums">{txid}</span>
