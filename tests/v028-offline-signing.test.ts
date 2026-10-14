@@ -639,3 +639,11 @@ describe("end-to-end offline-signing flow simulation", () => {
     expect(decoded).toEqual(payload);
   });
 });
+
+
+describe('manual P2TR script shape',()=>{
+ it('rejects the formerly documented 66-character script before signing',()=>{
+  const r=parseManualUtxos(`${'a'.repeat(64)}:0:100000:0:5120${'b'.repeat(62)}`);
+  expect(r.utxos).toHaveLength(0);expect(r.errors[0]?.message).toContain('68 hex');
+ });
+});

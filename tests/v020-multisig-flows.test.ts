@@ -601,11 +601,7 @@ describe("v0.2.1 — output parsing + foreign-signer partition (audit pass 2 Med
       bytesToHex(cs[3]!.xOnlyPubkey),
       bytesToHex(cs[4]!.xOnlyPubkey),
     ];
-    const inB = inspectPsbt(psbt, 2, foreignSet);
-    expect(inB.signersHex).toEqual([]);
-    expect(inB.foreignSignersHex).toEqual([bytesToHex(cs[0]!.xOnlyPubkey)]);
-    expect(inB.signerCount).toBe(0);
-    expect(inB.thresholdMet).toBe(false);
+    expect(() => inspectPsbt(psbt, 2, foreignSet)).toThrow("E_MULTISIG_VAULT_BINDING");
   });
 
   it("when no validPubkeysHex is provided, every signer counts (back-compat)", async () => {

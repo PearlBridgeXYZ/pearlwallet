@@ -103,7 +103,7 @@ async function openTab() {
     return { raw };
   });
   vi.spyOn(wc.cryptoWorker, "call").mockImplementation((async (m: string, p: never) => {
-    if (m === "exportMnemonic") return { mnemonic: MNEMONIC };
+    if ((m === "exportMnemonic" || m === "verifyPassword")) return { mnemonic: MNEMONIC };
     if (m === "lock") return {};
     if (m === "signEthTx") return sign(p);
     throw new Error(`unexpected ${m}`);

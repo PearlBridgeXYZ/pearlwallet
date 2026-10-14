@@ -40,6 +40,8 @@ export default function Unlock() {
     } catch (e) {
       setError(e instanceof Error && e.message === "E_PASSWORD_WRONG"
         ? "Incorrect password."
+        : e instanceof Error && e.message === "E_KEYSTORE_PARAMETERS"
+          ? "This encrypted wallet has unsupported or damaged security parameters. Restore using your recovery phrase and each vault’s recovery file."
         : e instanceof Error && e.message === "E_WALLET_CHANGED"
           ? "The wallet stored in this browser changed in another tab. Unlock again with that wallet's password."
           : e instanceof Error && e.message === "E_WALLET_WIPED"

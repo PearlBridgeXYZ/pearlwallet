@@ -152,6 +152,7 @@ export default function CreateVault() {
     setError(null);
     const raw = peerPaste.trim();
     if (raw.length === 0) return;
+    if (peers.length >= total - 1) { setError("Remove an existing cosigner before adding another."); return; }
     try {
       const { descriptor, pubkeyHex } = importCosignerDescriptor(raw);
       if (mine && pubkeyHex === mine.pubkeyHex) {
@@ -184,6 +185,7 @@ export default function CreateVault() {
 
   async function save() {
     if (!mine) return;
+    if (peers.length !== total - 1) { setError("Cosigner count must match the selected vault policy."); return; }
     setError(null);
     setSaving(true);
     try {
@@ -463,7 +465,7 @@ export default function CreateVault() {
             </button>
             <button
               className="btn-primary flex-1 min-w-11"
-              disabled={needed > 0}
+              disabled={peers.length !== total - 1}
               onClick={() => setStage("confirm")}
             >
               {needed > 0
@@ -483,7 +485,8 @@ export default function CreateVault() {
         <h2 className="text-xl font-semibold tracking-tight">Review before you save</h2>
         <p className="text-sm leading-relaxed break-words">
           Step 4 of 4 — verify the vault address with every cosigner BEFORE
-          funding. Identical inputs land on the same address; anyone with a
+          funding. After saving, download the vault recovery file and confirm your backup
+          before sending funds. Identical inputs land on the same address; anyone with a
           different address is seeing a different (potentially hostile)
           pubkey set.
         </p>
@@ -548,7 +551,7 @@ function ConfirmPanel(props: {
       <div>
         <dt className="text-text-3">Policy</dt>
         <dd>
-          {props.threshold} of {props.total}
+          {props.threshold} of {props.peers.length + 1}
         </dd>
       </div>
       <div>

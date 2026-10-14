@@ -1,3 +1,4 @@
+import ConfirmDialog from "../components/ConfirmDialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWallet, E_WALLET_EXISTS_ELSEWHERE, subscribeStoredWalletChange, WalletExistsError } from "../../state/wallet-store";
@@ -112,6 +113,7 @@ export default function OnboardingCreate() {
         .restoreWallet(mnemonic, password, allowOverwrite && overwriteOver ? { allowOverwrite: true, observedBlob: overwriteOver } : undefined);
       setAddresses(out.addresses);
       setOverwriteOver(null);
+      setMnemonic("");
       setStep("done");
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -152,7 +154,7 @@ export default function OnboardingCreate() {
           <span>Phrase length:</span>
           <label className="flex min-h-11 items-center gap-2">
             <input
-              type="radio"
+              type="radio" name="recovery-phrase-length"
               checked={strength === 128}
               onChange={() => setStrength(128)}
             />
@@ -160,7 +162,7 @@ export default function OnboardingCreate() {
           </label>
           <label className="flex min-h-11 items-center gap-2">
             <input
-              type="radio"
+              type="radio" name="recovery-phrase-length"
               checked={strength === 256}
               onChange={() => setStrength(256)}
             />
@@ -264,7 +266,7 @@ export default function OnboardingCreate() {
         <h1 className="text-[28px] font-semibold leading-tight tracking-[-.6px] sm:text-[34px]">Set an unlock password.</h1>
         <p className="mt-3 text-sm leading-7 text-text-2">
           This password protects your wallet on this device. It's separate from your recovery phrase.
-          If you forget the password, restore from the recovery phrase. If you lose both, your funds are gone.
+          If you forget the password, restore your keys from the recovery phrase. Multisig vaults also require their recovery files.
         </p>
 
         <div className="mt-4 flex flex-col gap-3">
@@ -298,7 +300,7 @@ export default function OnboardingCreate() {
               onChange={(e) => setAcknowledged(e.target.checked)}
               className="mt-1"
             />
-            <span>I understand that only my recovery phrase can restore my wallet. If I lose it, my funds are gone. The PearlBridge team cannot recover them.</span>
+            <span>I understand that I need my recovery phrase to restore my keys and a recovery file for every multisig vault. Losing these backups can make my funds inaccessible. The PearlBridge team cannot recover them.</span>
           </label>
         </div>
 
@@ -319,13 +321,13 @@ export default function OnboardingCreate() {
         </div>
 
         {overwriteOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6">
+          <ConfirmDialog onCancel={() => setOverwriteOver(null)} busy={busy}>
             <div className="card max-w-md">
-              <h2 className="text-lg font-semibold">Replace the wallet on this device?</h2>
+              <h2 id="replace-wallet-title" className="text-lg font-semibold">Replace the wallet on this device?</h2>
               <p className="mt-3 text-sm leading-7 text-text-2">
                 A wallet is already stored in this browser. Creating a new one
                 will overwrite it. Anything currently on this device will be
-                unreachable unless you have its recovery phrase saved elsewhere.
+                unreachable unless you have its recovery phrase and every vault recovery file saved elsewhere.
               </p>
               <p className="mt-3 text-sm leading-7 text-text-2">
                 If you're not sure, cancel and unlock the existing wallet first.
@@ -349,7 +351,7 @@ export default function OnboardingCreate() {
                 </button>
               </div>
             </div>
-          </div>
+          </ConfirmDialog>
         )}
       </div>
       </>

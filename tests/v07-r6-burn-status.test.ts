@@ -40,6 +40,9 @@ function crossing(ageMin: number, over: Partial<BridgeCrossingRecord> = {}): Bri
 function setup(receipt: () => Promise<unknown>) {
   vi.spyOn(ethRpc, "ethClient").mockReturnValue({ getTransactionReceipt: vi.fn(receipt) } as never);
   vi.spyOn(bridgeApi, "fetchBurnStatus").mockResolvedValue({ state: null, pearlTxId: null, anomalyReason: null } as never);
+  vi.spyOn(db, "transaction").mockImplementation((async (...args: unknown[]) => (args.at(-1) as () => Promise<unknown>)()) as never);
+  vi.spyOn(db.keystore, "get").mockResolvedValue({ publicData: { pearlAddress: "owner" } } as never);
+  vi.spyOn(db.bridgeCrossings, "get").mockResolvedValue(crossing(60));
   return vi.spyOn(db.bridgeCrossings, "update").mockResolvedValue(1);
 }
 const html = (c: BridgeCrossingRecord) =>
@@ -66,7 +69,7 @@ describe("N3 — pollUnwrap: only a reverted receipt makes the burn terminal", (
     it(`${label}, 31 minutes old → stays open (still polled) with a check notice; the card shows the burn tx + Etherscan, no 'untouched' / 'retry'`, async () => {
       const update = setup(receipt);
       const c = crossing(31);
-      await pollUnwrap(c, "mainnet");
+      await pollUnwrap(c, "mainnet", "owner");
       const patch = update.mock.calls[0]![1] as Partial<BridgeCrossingRecord>;
       expect(patch.phase).toBeUndefined(); // unchanged: "relay"
       expect(OPEN).toContain({ ...c, ...patch }.phase);
@@ -81,7 +84,7 @@ describe("N3 — pollUnwrap: only a reverted receipt makes the burn terminal", (
 
   it("younger than 30 minutes: no notice yet, phase unchanged", async () => {
     const update = setup(async () => { throw new TransactionReceiptNotFoundError({ hash: HASH }); });
-    await pollUnwrap(crossing(5), "mainnet");
+    await pollUnwrap(crossing(5), "mainnet", "owner");
     const patch = update.mock.calls[0]![1] as Partial<BridgeCrossingRecord>;
     expect(patch.phase).toBeUndefined();
     expect(patch.relayState).toBeUndefined();
@@ -89,7 +92,7 @@ describe("N3 — pollUnwrap: only a reverted receipt makes the burn terminal", (
 
   it("reverted receipt → failed (positive evidence)", async () => {
     const update = setup(async () => ({ status: "reverted" }));
-    await pollUnwrap(crossing(31), "mainnet");
+    await pollUnwrap(crossing(31), "mainnet", "owner");
     const patch = update.mock.calls[0]![1] as Partial<BridgeCrossingRecord>;
     expect(patch.phase).toBe("failed");
     expect(patch.relayState).toBe("burn tx reverted on-chain — WPRL not spent");
@@ -97,9 +100,41 @@ describe("N3 — pollUnwrap: only a reverted receipt makes the burn terminal", (
 
   it("a later successful receipt clears the check notice (relay indexing lag)", async () => {
     const update = setup(async () => ({ status: "success" }));
-    await pollUnwrap(crossing(45, { relayState: BURN_STATUS_UNREADABLE_NOTICE }), "mainnet");
+    await pollUnwrap(crossing(45, { relayState: BURN_STATUS_UNREADABLE_NOTICE }), "mainnet", "owner");
     const patch = update.mock.calls[0]![1] as Partial<BridgeCrossingRecord>;
     expect(patch.phase).toBeUndefined();
     expect(patch.relayState).toBeNull();
+  });
+});
+
+describe('prepared and dismissed burn tracking stays honest',()=>{
+ it('never promises bridge review or refund for a merely prepared burn',()=>{
+  const out=html(crossing(60,{phase:'prepared',relayState:'Submission is not yet confirmed.'}));
+  expect(out).toContain('may never have been submitted');expect(out).not.toContain('Under review by the bridge');expect(out).not.toContain('resolves automatically');
+ });
+ it('dismissal explicitly does not cancel or confirm the transaction',()=>{
+  const out=html(crossing(60,{phase:'dismissed'}));
+  expect(out).toContain('does not cancel or confirm');expect(out).toContain('before making another transfer');
+ });
+});
+
+describe("Independent beta6 stop-tracking race",()=>{
+  it("a receipt lookup completing after dismissal cannot resume dismissed tracking",async()=>{
+    let done!: (v:unknown)=>void;
+    const pending=new Promise(r=>{done=r;});
+    const row=crossing(60,{phase:"prepared"});
+    const update=setup(()=>pending);
+    vi.mocked(db.bridgeCrossings.get).mockImplementation(async()=>({...row}) as never);
+    update.mockImplementation((async(_id,patch)=>{Object.assign(row,patch);return 1;}) as never);
+    const poll=pollUnwrap({...row},"mainnet","owner");
+    await new Promise(r=>setTimeout(r,0));
+    // Same storage update performed by the live onTrackingChange callback.
+    await db.transaction("rw",[db.keystore,db.bridgeCrossings],async()=>{
+      const wallet=await db.keystore.get("primary");expect(wallet?.publicData.pearlAddress).toBe("owner");
+      await db.bridgeCrossings.update(row.id,{phase:"dismissed",updatedAt:Date.now()});
+    });
+    expect(row.phase).toBe("dismissed");
+    done({status:"success"});await poll;
+    expect(row.phase).toBe("dismissed");
   });
 });

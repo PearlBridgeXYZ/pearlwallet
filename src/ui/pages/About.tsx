@@ -109,7 +109,7 @@ export default function About() {
         </section>
 
         <aside className="border-t border-line pt-5 text-xs leading-6 text-text-3">
-          <p>PearlBridge is an independent project, not affiliated with Pearl Research Labs. PearlWallet is experimental, pre-1.0 software. Only store what you can afford to lose.</p>
+          <p>PearlBridge is an independent project, not affiliated with Pearl Research Labs. PearlWallet is experimental, pre-1.0 software.</p>
           <p className="mt-2">Report security issues to <a className="inline-flex min-h-11 items-center break-all text-accent underline underline-offset-4" href="mailto:bridgedev@mailbox.org">bridgedev@mailbox.org</a>.</p>
         </aside>
       </div>

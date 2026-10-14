@@ -120,7 +120,7 @@ function view() {
     setGas: () => {},
     setNeedsApprove: () => {},
     setQuote: (q: bridgeV1.BurnQuote) => void (v.quote = q),
-    onStarted: async () => void v.started++,
+    onPrepared: async () => {}, onStarted: async () => void v.started++,
   };
   return v satisfies UnwrapView & Record<string, unknown>;
 }
@@ -221,7 +221,7 @@ describe("S4 — the sign-time re-quote must match what was reviewed", () => {
     expect(call).toBeGreaterThan(0);
     expect(check).toBeLessThan(call);
     expect(page).toMatch(/amount: grains, quote, gas \}/);
-    expect(page).toMatch(/setNeedsApprove, setQuote, onStarted \}/);
+    expect(page).toMatch(/setNeedsApprove, setQuote, onStarted, onPrepared \}/);
   });
 });
 
@@ -306,4 +306,23 @@ describe("S8 — a signer that never returns can't pin the broadcast lock", () =
     expect(broadcastRecords()).toHaveLength(0);
     await expect(withBroadcastLock(async () => "free")).resolves.toBe("free");
   });
+});
+
+describe('v0.7.1 prepared burn state',()=>{
+ it('persists intent without navigating, then records a definite submission failure',async()=>{
+  const {burn}=chain({allowance:AMOUNT});
+  const v=view(), prepared:unknown[]=[], started:unknown[]=[];
+  const callbacks:UnwrapView={...v,onPrepared:async r=>{prepared.push(r);expect(started).toEqual([]);},onStarted:async r=>{started.push(r);}};
+  burn.mockImplementation(async p=>{await p.beforeBroadcast!('0x'+'ab'.repeat(32) as `0x${string}`);throw new Error('journal unavailable');});
+  await createUnwrapFlow()(input(),callbacks);
+  expect(prepared).toHaveLength(1);expect(prepared[0]).toMatchObject({phase:'prepared'});
+  expect(started).toHaveLength(1);expect(started[0]).toMatchObject({phase:'failed',relayState:'Burn not submitted or rejected: journal unavailable'});
+ });
+ it('retains uncertain intent without falsely labeling it bridge review',async()=>{
+  const {burn}=chain({allowance:AMOUNT});const v=view(),prepared:unknown[]=[],started:unknown[]=[];
+  const hash='0x'+'ab'.repeat(32) as `0x${string}`;
+  burn.mockImplementation(async p=>{await p.beforeBroadcast!(hash);throw new ethTx.EthBroadcastStatusUnknownError(hash,new Error('504'));});
+  await createUnwrapFlow()(input(),{...v,onPrepared:async r=>{prepared.push(r);},onStarted:async r=>{started.push(r);}});
+  expect(prepared[0]).toMatchObject({phase:'prepared'});expect(started).toEqual([]);expect(v.err).toContain(hash);
+ });
 });

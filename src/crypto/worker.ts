@@ -1,6 +1,8 @@
+import { decodeTaprootAddress } from "../chains/pearl/address";
 // Web Worker — all key material lives here. Main thread never sees raw keys.
 // Verb-based RPC per docs/06-CRYPTO.md.
 
+import { vaultSignatureProgress } from "./vault-signatures";
 import {
   generateMnemonic,
   validateMnemonic,
@@ -35,7 +37,7 @@ import { buildSignedBtxTx, p2mrScriptPubKey, type BtxTxInput, type BtxTxOutput }
 import { pearlParams, type PearlNetwork } from "../chains/pearl/network";
 import { ETH_CHAIN_ID } from "../chains/ethereum/network";
 import { assertBtxUiEnabled } from "../lib/features";
-import { MAX_VAULT_INPUTS, vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
+import { assertVaultFeePolicy, MAX_VAULT_INPUTS, vaultDescriptorFromPubkeys } from "../chains/pearl/multisig";
 import { keccak_256 } from "@noble/hashes/sha3";
 import { sha256 } from "@noble/hashes/sha256";
 import { schnorr, secp256k1 } from "@noble/curves/secp256k1";
@@ -319,6 +321,7 @@ export type WorkerCmd =
     }
   | { id: string; cmd: "deriveBtx" }
   | { id: string; cmd: "signBtxTx"; ins: BtxTxInput[]; outs: BtxTxOutput[] }
+  | { id: string; cmd: "verifyPassword"; password: string; blob: BlobJSON }
   | { id: string; cmd: "exportMnemonic"; password: string; blob: BlobJSON }
   | { id: string; cmd: "validateMnemonic"; mnemonic: string }
   | { id: string; cmd: "generateMnemonic"; strength: 128 | 256 }
@@ -491,12 +494,19 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       }
     }
 
+    case "verifyPassword": {
+      const plaintext = await decryptBlob(blobFromJSON(msg.blob), msg.password);
+      plaintext.fill(0);
+      return { ok: true };
+    }
+
     case "exportMnemonic": {
-      // Require both: an active session AND correct password to decrypt the blob.
+      // Explicit phrase export requires the correct keystore password.
       const plaintext = await decryptBlob(blobFromJSON(msg.blob), msg.password);
       const { mnemonic } = JSON.parse(new TextDecoder().decode(plaintext)) as {
         mnemonic: string;
       };
+      plaintext.fill(0);
       return { mnemonic };
     }
 
@@ -613,13 +623,16 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       }
       const master = masterFromSeed(session.seed);
       const path = pearlMultisigPath(msg.vaultAccount, msg.keyIndex);
-      const child = master.derive(path);
+      let child: ReturnType<typeof master.derive> | undefined;
+      try {
+      child = master.derive(path);
       if (!child.publicKey) throw new Error("E_HD_DERIVE_FAILED");
       // The HDKey publicKey is the 33-byte compressed form (parity-prefix + X);
       // for x-only we drop the parity byte. Same convention as elsewhere in
       // this worker for taproot.
       const xOnly = child.publicKey.slice(1);
       return { pubkeyHex: bytesToHex(xOnly), originPath: path };
+      } finally { child?.wipePrivateData(); master.wipePrivateData(); }
     }
 
     case "findPearlMultisigSlot": {
@@ -653,7 +666,8 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         targets.add(h);
       }
       const master = masterFromSeed(session.seed);
-      const match = findMultisigSlot(master, targets, msg.maxAccount, msg.maxIndex);
+      let match: ReturnType<typeof findMultisigSlot>;
+      try { match = findMultisigSlot(master, targets, msg.maxAccount, msg.maxIndex); } finally { master.wipePrivateData(); }
       if (!match) return { found: null };
       return {
         found: {
@@ -697,7 +711,6 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         }
       }
 
-      const network = { bech32: params.hrp, pubKeyHash: 0x00, scriptHash: 0x05, wif: 0x80 };
       const tx = new btc.Transaction({ allowUnknownOutputs: false });
 
       for (const u of r.utxos) {
@@ -738,7 +751,8 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         }
         const amt = BigInt(o.amountGrains);
         if (amt <= 0n) throw new Error("E_PEARL_OUTPUT_VALUE");
-        tx.addOutputAddress(o.address, amt, network);
+        const program = decodeTaprootAddress(o.address, params);
+        tx.addOutput({ script: new Uint8Array([0x51, 0x20, ...program]), amount: amt });
       }
 
       return { psbtBase64: base64.encode(tx.toPSBT()) };
@@ -769,7 +783,9 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
       // Derive our cosigner privkey for this vault slot.
       const master = masterFromSeed(session.seed);
       const path = pearlMultisigPath(r.vaultAccount, r.keyIndex);
-      const child = master.derive(path);
+      let child: ReturnType<typeof master.derive> | undefined;
+      try {
+      child = master.derive(path);
       if (!child.privateKey || !child.publicKey) throw new Error("E_HD_DERIVE_FAILED");
       const myXOnly = child.publicKey.slice(1);
       const myHex = bytesToHex(myXOnly);
@@ -813,13 +829,25 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         }
       }
 
+      const progress = vaultSignatureProgress(tx);
+      if (bytesToHex(progress.vault.outputScript) !== bytesToHex(vault.outputScript) || progress.foreignSignersHex.length) throw new Error("E_MULTISIG_VAULT_BINDING");
+      const totalIn = Array.from({ length: tx.inputsLength }, (_, i) => tx.getInput(i).witnessUtxo!.amount).reduce((a, b) => a + b, 0n);
+      let totalOut = 0n;
+      for (let i = 0; i < tx.outputsLength; i++) {
+        const out = tx.getOutput(i);
+        if (!out.script || out.script.length !== 34 || out.script[0] !== 0x51 || out.script[1] !== 0x20 || !out.amount || out.amount <= 546n) throw new Error("E_PEARL_OUTPUT_ADDRESS");
+        totalOut += out.amount;
+      }
+      assertVaultFeePolicy(totalIn, totalIn - totalOut);
+
       // Sign every input with our cosigner privkey. signIdx appends to the
       // input's tapScriptSig map automatically for tapscript-path inputs.
       for (let i = 0; i < tx.inputsLength; i++) {
-        tx.signIdx(child.privateKey, i);
+        if (!(tx.getInput(i).tapScriptSig ?? []).some(([key]) => bytesToHex(key.pubKey) === myHex)) tx.signIdx(child.privateKey, i);
       }
 
       return { psbtBase64: base64.encode(tx.toPSBT()) };
+      } finally { child?.wipePrivateData(); master.wipePrivateData(); }
     }
 
     case "signSigProofForVault": {
@@ -851,7 +879,9 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
 
       const master = masterFromSeed(session.seed);
       const path = pearlMultisigPath(r.vaultAccount, r.keyIndex);
-      const child = master.derive(path);
+      let child: ReturnType<typeof master.derive> | undefined;
+      try {
+      child = master.derive(path);
       if (!child.privateKey || !child.publicKey) throw new Error("E_HD_DERIVE_FAILED");
       const myXOnly = child.publicKey.slice(1); // drop sec1 prefix byte
       const myHex = bytesToHex(myXOnly);
@@ -882,6 +912,7 @@ async function handle(msg: WorkerCmd): Promise<unknown> {
         signerPubkeyHex: myHex,
         hmacProofHex: bytesToHex(proofBytes),
       };
+      } finally { child?.wipePrivateData(); master.wipePrivateData(); }
     }
   }
 }

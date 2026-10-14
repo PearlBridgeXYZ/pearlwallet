@@ -92,7 +92,7 @@ const COSIGNER = xonlyHex(1);
 
 type Reply = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
 const defaultReply: Reply = async (cmd, args) => {
-  if (cmd === "exportMnemonic") return { mnemonic: "m" };
+  if ((cmd === "exportMnemonic" || cmd === "verifyPassword")) return { mnemonic: "m" };
   if (cmd === "derivePearlMultisigPubkey") return { pubkeyHex: MY, originPath: pearlMultisigPath(0, 0) };
   if (cmd === "lock") return {};
   // Stand-in signer: returns the PSBT as is (no key material involved).
@@ -132,7 +132,7 @@ const VAULT: VaultRecord = {
 };
 function vaultPsbt(): string {
   const tx = new btc.Transaction({ allowUnknownOutputs: true });
-  tx.addInput({ txid: hexToBytes("aa".repeat(32)), index: 0, witnessUtxo: { script: VDESC.outputScript, amount: 100_000n } });
+  tx.addInput({ txid: hexToBytes("aa".repeat(32)), index: 0, witnessUtxo: { script: VDESC.outputScript, amount: 100_000n }, tapInternalKey: VDESC.internalKey, tapLeafScript: VDESC.tapLeafScript });
   tx.addOutput({ script: VDESC.outputScript, amount: 90_000n });
   return base64.encode(tx.toPSBT());
 }
@@ -224,6 +224,18 @@ describe("L-e — vault pending-tx writes are bound to the session's wallet", ()
 });
 
 describe("L-e — bridge crossings are bound to the session's wallet", () => {
+  it("an asynchronous response retains its original wallet owner", async () => {
+    const A = await openTab();
+    const { saveBridgeCrossing, depositTofuForWallet } = await import("../src/ui/pages/Bridge");
+    A.store.setState({status:"unlocked", blob:blob("W"), addresses:addrs("w")});
+    const pins = depositTofuForWallet("w-ext-0");
+    data.get("keystore")!.set("primary", record("Y", "y"));
+    A.store.setState({status:"unlocked", blob:blob("Y"), addresses:addrs("y")});
+    await expect(saveBridgeCrossing(crossing(), {walletPrimary:"w-ext-0"})).rejects.toThrow("E_WALLET_CHANGED");
+    await expect(pins.set("pin", "prl1ptest")).rejects.toThrow("E_WALLET_CHANGED");
+    expect(data.get("bridgeCrossings")!.size).toBe(0);
+    expect(data.get("bridgeDepositPins")!.size).toBe(0);
+  });
   it("a crossing saved (onStarted) while another tab's wipe runs → E_WALLET_WIPED; the next wallet inherits no crossing", async () => {
     data.get("keystore")!.set("primary", record("wallet-W", "w"));
     const A = await openTab();
@@ -261,6 +273,20 @@ describe("L-e — bridge crossings are bound to the session's wallet", () => {
     await expect(saveBridgeCrossing(crossing("d".repeat(64)))).rejects.toThrow("E_LOCKED");
   });
 
+  it.each(["dismissed", "done", "failed", "review", "relay"] as const)("late submission cannot overwrite stored %s", async phase => {
+    data.get("keystore")!.set("primary", record("wallet-W", "w"));
+    const A = await openTab();
+    const { saveBridgeCrossing } = await import("../src/ui/pages/Bridge");
+    A.store.setState({ status:"unlocked",blob:blob("wallet-W"),addresses:addrs("w") });
+    const prior = crossing("c".repeat(64), phase);
+    data.get("bridgeCrossings")!.set(prior.id, prior);
+    expect(await saveBridgeCrossing(crossing(prior.id, "relay"), {expectedPhase:"prepared"})).toBe(false);
+    expect(data.get("bridgeCrossings")!.get(prior.id)).toEqual(prior);
+    data.get("bridgeCrossings")!.set(prior.id, crossing(prior.id,"prepared"));
+    expect(await saveBridgeCrossing(crossing(prior.id,"relay"),{expectedPhase:"prepared"})).toBe(true);
+    expect((data.get("bridgeCrossings")!.get(prior.id) as BridgeCrossingRecord).phase).toBe("relay");
+  });
+
   it("adoption (ifAbsent): never overwrites a row another tab saved; the check and the write share the transaction", async () => {
     data.get("keystore")!.set("primary", record("wallet-W", "w"));
     const A = await openTab();
@@ -277,8 +303,8 @@ describe("L-e — bridge crossings are bound to the session's wallet", () => {
   it("Bridge.tsx: onStarted (wrap and unwrap) and the adoption tick go through saveBridgeCrossing; no plain crossing put is left", async () => {
     const fs = await import("node:fs");
     const src = fs.readFileSync("src/ui/pages/Bridge.tsx", "utf8");
-    expect(src.match(/onStarted=\{async \(rec\) => \{\n\s+await saveBridgeCrossing\(rec\);/g)).toHaveLength(2);
-    expect(src).toMatch(/\}, \{ ifAbsent: true \}\);/);
+    expect(src.match(/onStarted=\{async \(rec\) => \{\n\s+await saveBridgeCrossing\(rec, \{ walletPrimary(?:, expectedPhase: "prepared")? \}\);/g)).toHaveLength(2);
+    expect(src).toMatch(/\}, \{ ifAbsent: true, walletPrimary \}\);/);
     expect(src).not.toMatch(/db\.bridgeCrossings\.(put|add)\(/);
   });
 });

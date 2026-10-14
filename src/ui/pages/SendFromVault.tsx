@@ -208,6 +208,8 @@ export default function SendFromVault() {
     );
   }
 
+  if (!vault.backupConfirmedAt) return <Page title="Back up this vault first"><p>Save its recovery file and confirm the backup before preparing a send.</p><Link className="btn-primary mt-3" to={`/vaults/${vault.id}`}>Open vault backup</Link></Page>;
+
   if (stage === "saved" && savedId) {
     return (
       <Page title="Draft saved">

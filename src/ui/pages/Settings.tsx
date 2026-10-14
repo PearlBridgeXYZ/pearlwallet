@@ -1,3 +1,6 @@
+import { listVaults } from "../../services/multisig";
+import { downloadVaultBackup } from "../../services/vault-backup";
+import type { VaultRecord } from "../../storage/db";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Page from "../components/Page";
@@ -63,6 +66,9 @@ export default function Settings() {
   const [oldPw, setOldPw] = useState("");
   const [newPw, setNewPw] = useState("");
   const [newPw2, setNewPw2] = useState("");
+  const [wipeVaults,setWipeVaults]=useState<VaultRecord[]|null>(null);
+  const [wipeBackupAcknowledged,setWipeBackupAcknowledged]=useState(false);
+  useEffect(()=>{let gone=false;void listVaults().then(v=>{if(!gone)setWipeVaults(v);}).catch(()=>{if(!gone)setWipeVaults(null);});return()=>{gone=true;};},[]);
   const [wipePhrase, setWipePhrase] = useState("");
   const [wipePassword, setWipePassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +109,11 @@ export default function Settings() {
         });
       }, 1000);
     } catch (e) {
+      if (e instanceof Error && e.message === "E_VAULT_LIST_CHANGED") {
+        setWipeBackupAcknowledged(false);
+        setError("The vault list changed. Nothing was wiped. Unlock and back up the current vaults before trying again.");
+        return;
+      }
       setError(
         e instanceof Error && e.message === "E_PASSWORD_WRONG"
           ? "Incorrect password."
@@ -276,10 +287,18 @@ export default function Settings() {
       setError("Enter your password to confirm the wipe.");
       return;
     }
+    if (!wipeBackupAcknowledged || !wipeVaults) { setError("Confirm that your recovery phrase and every vault recovery file are saved before wiping."); return; }
     try {
-      await wipe(wipePassword);
+      const current=await listVaults();
+      if(current.map(v=>v.id).sort().join()!==wipeVaults.map(v=>v.id).sort().join()) {setWipeVaults(current);setWipeBackupAcknowledged(false);setError("The vault list changed. Back up the current vaults before wiping.");return;}
+      await wipe(wipePassword, wipeVaults.map(v=>v.id));
       navigate("/");
     } catch (e) {
+      if (e instanceof Error && e.message === "E_VAULT_LIST_CHANGED") {
+        setWipeBackupAcknowledged(false);
+        setError("The vault list changed. Nothing was wiped. Unlock and back up the current vaults before trying again.");
+        return;
+      }
       setError(
         e instanceof Error && e.message === "E_PASSWORD_WRONG"
           ? "Incorrect password."
@@ -724,13 +743,12 @@ export default function Settings() {
           Offline signing · Experimental
         </h2>
         <p className="mt-3 text-sm leading-7 text-text-2">
-          Prepare a transaction online, sign it on an offline machine, then
-          broadcast it online. Transfer transaction data between machines using
-          QR codes or copy and paste. Keep your recovery phrase on the offline signer.
+          Sign a prepared transaction on a disconnected machine using the downloaded HTML file.
+          Keep your recovery phrase on that offline signer. This version has no watch-only online composer: do not import a cold-wallet phrase into an online browser to prepare a transaction.
         </p>
         <p className="mt-2 text-xs leading-6 text-text-3">
           Advanced users can also prepare a transaction offline by supplying
-          a list of unspent outputs.
+          a list of unspent outputs on the offline machine, then use a separate trusted broadcaster for the signed transaction.
         </p>
         <p className="mt-3 border-l-2 border-warn-line pl-3 text-xs leading-6 text-warn">
           Use matching wallet versions on all machines. The transaction format
@@ -756,9 +774,13 @@ export default function Settings() {
         <h2 className="border-b border-line pb-3 text-lg font-semibold text-danger">Danger zone</h2>
         <p className="mt-3 text-sm leading-7 text-text-2">
           Wiping removes the encrypted wallet from this browser. Save your recovery
-          phrase first; you will need it to restore access. Enter your password
+          phrase and the recovery file for every multisig vault first. The phrase alone cannot restore a vault’s full policy. Enter your password
           and the confirmation below to remove this wallet.
         </p>
+        <div className="my-3 text-sm">
+          {wipeVaults===null ? <p>Vault recovery list unavailable. Reopen Settings before wiping.</p> : wipeVaults.map(v=><div key={v.id} className="flex flex-wrap gap-2 my-2"><span>{v.label} ({v.threshold} of {v.total})</span><button className="btn-secondary" onClick={()=>{try{downloadVaultBackup(v);}catch(e){setError(e instanceof Error ? e.message : String(e));}}}>Save recovery file</button></div>)}
+          <label className="flex gap-2 mt-3"><input type="checkbox" checked={wipeBackupAcknowledged} onChange={e=>setWipeBackupAcknowledged(e.target.checked)}/>I saved my recovery phrase and the recovery file for every listed vault.</label>
+        </div>
         <WipeBroadcastWarning />
         <div className="mt-4 flex flex-col gap-4">
           <label className="block min-w-0 flex-1">
@@ -781,7 +803,7 @@ export default function Settings() {
               autoComplete="current-password"
             />
           </label>
-          <button onClick={doWipe} className="btn-danger self-start">Wipe wallet from this browser</button>
+          <button onClick={doWipe} disabled={!wipeBackupAcknowledged || !wipeVaults} className="btn-danger self-start">Wipe wallet from this browser</button>
         </div>
       </section>
 

@@ -53,15 +53,23 @@ import {
 // pollutes the user-facing address book. A pin is bound to the session's
 // wallet: refused (E_WALLET_WIPED / E_WALLET_CHANGED) if another tab wiped
 // or replaced it meanwhile, so it never lands under the next wallet.
+export function depositTofuForWallet(walletPrimary: string | null): DepositTofuStore {
+  return {
+    async get(key) {
+      if (!walletPrimary || sessionWalletPrimary() !== walletPrimary) throw new Error("E_WALLET_CHANGED");
+      return (await db.bridgeDepositPins.get(key))?.pearlAddress ?? null;
+    },
+    async set(key, value) {
+      if (!walletPrimary) throw new Error("E_LOCKED");
+      await putDepositPinForWallet({ ethAddress: key, pearlAddress: value, pinnedAt: Date.now() }, walletPrimary);
+    },
+  };
+}
+// Compatibility adapter for synchronous callers. Async flows capture a store
+// before their first await using depositTofuForWallet.
 export const depositTofu: DepositTofuStore = {
-  async get(key) {
-    return (await db.bridgeDepositPins.get(key))?.pearlAddress ?? null;
-  },
-  async set(key, value) {
-    const walletPrimary = sessionWalletPrimary();
-    if (!walletPrimary) throw new Error("E_LOCKED");
-    await putDepositPinForWallet({ ethAddress: key, pearlAddress: value, pinnedAt: Date.now() }, walletPrimary);
-  },
+  get: key => depositTofuForWallet(sessionWalletPrimary()).get(key),
+  set: (key, value) => depositTofuForWallet(sessionWalletPrimary()).set(key, value),
 };
 
 /**
@@ -73,10 +81,23 @@ export const depositTofu: DepositTofuStore = {
  * relay-indexed deposit): writes only if no row with that id exists;
  * returns whether it wrote.
  */
-export async function saveBridgeCrossing(rec: BridgeCrossingRecord, opts: { ifAbsent?: boolean } = {}): Promise<boolean> {
-  const walletPrimary = sessionWalletPrimary();
+export async function saveBridgeCrossing(rec: BridgeCrossingRecord, opts: { ifAbsent?: boolean; walletPrimary?: string | null; expectedPhase?: BridgeCrossingRecord["phase"] } = {}): Promise<boolean> {
+  const walletPrimary = opts.walletPrimary === undefined ? sessionWalletPrimary() : opts.walletPrimary;
   if (!walletPrimary) throw new Error("E_LOCKED");
   return putBridgeCrossingForWallet(rec, walletPrimary, opts);
+}
+
+async function patchCrossing(id: string, owner: string | null, patch: Partial<BridgeCrossingRecord>, expectedPhase?: BridgeCrossingRecord["phase"]): Promise<void> {
+  if (!owner) throw new Error("E_LOCKED");
+  await db.transaction("rw", [db.keystore, db.bridgeCrossings], async () => {
+    const wallet = await db.keystore.get("primary");
+    if (!wallet || wallet.publicData.pearlAddress !== owner) throw new Error("E_WALLET_CHANGED");
+    if (expectedPhase !== undefined) {
+      const current = await db.bridgeCrossings.get(id);
+      if (!current || current.phase !== expectedPhase) return;
+    }
+    await db.bridgeCrossings.update(id, patch);
+  });
 }
 
 // Native PRL ↔ WPRL bridging (v0.4.0). The public /v1 API supplies quotes
@@ -95,7 +116,7 @@ export async function saveBridgeCrossing(rec: BridgeCrossingRecord, opts: { ifAb
 //     pinning (refuse if it ever changes), the address is shown for visual
 //     verification against pearlbridge.xyz, and the sent amount is the
 //     user's input. Residual risk = a compromise active on the very first
-//     wrap; the real fix (relay-published xpub for local derivation) is
+//     wrap; the real fix (authenticated recipient-bound address proofs) is
 //     tracked as a follow-up.
 
 type Tab = "wrap" | "unwrap" | "activity";
@@ -135,10 +156,11 @@ export default function Bridge() {
   }, []);
 
   // ── crossing records + lifecycle poller ───────────────────────────────
+  const walletPrimary = addresses?.pearl ?? null;
   const reloadCrossings = useCallback(async () => {
     const rows = await db.bridgeCrossings.orderBy("createdAt").reverse().toArray();
-    setCrossings(rows);
-  }, []);
+    if (sessionWalletPrimary() === walletPrimary) setCrossings(rows);
+  }, [walletPrimary]);
 
   useEffect(() => {
     void reloadCrossings();
@@ -157,14 +179,14 @@ export default function Bridge() {
           // each tick would otherwise inject unbounded phantom crossings.
           // fetchRecentDeposit already rejects non-64-hex txids; this bounds
           // the row count even against a same-shape flood.
-          const openNow = await db.bridgeCrossings.where("phase").anyOf("confirming", "relay", "review").count();
+          const openNow = await db.bridgeCrossings.where("phase").anyOf("prepared", "confirming", "relay", "review").count();
           const recent = openNow < MAX_OPEN_CROSSINGS ? await fetchRecentDeposit(ethAddr) : null;
           // Only adopt genuinely in-flight deposits (audit N1): never
           // resurrect a failed/cancelled/under_review/refunded mint as a
           // fresh "confirming" zombie.
           // Wallet-bound, and only if no row for it exists (checked in the
           // same transaction as the write).
-          if (recent && MINT_IN_FLIGHT.has(recent.state)) {
+          if (!stop && recent && MINT_IN_FLIGHT.has(recent.state)) {
             const now = Date.now();
             await saveBridgeCrossing({
               id: recent.txid,
@@ -180,28 +202,29 @@ export default function Bridge() {
               settledRef: null,
               approveTxHash: null,
               updatedAt: now,
-            }, { ifAbsent: true });
+            }, { ifAbsent: true, walletPrimary });
           }
         } catch {
           // best-effort; recovery retries next tick
         }
       }
       try {
-        await reopenLegacyDroppedBurns();
+        if (stop) return;
+        await reopenLegacyDroppedBurns(walletPrimary);
       } catch {
         // best-effort; retried next tick
       }
       const open = await db.bridgeCrossings
         .where("phase")
-        .anyOf("confirming", "relay", "review")
+        .anyOf("prepared", "confirming", "relay", "review")
         .toArray();
       for (const c of open) {
         if (stop) return;
         try {
           if (c.direction === "wrap") {
-            await pollWrap(c, status?.pearlMinConfirmations ?? 6);
+            await pollWrap(c, status?.pearlMinConfirmations ?? 6, walletPrimary);
           } else {
-            await pollUnwrap(c, ethNetwork);
+            await pollUnwrap(c, ethNetwork, walletPrimary);
           }
         } catch {
           // transient API failure — next tick retries; relay state is canonical
@@ -215,10 +238,10 @@ export default function Bridge() {
       stop = true;
       clearInterval(t);
     };
-  }, [status, reloadCrossings, ethAddr]);
+  }, [status, reloadCrossings, ethAddr, ethNetwork, walletPrimary]);
 
   const openCount = useMemo(
-    () => crossings.filter((c) => c.phase === "confirming" || c.phase === "relay" || c.phase === "review").length,
+    () => crossings.filter((c) => c.phase === "prepared" || c.phase === "confirming" || c.phase === "relay" || c.phase === "review").length,
     [crossings],
   );
 
@@ -256,7 +279,7 @@ export default function Bridge() {
           pool={pool}
           pearlNetwork={pearlNetwork}
           onStarted={async (rec) => {
-            await saveBridgeCrossing(rec);
+            await saveBridgeCrossing(rec, { walletPrimary });
             await reloadCrossings();
             setTab("activity");
           }}
@@ -268,15 +291,18 @@ export default function Bridge() {
           ethAddress={addresses?.eth as `0x${string}` | undefined}
           pearlAddress={addresses?.pearl}
           ethNetwork={ethNetwork}
+          onPrepared={async rec => { await saveBridgeCrossing(rec, { walletPrimary, expectedPhase: rec.phase === "prepared" ? undefined : "prepared" }); }}
           onStarted={async (rec) => {
-            await saveBridgeCrossing(rec);
+            await saveBridgeCrossing(rec, { walletPrimary, expectedPhase: "prepared" });
             await reloadCrossings();
             setTab("activity");
           }}
         />
       )}
       {tab === "activity" && (
-        <ActivityCard crossings={crossings} requiredConfs={status?.pearlMinConfirmations ?? 6} ethNetwork={ethNetwork} />
+        <ActivityCard crossings={crossings} requiredConfs={status?.pearlMinConfirmations ?? 6} ethNetwork={ethNetwork} onTrackingChange={async(id,phase)=>{
+          await patchCrossing(id,walletPrimary,{phase,updatedAt:Date.now()},phase === "dismissed" ? "prepared" : "dismissed");await reloadCrossings();
+        }} />
       )}
 
       <button onClick={() => navigate("/dashboard")} className="btn-secondary mt-4 w-full min-w-11">
@@ -288,12 +314,12 @@ export default function Bridge() {
 
 // ── lifecycle pollers (module-level so tests can drive them) ────────────
 
-export async function pollWrap(c: BridgeCrossingRecord, requiredConfs: number): Promise<void> {
+export async function pollWrap(c: BridgeCrossingRecord, requiredConfs: number, walletPrimary = sessionWalletPrimary()): Promise<void> {
   if (c.phase === "confirming") {
     const tx = await fetchPearlTxStatus(c.id);
     const confirmations = tx.found ? tx.confirmations : 0;
     const phase = confirmations >= requiredConfs ? "relay" : "confirming";
-    await db.bridgeCrossings.update(c.id, {
+    await patchCrossing(c.id, walletPrimary, {
       confirmations,
       phase,
       updatedAt: Date.now(),
@@ -322,7 +348,7 @@ export async function pollWrap(c: BridgeCrossingRecord, requiredConfs: number): 
     patch.phase = "review";
   }
   // outcome "pending" leaves phase as-is (confirming→relay handled above)
-  await db.bridgeCrossings.update(c.id, patch);
+  await patchCrossing(c.id, walletPrimary, patch);
 }
 
 /** After this long without a relay record, an unwrap whose burn receipt
@@ -346,12 +372,12 @@ export function isLegacyDroppedBurn(c: BridgeCrossingRecord): boolean {
   return c.direction === "unwrap" && c.phase === "failed" &&
     typeof c.relayState === "string" && c.relayState.startsWith(LEGACY_DROPPED_BURN_PREFIX);
 }
-export async function reopenLegacyDroppedBurns(): Promise<number> {
+export async function reopenLegacyDroppedBurns(walletPrimary = sessionWalletPrimary()): Promise<number> {
   const failed = await db.bridgeCrossings.where("phase").equals("failed").toArray();
   let n = 0;
   for (const c of failed) {
     if (!isLegacyDroppedBurn(c)) continue;
-    await saveBridgeCrossing({ ...c, phase: "relay", relayState: BURN_NOT_MINED_NOTICE, updatedAt: Date.now() });
+    await saveBridgeCrossing({ ...c, phase: "relay", relayState: BURN_NOT_MINED_NOTICE, updatedAt: Date.now() }, { walletPrimary });
     n++;
   }
   return n;
@@ -360,6 +386,7 @@ export async function reopenLegacyDroppedBurns(): Promise<number> {
 export async function pollUnwrap(
   c: BridgeCrossingRecord,
   ethNetwork: "mainnet" | "sepolia" = "mainnet",
+  walletPrimary = sessionWalletPrimary(),
 ): Promise<void> {
   const b = await fetchBurnStatus(c.id as `0x${string}`);
   const outcome = classifyBurn(b.state);
@@ -388,6 +415,7 @@ export async function pollUnwrap(
       patch.phase = "failed";
       patch.relayState = "burn tx reverted on-chain — WPRL not spent";
     } else if (receipt === "success") {
+      if (c.phase === "prepared") { patch.phase = "relay"; patch.relayState = null; }
       // Mined; the relay not having indexed it yet is normal lag. A check
       // notice shown earlier no longer applies.
       if (isBurnCheckNotice(c.relayState)) patch.relayState = null;
@@ -399,7 +427,7 @@ export async function pollUnwrap(
       patch.relayState = receipt === "not-found" ? BURN_NOT_MINED_NOTICE : BURN_STATUS_UNREADABLE_NOTICE;
     }
   }
-  await db.bridgeCrossings.update(c.id, patch);
+  await patchCrossing(c.id, walletPrimary, patch, c.phase);
 }
 
 // ── Wrap ────────────────────────────────────────────────────────────────
@@ -414,6 +442,8 @@ function WrapCard(props: {
   const { status, ethAddress, pool, pearlNetwork, onStarted } = props;
   // Spend from both single-sig branches (change lives on branch 1).
   const changePool = useWallet((s) => s.addresses?.pearlChange);
+  const owner = useWallet((s) => s.addresses?.pearl ?? null);
+  const tofu = useMemo(() => depositTofuForWallet(owner), [owner]);
   const deriveMore = useWallet((s) => s.derivePearlAddresses);
   const [amount, setAmount] = useState("");
   // The user's locally-parsed amount — the ONLY trusted source of how much
@@ -422,6 +452,12 @@ function WrapCard(props: {
   const [grains, setGrains] = useState<bigint | null>(null);
   const [quote, setQuote] = useState<MintQuote | null>(null);
   const [depositAddr, setDepositAddr] = useState<string | null>(null);
+  // Acknowledgment is local to this mounted flow and this exact recipient.
+  // A repeated API answer or a saved pin is not cryptographic authentication.
+  const [acknowledgedRecipient, setAcknowledgedRecipient] = useState<string | null>(null);
+  const recipientKey = owner && ethAddress && depositAddr
+    ? `${owner}:${ethAddress}:${depositAddr}` : null;
+  const trustAcknowledged = recipientKey !== null && acknowledgedRecipient === recipientKey;
   // What the user reviewed — quote, deposit address and the composed
   // transaction (network fee included) as one object; only this exact
   // transaction is signed, and the review shows only this.
@@ -454,7 +490,7 @@ function WrapCard(props: {
       try {
         const [q, dep] = await Promise.all([
           fetchMintQuote(g),
-          resolveDepositAddress(ethAddress, depositTofu),
+          resolveDepositAddress(ethAddress, tofu),
         ]);
         if (quoteSeq.current !== seq) return;
         // Bind the quote to what we asked for. A quote whose amount drifts
@@ -471,7 +507,7 @@ function WrapCard(props: {
       }
     }, 400);
     return () => clearTimeout(t);
-  }, [amount, ethAddress]);
+  }, [amount, ethAddress, tofu]);
 
   // Confirm-time re-checks (audit C1/H2/M2): re-resolve the deposit
   // address through TOFU (refuses if it ever changed) AND re-read the quote
@@ -479,7 +515,7 @@ function WrapCard(props: {
   // the fee is shown and again right before signing.
   const recheck = async (sendGrains: bigint, expectedDeposit: string) => {
     const [dep, q2] = await Promise.all([
-      resolveDepositAddress(ethAddress!, depositTofu),
+      resolveDepositAddress(ethAddress!, tofu),
       fetchMintQuote(sendGrains),
     ]);
     if (dep.address !== expectedDeposit) {
@@ -498,7 +534,7 @@ function WrapCard(props: {
   // signed here. A review composed for an amount the user has since
   // changed is discarded (quoteSeq).
   const prepare = async () => {
-    if (!quote || !depositAddr || !ethAddress || grains === null || quote.amount !== grains || inFlight.current) return;
+    if (!trustAcknowledged || !quote || !depositAddr || !ethAddress || grains === null || quote.amount !== grains || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
     setErr(null);
@@ -534,7 +570,7 @@ function WrapCard(props: {
 
   // Step 2: sign and broadcast exactly the reviewed transaction.
   const wrap = async () => {
-    if (!wrapReviewSignable(review) || !ethAddress || inFlight.current) return;
+    if (!trustAcknowledged || !wrapReviewSignable(review) || !ethAddress || inFlight.current) return;
     inFlight.current = true;
     // The session this click confirmed in (checked again before signing).
     const session = captureSigningSession();
@@ -666,10 +702,26 @@ function WrapCard(props: {
           <div className="mb-1 text-text-3">PRL will be sent to your bridge deposit address:</div>
           <div className="break-all font-mono min-w-0 tabular-nums">{shownDeposit}</div>
           <div className="mt-1 text-text-3">
-            Verify this matches the address shown for your wallet on pearlbridge.xyz before sending.
+            Compare the address carefully. A matching address on pearlbridge.xyz may come from the same service and is not independent proof.
           </div>
         </div>
       )}
+
+      <div className="rounded-pb border border-warn p-3 text-sm leading-relaxed" role="note">
+        <p className="font-semibold">Deposit address trust</p>
+        <p className="mt-1">
+          The bridge service supplies this deposit address. This wallet cannot independently
+          prove that it belongs to the bridge or will credit your Ethereum address. If the
+          service is compromised on first use, your PRL could be sent to an attacker and lost.
+          Remembering the first address only detects later changes; it does not prove the
+          first address was correct.
+        </p>
+        <label className="mt-3 flex items-start gap-2">
+          <input type="checkbox" checked={trustAcknowledged} disabled={busy || !recipientKey}
+            onChange={(e) => setAcknowledgedRecipient(e.target.checked ? recipientKey : null)} />
+          <span>I understand this trust risk and choose to wrap using the displayed deposit address.</span>
+        </label>
+      </div>
 
       {err && <p className="text-sm text-danger leading-relaxed break-words">{err}</p>}
 
@@ -677,7 +729,7 @@ function WrapCard(props: {
         <>
           <button
             onClick={() => void wrap()}
-            disabled={!wrapReviewSignable(review) || busy || status?.paused === true}
+            disabled={!trustAcknowledged || !wrapReviewSignable(review) || busy || status?.paused === true}
             className="btn-primary min-w-11"
           >
             {busy ? "Sending…" : `Sign and wrap ${grainsToPrlString(review.frozen.composed.amountGrains)} PRL`}
@@ -689,7 +741,7 @@ function WrapCard(props: {
       ) : (
         <button
           onClick={() => void prepare()}
-          disabled={!quote || !depositAddr || busy || status?.paused === true}
+          disabled={!trustAcknowledged || !quote || !depositAddr || busy || status?.paused === true}
           className="btn-primary min-w-11"
         >
           {busy ? "Preparing…" : quote ? `Review network fee for ${grainsToPrlString(quote.amount)} PRL` : "Wrap"}
@@ -706,9 +758,10 @@ function UnwrapCard(props: {
   ethAddress: `0x${string}` | undefined;
   pearlAddress: string | undefined;
   ethNetwork: ReturnType<typeof useWallet.getState>["ethNetwork"];
+  onPrepared: (rec: BridgeCrossingRecord) => Promise<void>;
   onStarted: (rec: BridgeCrossingRecord) => Promise<void>;
 }) {
-  const { status, ethAddress, pearlAddress, ethNetwork, onStarted } = props;
+  const { status, ethAddress, pearlAddress, ethNetwork, onPrepared, onStarted } = props;
   const [amount, setAmount] = useState("");
   const [grains, setGrains] = useState<bigint | null>(null);
   const [quote, setQuote] = useState<BurnQuote | null>(null);
@@ -800,7 +853,7 @@ function UnwrapCard(props: {
     if (ethUnknownBlocksSend(ethUnknown)) return;
     void unwrapFlow(
       { network: ethNetwork, ethAddress, pearlAddress, amount: grains, quote, gas },
-      { setEthUnknown, setBusy, setErr, setNotice, setGas, setNeedsApprove, setQuote, onStarted },
+      { setEthUnknown, setBusy, setErr, setNotice, setGas, setNeedsApprove, setQuote, onStarted, onPrepared },
     );
   };
 
@@ -900,8 +953,10 @@ export function ActivityCard(props: {
   crossings: BridgeCrossingRecord[];
   requiredConfs: number;
   ethNetwork: ReturnType<typeof useWallet.getState>["ethNetwork"];
+  onTrackingChange?: (id:string, phase:"dismissed"|"prepared")=>Promise<void>;
 }) {
-  const { crossings, requiredConfs, ethNetwork } = props;
+  const { crossings, requiredConfs, ethNetwork, onTrackingChange } = props;
+  const [trackingError,setTrackingError] = useState<string|null>(null);
   if (!crossings.length) {
     return (
       <div className="card text-sm text-text-2 leading-relaxed">
@@ -915,6 +970,7 @@ export function ActivityCard(props: {
       {["confirming", "relay", "done"].includes(crossings[0].phase) && (
         <AsciiPulse key={crossings[0].id} receipt={crossings[0]} />
       )}
+      {trackingError && <p role="alert" className="text-danger">{trackingError}</p>}
       {crossings.map((c) => (
         <div key={c.id} className="card text-sm leading-relaxed">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -936,6 +992,13 @@ export function ActivityCard(props: {
             {(c.phase === "relay" || c.phase === "confirming") && isBurnCheckNotice(c.relayState) && (
               <div className="text-warn">{c.relayState}</div>
             )}
+            {c.phase === "prepared" && <div className="text-warn">This signed transaction may never have been submitted. {c.relayState}</div>}
+            {c.phase === "dismissed" && <div>Automatic tracking stopped. This does not cancel or confirm the transaction. Check its hash and your account activity before making another transfer.</div>}
+            {onTrackingChange && c.direction === "unwrap" && (c.phase === "prepared" || c.phase === "dismissed") && <details>
+              <summary className="cursor-pointer">{c.phase === "dismissed" ? "Resume tracking" : "Stop automatic tracking"}</summary>
+              <p>This only changes local tracking. It does not cancel a transaction or make another unwrap safe. Check the transaction hash and account activity independently.</p>
+              <button className="btn-secondary mt-2" onClick={async()=>{try{await onTrackingChange(c.id,c.phase === "dismissed" ? "prepared" : "dismissed");setTrackingError(null);}catch(e){setTrackingError(e instanceof Error ? e.message : String(e));}}}>{c.phase === "dismissed" ? "Resume tracking this transaction" : "I checked; stop tracking this transaction"}</button>
+            </details>}
             {c.phase === "review" && (
               <div className="text-warn">
                 Under review by the bridge{c.relayState ? ` — ${c.relayState}` : ""}. This
@@ -949,8 +1012,7 @@ export function ActivityCard(props: {
             )}
             {c.phase === "failed" && (
               <div className="text-danger">
-                {c.relayState ?? "failed"} — funds are recoverable; contact the bridge
-                via pearlbridge.xyz support if this persists.
+                {c.relayState ?? "failed"}. Check the transaction and contact pearlbridge.xyz support if needed.
               </div>
             )}
             <div className="break-all">

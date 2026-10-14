@@ -248,3 +248,25 @@ describe("N2 — PRL: a send waiting for another tab's broadcast lock is refused
     expect(ls.data.get("pearl-wallet-broadcasts-v1") ?? "[]").not.toContain("11".repeat(32));
   });
 });
+
+describe('v0.7.1 durable burn intent before submission', () => {
+  it('does not broadcast when saving the application intent fails', async () => {
+    const n=node(), T=await openTab();
+    const persist=vi.fn(async()=>{throw new Error('QuotaExceededError');});
+    await expect(T.ethTx.requestBurn({network:'mainnet',from:ME,tier:'normal',ceiling,amount:1n,pearlAddress:'prl1pme',beforeBroadcast:persist})).rejects.toThrow('QuotaExceededError');
+    expect(persist).toHaveBeenCalledOnce();expect(n.submitted).toEqual([]);
+    expect(ls.length).toBe(0);
+  });
+  it('saves the locally computed burn hash before the RPC receives it', async () => {
+    const n=node(), T=await openTab(); let saved:string|null=null;
+    const r=await T.ethTx.requestBurn({network:'mainnet',from:ME,tier:'normal',ceiling,amount:1n,pearlAddress:'prl1pme',beforeBroadcast:async hash=>{
+      expect(n.submitted).toEqual([]); saved=hash;
+    }});
+    expect(saved).toBe(r.txHash);expect(n.submitted).toEqual([saved]);
+  });
+  it('refuses broadcast if the signing session changes while saving intent', async () => {
+    const n=node(), T=await openTab();
+    await expect(T.ethTx.requestBurn({network:'mainnet',from:ME,tier:'normal',ceiling,amount:1n,pearlAddress:'prl1pme',beforeBroadcast:async()=>{await T.ws.useWallet.getState().lock();T.unlock();}})).rejects.toThrow('E_SESSION_CHANGED');
+    expect(n.submitted).toEqual([]);
+  });
+});

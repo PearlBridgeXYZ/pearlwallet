@@ -1,5 +1,8 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import { createHash } from "node:crypto";
+import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { execSync } from "node:child_process";
 
 function gitSha(): string {
@@ -11,7 +14,24 @@ function gitSha(): string {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    name: "wallet-subresource-integrity",
+    enforce: "post",
+    writeBundle(options) {
+      const dir = options.dir ?? "dist";
+      const index = join(dir, "index.html");
+      // Hash written bytes: Vite's later bundle hooks rewrite import paths
+      // after generateBundle, so hashing that intermediate code is unsafe.
+      const html = readFileSync(index, "utf8").replace(/<(script|link)\b[^>]*>/g, tag => {
+        if (!tag.startsWith("<script") && !/rel="(?:stylesheet|modulepreload)"/.test(tag)) return tag;
+        const match = tag.match(/(?:src|href)="\/([^"?#]+)"/);
+        if (!match) throw new Error("Expected same-origin script/style");
+        const digest = createHash("sha384").update(readFileSync(join(dir, match[1]!))).digest("base64");
+        return tag.replace(/>$/, ` integrity="sha384-${digest}">`);
+      });
+      writeFileSync(index, html);
+    },
+  }],
   define: {
     __BUILD_GIT_SHA__: JSON.stringify(gitSha()),
     __BUILD_TIME__: JSON.stringify(new Date().toISOString()),

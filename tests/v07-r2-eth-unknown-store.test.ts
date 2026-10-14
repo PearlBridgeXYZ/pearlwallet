@@ -157,7 +157,7 @@ describe("FY5 live store", () => {
     // An unmounted card: its setters go nowhere, and it has no setEthUnknown.
     const view: UnwrapView = {
       setBusy: () => {}, setErr: () => {}, setNotice: () => {}, setGas: () => {},
-      setNeedsApprove: () => {}, setQuote: () => {}, onStarted: async () => {},
+      setNeedsApprove: () => {}, setQuote: () => {}, onPrepared: async () => {}, onStarted: async () => {},
     };
     await createUnwrapFlow()(
       { network: "mainnet", ethAddress: ME as `0x${string}`, pearlAddress: "prl1pme", amount: AMOUNT, quote,

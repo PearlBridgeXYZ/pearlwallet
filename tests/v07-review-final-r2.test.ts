@@ -116,7 +116,7 @@ describe("S2 — a wrap review can't mix two amounts", () => {
     expect(page).toMatch(/useEffect\(\(\) => \{\n\s+const seq = \+\+quoteSeq\.current;/);
     expect(page).toMatch(/disabled=\{busy \|\| review !== null\}/);
     expect(page).toMatch(/const shown = review\?\.quote \?\? quote;/);
-    expect(page).toMatch(/disabled=\{!wrapReviewSignable\(review\) \|\| busy/);
+    expect(page).toMatch(/disabled=\{!trustAcknowledged \|\| !wrapReviewSignable\(review\) \|\| busy/);
     expect(page).toMatch(/const \{ frozen, deposit \} = review;/);
   });
 });
@@ -151,7 +151,7 @@ function view() {
     setGas: (g: ethTx.UnwrapGasPreview) => void (v.gas = g),
     setNeedsApprove: () => {},
     setQuote: () => {},
-    onStarted: async () => void v.started++,
+    onPrepared: async () => {}, onStarted: async () => void v.started++,
   };
   return v satisfies UnwrapView & Record<string, unknown>;
 }
@@ -245,7 +245,7 @@ describe("S5 — the README (linked as 'View source') matches the app's own clai
       /No minified blobs/i,
       /Reproducible build/i,
       /bundle hashes/i,
-      /\bMIT\b/,
+      /licensed under MIT/i,
     ]) {
       expect(readme, String(stale)).not.toMatch(stale);
     }

@@ -172,10 +172,25 @@ const DEFAULT_UI: PersistedUI = {
 function loadUI(): PersistedUI {
   if (typeof localStorage === "undefined") return DEFAULT_UI;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_UI;
-    const parsed = JSON.parse(raw) as Partial<PersistedUI>;
-    const merged = { ...DEFAULT_UI, ...parsed };
+    let raw = localStorage.getItem(STORAGE_KEY);
+    let migrated = false;
+    if (!raw) {
+      for (let v = 6; v >= 1; v--) {
+        const older = localStorage.getItem(`pearl-wallet-ui-v${v}`);
+        if (older) { raw = older; migrated = true; break; }
+      }
+    }
+    if (!raw) return { ...DEFAULT_UI };
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { ...DEFAULT_UI };
+    const input = parsed as Record<string, unknown>;
+    const merged = { ...DEFAULT_UI };
+    for (const key of Object.keys(DEFAULT_UI) as (keyof PersistedUI)[]) {
+      if (typeof input[key] === typeof DEFAULT_UI[key]) {
+        Object.assign(merged, { [key]: input[key] });
+      }
+    }
+    if (!["system", "light", "dark"].includes(merged.theme)) merged.theme = "system";
     // Defense in depth: a stale localStorage value (or one tampered by a
     // bookmarklet) bypasses the setter's allowlist. Re-validate on load.
     if (!isAllowedRpcOverride(merged.pearlRpcOverride)) {
@@ -187,22 +202,12 @@ function loadUI(): PersistedUI {
     if (!isAllowedBtxRpcOverride(merged.btxRpcOverride)) {
       merged.btxRpcOverride = "";
     }
-    // One-time default-on migrations: a stored blob that predates a marker
-    // gets that surface enabled once, then stamped so a later opt-out is
-    // respected. Other prefs in the blob are untouched. v0.4.2: ETH;
-    // v0.5.0: multisig vaults.
-    let migrated = false;
-    if (parsed.ethDefaultedOn !== true) {
-      merged.ethEnabled = true;
-      merged.ethDefaultedOn = true;
-      migrated = true;
+    // Adding a feature must never reverse an explicit privacy/financial opt-out.
+    merged.ethDefaultedOn = true;
+    merged.multisigDefaultedOn = true;
+    if (migrated || input.ethDefaultedOn !== true || input.multisigDefaultedOn !== true) {
+      try { saveUI(merged); } catch { /* preserve loaded choices if storage is read-only */ }
     }
-    if (parsed.multisigDefaultedOn !== true) {
-      merged.multisigEnabled = true;
-      merged.multisigDefaultedOn = true;
-      migrated = true;
-    }
-    if (migrated) saveUI(merged);
     return merged;
   } catch {
     return DEFAULT_UI;

@@ -39,8 +39,10 @@ describe("S8 — worker errors fail the calls in flight", () => {
     w.onmessage!({ data: { id: w.posted[0]!.id, ok: true, result: {} } } as MessageEvent);
     // The client keeps working for new calls.
     const c = cryptoWorker.call<"lock", { ok: boolean }>("lock", {});
-    const id = w.posted.at(-1)!.id;
-    w.onmessage!({ data: { id, ok: true, result: { ok: true } } } as MessageEvent);
+    const replacement = workers.at(-1)!;
+    expect(replacement).not.toBe(w);
+    const id = replacement.posted.at(-1)!.id;
+    replacement.onmessage!({ data: { id, ok: true, result: { ok: true } } } as MessageEvent);
     await expect(c).resolves.toEqual({ ok: true });
   });
 

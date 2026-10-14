@@ -28,7 +28,7 @@ export default function Footer() {
         <a className="footer-link" href="https://github.com/PearlBridgeXYZ/pearlwallet/releases" target="_blank" rel="noreferrer noopener">Releases ↗</a>
         <a className="footer-link" href="https://pearlbridge.xyz/audit" target="_blank" rel="noreferrer noopener">Bridge backing ↗</a>
       </nav>
-      <p>Experimental, pre-1.0 software. Only store what you can afford to lose.</p>
+      <p>Experimental, pre-1.0 software.</p>
       <p>PearlWallet is built by the PearlBridge team, an independent project not affiliated with Pearl Research Labs.</p>
     </footer>
   );

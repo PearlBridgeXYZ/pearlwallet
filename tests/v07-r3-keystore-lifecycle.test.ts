@@ -130,7 +130,7 @@ describe("FZ2 — wipe is one IndexedDB transaction", () => {
     data.get("keystore")!.set("primary", record("wallet-W", "w"));
     data.get("vaults")!.set("old-vault", vault("old-vault"));
     const A = await openTab(async (cmd) => {
-      if (cmd === "exportMnemonic") return { mnemonic: "m" };
+      if ((cmd === "exportMnemonic" || cmd === "verifyPassword")) return { mnemonic: "m" };
       throw new Error(`unexpected ${cmd}`);
     });
     const B = await openTab(async (cmd) => {
@@ -490,7 +490,7 @@ describe("FZ4 — lock generation; a failed wipe ends locked", () => {
 
   it("wipe whose IndexedDB transaction fails after the worker reset ends 'locked', not 'unlocked' with no session", async () => {
     data.get("keystore")!.set("primary", record("wallet-W", "w"));
-    const A = await openTab(async (cmd) => (cmd === "exportMnemonic" ? { mnemonic: "m" } : {}));
+    const A = await openTab(async (cmd) => ((cmd === "exportMnemonic" || cmd === "verifyPassword") ? { mnemonic: "m" } : {}));
     A.store.setState({ status: "unlocked", blob: blob("wallet-W"), addresses: addrs("w") });
     vi.spyOn(A.dbm.db as never, "transaction" as never).mockRejectedValue(new Error("IDB broken") as never);
     await expect(A.store.getState().wipe("pw")).rejects.toThrow("IDB broken");
@@ -502,7 +502,7 @@ describe("FZ4 — lock generation; a failed wipe ends locked", () => {
 
   it("a successful wipe also forgets the ETH status-unknown records (FZ1 / Sonnet S2)", async () => {
     data.get("keystore")!.set("primary", record("wallet-W", "w"));
-    const A = await openTab(async (cmd) => (cmd === "exportMnemonic" ? { mnemonic: "m" } : {}));
+    const A = await openTab(async (cmd) => ((cmd === "exportMnemonic" || cmd === "verifyPassword") ? { mnemonic: "m" } : {}));
     A.store.setState({ status: "unlocked", blob: blob("wallet-W"), addresses: addrs("w") });
     A.eu.recordEthUnknown({ network: "mainnet", from: "0x1111111111111111111111111111111111111111", hash: `0x${"ab".repeat(32)}`, what: "ETH transfer" });
     expect(A.eu.currentEthUnknown("mainnet", "0x1111111111111111111111111111111111111111")).not.toBeNull();

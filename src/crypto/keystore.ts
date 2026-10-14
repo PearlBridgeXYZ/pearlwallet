@@ -106,6 +106,7 @@ export async function decryptBlob(blob: EncryptedBlob, password: string): Promis
   if (blob.kdf !== "PBKDF2-SHA256" || blob.cipher !== "AES-256-GCM") {
     throw new Error("E_UNSUPPORTED_BLOB_VERSION");
   }
+  if (blob.kdfIterations !== KDF_ITERATIONS || blob.kdfSalt.length !== KDF_SALT_BYTES || blob.iv.length !== AES_IV_BYTES || blob.ciphertext.length < 16) throw new Error("E_KEYSTORE_PARAMETERS");
   const subtle = requireCrypto();
   const key = await deriveKey(password, blob.kdfSalt, blob.kdfIterations);
   try {

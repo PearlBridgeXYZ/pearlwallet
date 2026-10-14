@@ -317,7 +317,7 @@ function unwrapView() {
     setGas: () => {},
     setNeedsApprove: () => {},
     setQuote: () => {},
-    onStarted: async () => void v.started++,
+    onPrepared: async () => {}, onStarted: async () => void v.started++,
     setEthUnknown: (st: EthUnknownState) => void (v.unknown = st),
   };
   return v satisfies UnwrapView;

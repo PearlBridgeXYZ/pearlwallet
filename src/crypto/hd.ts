@@ -211,11 +211,11 @@ export function findMultisigSlot(
     for (let keyIndex = 0; keyIndex < maxIndex; keyIndex++) {
       const path = pearlMultisigPath(vaultAccount, keyIndex);
       const child = master.derive(path);
-      if (!child.publicKey) continue;
-      const hex = xOnlyHex(child.publicKey);
-      if (targetPubkeysHex.has(hex)) {
-        return { vaultAccount, keyIndex, pubkeyHex: hex, originPath: path };
-      }
+      try {
+        if (!child.publicKey) continue;
+        const hex = xOnlyHex(child.publicKey);
+        if (targetPubkeysHex.has(hex)) return { vaultAccount, keyIndex, pubkeyHex: hex, originPath: path };
+      } finally { child.wipePrivateData(); }
     }
   }
   return null;

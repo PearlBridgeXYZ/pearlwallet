@@ -54,7 +54,13 @@ function installFakeIdb(db: Record<string, unknown>) {
   for (const s of STORES) {
     const t = db[s] as Record<string, unknown>;
     const m = () => data.get(s)!;
+    vi.spyOn(t as never, "toArray" as never).mockImplementation((() => op(`${s}.toArray`, () => structuredClone([...m().values()]))) as never);
     const key = (r: Record<string, unknown>) => String(s === "keystore" ? r.id : s === "bridgeDepositPins" ? r.ethAddress : r.id);
+    vi.spyOn(t as never, "where" as never).mockImplementation(((field: string) => ({
+      equals: (value: unknown) => ({ first: () => op(`${s}.where`, () => structuredClone(
+        [...m().values()].find(r => (r as Record<string, unknown>)[field] === value)
+      )) })
+    })) as never);
     vi.spyOn(t as never, "get" as never).mockImplementation(((k: string) => op(`${s}.get`, () => structuredClone(m().get(k)))) as never);
     vi.spyOn(t as never, "put" as never).mockImplementation(((r: Record<string, unknown>) =>
       op(`${s}.put`, () => {
@@ -90,7 +96,7 @@ const COSIGNER = xonlyHex(1);
 
 type Reply = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
 const defaultReply: Reply = async (cmd) => {
-  if (cmd === "exportMnemonic") return { mnemonic: "m" };
+  if ((cmd === "exportMnemonic" || cmd === "verifyPassword")) return { mnemonic: "m" };
   if (cmd === "derivePearlMultisigPubkey") return { pubkeyHex: MY, originPath: pearlMultisigPath(0, 0) };
   if (cmd === "lock") return {};
   throw new Error(`unexpected ${cmd}`);
@@ -132,6 +138,15 @@ beforeEach(() => {
 afterEach(() => {
   for (const t of tabs.splice(0)) t.__resetWalletStoreForTests();
   vi.restoreAllMocks();
+});
+
+it("concurrent creates of the same policy reuse one vault atomically", async () => {
+  data.get("keystore")!.set("primary", record("wallet-W", "w"));
+  const A = await openTab(); const B = await openTab();
+  A.store.setState({ status: "unlocked", blob: blob("wallet-W"), addresses: addrs("w") });
+  B.store.setState({ status: "unlocked", blob: blob("wallet-W"), addresses: addrs("w") });
+  const [a,b] = await Promise.all([mkVault(A.ms,"first"),mkVault(B.ms,"second")]);
+  expect(a.id).toBe(b.id); expect(data.get("vaults")!.size).toBe(1);
 });
 
 describe("L2 — a vault saved by a still-unlocked tab never lands after another tab's wipe", () => {
@@ -231,7 +246,7 @@ describe("L3 — lock() racing a wipe ends 'no-wallet' once the wipe commits", (
     data.get("keystore")!.set("primary", record("wallet-W", "w"));
     const lockCall = deferred<unknown>();
     const A = await openTab(async (cmd) => {
-      if (cmd === "exportMnemonic") return { mnemonic: "m" };
+      if ((cmd === "exportMnemonic" || cmd === "verifyPassword")) return { mnemonic: "m" };
       if (cmd === "lock") return lockCall.promise;
       throw new Error(`unexpected ${cmd}`);
     });
@@ -273,3 +288,26 @@ describe("L3 — lock() racing a wipe ends 'no-wallet' once the wipe commits", (
     expect(B.store.getState().status).toBe("locked");
   });
 });
+
+  it("wipe refuses an unacknowledged vault created during password verification", async () => {
+    data.get("keystore")!.set("primary", record("wallet-W", "w"));
+    const verification = deferred<unknown>();
+    const A = await openTab(async (cmd, args) => {
+      if (cmd === "verifyPassword") { reached.add("verify-started"); return verification.promise; }
+      return defaultReply(cmd, args);
+    });
+    A.store.setState({ status:"unlocked",blob:blob("wallet-W"),addresses:addrs("w") });
+    const shown = await A.ms.listVaults();
+    const current = await A.ms.listVaults();
+    expect(current.map(v=>v.id).sort().join()).toBe(shown.map(v=>v.id).sort().join());
+    const wiping = A.store.getState().wipe("pw", shown.map(v=>v.id)).then(()=>"wiped",(e:Error)=>e.message);
+    await until("verify-started");
+    const B = await openTab();
+    B.store.setState({ status:"unlocked",blob:blob("wallet-W"),addresses:addrs("w") });
+    const unacknowledged = await mkVault(B.ms, "not-in-acknowledged-list");
+    expect(data.get("vaults")!.has(unacknowledged.id)).toBe(true);
+    verification.resolve({ok:true}); expect(await wiping).toBe("E_VAULT_LIST_CHANGED");
+    expect(data.get("vaults")!.has(unacknowledged.id)).toBe(true);
+    expect(stored()).toBeDefined();
+  });
+

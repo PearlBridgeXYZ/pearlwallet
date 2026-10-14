@@ -117,7 +117,7 @@ beforeEach(() => {
   mem.rec = record();
   vi.spyOn(workerClient.cryptoWorker, "call").mockImplementation((async (cmd: string) => {
     if (cmd === "lock") return { ok: true };
-    if (cmd === "exportMnemonic") return { mnemonic: "m" };
+    if ((cmd === "exportMnemonic" || cmd === "verifyPassword")) return { mnemonic: "m" };
     if (cmd === "createWallet") return { mnemonic: "m", blob: BLOB, addresses: ADDRS };
     if (cmd === "restoreWallet") return { mnemonic: "m", blob: BLOB, addresses: ADDRS };
     throw new Error(`unexpected ${cmd}`);

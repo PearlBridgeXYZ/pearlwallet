@@ -262,15 +262,16 @@ export async function fetchDepositAddress(ethAddress: `0x${string}`): Promise<st
 
 // Trust-on-first-use for the wrap deposit address (audit H-2).
 //
-// The deposit address is HD-derived by the relay from the user's eth
-// address; the wallet cannot derive it independently (no relay xpub), so a
+// The deposit address is deterministically derived by the relay from the user's eth
+// address and relay secret; the wallet cannot derive it independently, so a
 // PERSISTENT API compromise that returns the same attacker address on every
 // fetch defeats a same-session re-fetch check. TOFU narrows the window: we
 // pin the FIRST address ever seen for an eth address and refuse forever
 // after if it changes. The remaining exposure is a compromise active during
-// the very first wrap — which the UI also surfaces for visual verification
-// against pearlbridge.xyz. (Real fix tracked separately: relay publishes the
-// derivation xpub for local verification.)
+// the very first resolution. The UI requires explicit trust acknowledgment;
+// comparing the same API through another UI does not authenticate it.
+// (Real fix tracked separately: relay publishes the
+// authenticated proof bound to the recipient for local verification.)
 const DEPOSIT_TOFU_PREFIX = "bridge-deposit-tofu:";
 
 export interface DepositTofuStore {

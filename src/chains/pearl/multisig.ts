@@ -198,3 +198,8 @@ export function vaultAddressFromPubkeys(
  * without importing from `@scure/btc-signer` directly.
  */
 export const PEARL_MULTISIG_NUMS_INTERNAL_KEY = TAPROOT_UNSPENDABLE_KEY;
+
+/** A vault transaction must not consume more than one fifth of its input in fees. */
+export function assertVaultFeePolicy(totalIn: bigint, fee: bigint): void {
+  if (fee <= 0n || fee * 5n > totalIn) throw new Error('E_PEARL_FEE_CAP: Vault fees must be positive and no more than 20% of the input value.');
+}

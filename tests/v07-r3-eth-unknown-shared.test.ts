@@ -294,8 +294,8 @@ describe("FZ1 / Sonnet S2 — wipe removes the record", () => {
     expect(session.map.has("pearl-wallet-eth-unknown-v1")).toBe(false);
     expect(store.currentEthUnknown("mainnet", ME)).toBeNull();
     const ws = await import("node:fs").then((fs) => fs.readFileSync("src/state/wallet-store.ts", "utf8"));
-    const wipe = ws.slice(ws.indexOf("  async wipe(password) {"), ws.indexOf("  async exportMnemonic("));
-    expect(wipe).toContain("result = await wipeKeystore(blob);");
+    const wipe = ws.slice(ws.indexOf("  async wipe(password,"), ws.indexOf("  async exportMnemonic("));
+    expect(wipe).toContain("result = await wipeKeystore(blob, expectedVaultIds);");
     expect(wipe).not.toMatch(/clearAllEthUnknown\(/);
   });
 });

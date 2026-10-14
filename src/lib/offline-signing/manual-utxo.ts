@@ -108,8 +108,8 @@ export function parseManualUtxos(raw: string): ManualUtxoParseResult {
         continue;
       }
       // P2TR scriptPubKey is exactly 34 bytes (OP_1 + 32-byte x-only key).
-      // We don't HARD-require this — a future witness version could differ —
-      // but warn-soft via the result; right now nothing checks it.
+      // Match the signer’s currently supported P2TR-only policy.
+      if (!/^5120[0-9a-f]{64}$/.test(s)) { errors.push({line:lineNum,message:"scriptHex must be a P2TR script: 68 hex characters starting 5120"}); continue; }
       scriptHex = s;
     }
     const key = `${txid}:${vout}`;

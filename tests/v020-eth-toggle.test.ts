@@ -74,7 +74,7 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
     expect(useUI.getState().ethRpcOverride).toBe("");
   });
 
-  it("a stale v4 blob is ignored — v5 starts fresh with defaults", async () => {
+  it("migrates a v4 blob without losing user choices", async () => {
     localStorage.setItem(
       "pearl-wallet-ui-v4",
       JSON.stringify({ theme: "dark", multisigEnabled: true, ethEnabled: true }),
@@ -83,7 +83,7 @@ describe("v0.2.0 / ui-store storage key + persisted shape", () => {
     // Stale v4 blob is ignored; current-key empty → fresh defaults. ETH is
     // ON by default (v0.4.2) and multisig is ON by default (v0.5.0 — the
     // Vaults surface graduated from experimental/opt-in).
-    expect(useUI.getState().theme).toBe("system");
+    expect(useUI.getState().theme).toBe("dark");
     expect(useUI.getState().ethEnabled).toBe(true);
     expect(useUI.getState().multisigEnabled).toBe(true);
   });
@@ -226,14 +226,14 @@ describe("v0.4.2 — ETH-on-by-default migration", () => {
     vi.resetModules();
   });
 
-  it("force-enables ETH once for an existing blob that lacks the marker, preserving other prefs", async () => {
+  it("preserves ETH opt-out even without the migration marker", async () => {
     // An existing v0.3.x user: ETH was off, custom theme + multisig set.
     localStorage.setItem(
       "pearl-wallet-ui-v7",
       JSON.stringify({ theme: "dark", multisigEnabled: true, ethEnabled: false }),
     );
     const { useUI } = await import("../src/state/ui-store");
-    expect(useUI.getState().ethEnabled).toBe(true); // migrated on
+    expect(useUI.getState().ethEnabled).toBe(false); // explicit opt-out
     expect(useUI.getState().theme).toBe("dark"); // preserved
     expect(useUI.getState().multisigEnabled).toBe(true); // preserved
     // marker is persisted so it won't re-run
@@ -262,7 +262,7 @@ describe("v0.5.0 — multisig-on-by-default migration", () => {
     expect(useUI.getState().multisigEnabled).toBe(true);
   });
 
-  it("force-enables Vaults once for an existing blob lacking the marker, preserving other prefs", async () => {
+  it("preserves Vaults opt-out even without the migration marker", async () => {
     // An existing user from before the graduation: multisig was off (old
     // default), with a custom theme and ETH already migrated on.
     localStorage.setItem(
@@ -275,7 +275,7 @@ describe("v0.5.0 — multisig-on-by-default migration", () => {
       }),
     );
     const { useUI } = await import("../src/state/ui-store");
-    expect(useUI.getState().multisigEnabled).toBe(true); // migrated on
+    expect(useUI.getState().multisigEnabled).toBe(false); // explicit opt-out
     expect(useUI.getState().theme).toBe("dark"); // preserved
     expect(useUI.getState().ethEnabled).toBe(true); // preserved
     // marker persisted so it won't re-run

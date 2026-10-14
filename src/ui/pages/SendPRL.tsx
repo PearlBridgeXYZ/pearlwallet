@@ -794,7 +794,7 @@ export default function SendPRL() {
                 }
               >
                 <input
-                  type="radio"
+                  type="radio" name="pearl-fee-tier"
                   className="sr-only"
                   checked={tier === t}
                   onChange={() => setTier(t)}

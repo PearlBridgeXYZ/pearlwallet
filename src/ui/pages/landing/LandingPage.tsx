@@ -22,7 +22,7 @@ export default function LandingPage() {
             <p>open source. non-custodial.</p>
           </div>
           <WalletActions />
-          <p className="landing-warning">Experimental, pre-1.0 software. Only store what you can afford to lose.</p>
+          <p className="landing-warning">Experimental, pre-1.0 software.</p>
           {/* Keep the existing install-before-create warning for iOS visitors. */}
           <div className="landing-install"><InstallPWA variant="banner" /></div>
         </section>

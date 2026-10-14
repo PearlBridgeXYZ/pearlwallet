@@ -95,7 +95,7 @@ interface WalletState {
   // can't nuke the on-device keystore (and the user's only copy of the
   // mnemonic-encrypted-at-rest) by clicking through Settings. Caller MUST
   // pass the current password; we verify by attempting to decrypt the blob.
-  wipe(password: string): Promise<void>;
+  wipe(password: string, expectedVaultIds?: readonly string[]): Promise<void>;
   exportMnemonic(password: string): Promise<string>;
   changePassword(oldPw: string, newPw: string): Promise<void>;
   touch(): void;
@@ -727,7 +727,7 @@ export const useWallet = create<WalletState>((set, get) => ({
 
   async lock() {
     lockGeneration++;
-    await cryptoWorker.call<"lock">("lock", {}).catch(() => undefined);
+    // Lock must not depend on the worker acknowledging its own destruction.
     cryptoWorker.reset();
     // v0.2.4 (SEC, pass-2 M-2): clear addresses on lock. They survive
     // re-load because they sit in publicData on the keystore row, but
@@ -748,7 +748,7 @@ export const useWallet = create<WalletState>((set, get) => ({
     set({ status, addresses: null, pearlAddressGeneration: get().pearlAddressGeneration + 1 });
   },
 
-  async wipe(password) {
+  async wipe(password, expectedVaultIds) {
     return walletLock(async () => {
       const { blob, status } = get();
       // No-wallet wipe is a UX trap: clicking "Wipe" against an empty
@@ -760,8 +760,8 @@ export const useWallet = create<WalletState>((set, get) => ({
       }
       // Password-gate the wipe by attempting to decrypt the blob. A wrong
       // password throws E_PASSWORD_WRONG and we keep the keystore intact.
-      await cryptoWorker.call<"exportMnemonic", { mnemonic: string }>(
-        "exportMnemonic",
+      await cryptoWorker.call<"verifyPassword", { ok: boolean }>(
+        "verifyPassword",
         { password, blob },
       );
       lockGeneration++;
@@ -771,7 +771,7 @@ export const useWallet = create<WalletState>((set, get) => ({
       // meanwhile) refuses and locks onto the stored record instead.
       let result: Awaited<ReturnType<typeof wipeKeystore>>;
       try {
-        result = await wipeKeystore(blob);
+        result = await wipeKeystore(blob, expectedVaultIds);
       } catch (e) {
         // The wipe failed (IndexedDB error): nothing was deleted, but the
         // worker session is already gone — end locked, not "unlocked"
@@ -971,3 +971,6 @@ export function subscribeStoredWalletChange(onChange: () => void): () => void {
   });
   return off;
 }
+
+// A failed signer has no session. Publish that state before a caller can retry.
+cryptoWorker.onFailure?.(() => { void useWallet.getState().lock(); });

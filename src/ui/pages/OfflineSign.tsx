@@ -354,7 +354,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
         <div className="mt-3 flex gap-3 text-sm leading-relaxed">
           <label className="flex min-h-11 cursor-pointer items-center gap-2">
             <input
-              type="radio"
+              type="radio" name="offline-utxo-source"
               checked={mode === "live"}
               onChange={() => setMode("live")}
             />
@@ -362,7 +362,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
           </label>
           <label className="flex min-h-11 cursor-pointer items-center gap-2">
             <input
-              type="radio"
+              type="radio" name="offline-utxo-source"
               checked={mode === "manual"}
               onChange={() => setMode("manual")}
             />
@@ -375,7 +375,7 @@ function ComposeTab({ pool, network }: ComposeTabProps) {
               One UTXO per line as{" "}
               <span className="font-mono break-all min-w-0 tabular-nums">txid:vout:amountGrains:poolIndex:scriptHex</span>.
               Lines starting with <span className="font-mono break-all min-w-0 tabular-nums">#</span> are comments.
-              scriptHex is the P2TR scriptPubKey (66 hex chars starting{" "}
+              scriptHex is the P2TR scriptPubKey (68 hex chars starting{" "}
               <span className="font-mono break-all min-w-0 tabular-nums">5120</span>).
             </p>
             <label className="block">

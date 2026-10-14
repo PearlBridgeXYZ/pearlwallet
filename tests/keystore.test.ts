@@ -128,3 +128,11 @@ describe("computeAAD — context binding (H6)", () => {
     await expect(decryptBlob(tampered, PASSWORD)).rejects.toThrow("E_PASSWORD_WRONG");
   });
 });
+
+
+describe('bounded historical keystore KDF policy',()=>{
+ it('refuses altered iteration counts rather than running attacker-selected work',async()=>{
+  const blob=await encryptPlaintext(utf8('public test data'),PASSWORD);
+  for(const kdfIterations of [0,1,599999,600001,2147483647,NaN]) await expect(decryptBlob({...blob,kdfIterations},PASSWORD)).rejects.toThrow('E_KEYSTORE_PARAMETERS');
+ });
+});

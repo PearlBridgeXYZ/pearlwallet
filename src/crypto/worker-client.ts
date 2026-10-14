@@ -10,6 +10,9 @@ class WorkerClient {
   private worker: Worker | null = null;
   private inflight = new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private nextId = 1;
+  private failureHandler: (() => void) | null = null;
+
+  onFailure(handler: () => void): void { this.failureHandler = handler; }
 
   private ensure(): Worker {
     if (!this.worker) {
@@ -29,9 +32,9 @@ class WorkerClient {
       this.worker.onerror = (ev) => {
         // eslint-disable-next-line no-console
         console.error("crypto worker error", ev);
-        this.failInflight("E_WORKER_ERROR");
+        this.reset("E_WORKER_ERROR");
       };
-      this.worker.onmessageerror = () => this.failInflight("E_WORKER_ERROR");
+      this.worker.onmessageerror = () => this.reset("E_WORKER_ERROR");
     }
     return this.worker;
   }
@@ -41,7 +44,8 @@ class WorkerClient {
     const id = String(this.nextId++);
     return new Promise<R>((resolve, reject) => {
       this.inflight.set(id, { resolve: resolve as (v: unknown) => void, reject });
-      w.postMessage({ id, cmd, ...args } as WorkerCmd);
+      try { w.postMessage({ id, cmd, ...args } as WorkerCmd); }
+      catch (e) { this.inflight.delete(id); reject(e instanceof Error ? e : new Error(String(e))); }
     });
   }
 
@@ -51,12 +55,13 @@ class WorkerClient {
    * worker killed mid-postMessage; we must reject the awaiters explicitly
    * so they don't hang forever. Pre-fix, lock-during-unlock wedged the UI.
    */
-  reset(): void {
+  reset(code = "E_WORKER_RESET"): void {
     if (this.worker) {
       this.worker.terminate();
       this.worker = null;
     }
-    this.failInflight("E_WORKER_RESET");
+    this.failInflight(code);
+    if (code === "E_WORKER_ERROR") this.failureHandler?.();
   }
 
   private failInflight(code: string): void {

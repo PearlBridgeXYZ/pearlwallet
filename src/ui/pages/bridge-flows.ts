@@ -110,6 +110,7 @@ export interface UnwrapView {
   setNeedsApprove(b: boolean): void;
   /** A re-read quote that differs from the reviewed one, shown instead. */
   setQuote(q: BurnQuote): void;
+  onPrepared(rec: BridgeCrossingRecord): Promise<void>;
   onStarted(rec: BridgeCrossingRecord): Promise<void>;
   /** An approve / burn broadcast whose outcome is unknown: the page blocks
    *  another Unwrap until the user says they checked it. */
@@ -178,6 +179,7 @@ async function runUnwrap(
   // Set only once the approve is mined successfully.
   let approveTxHash: `0x${string}` | null = null;
   let step = "approval";
+  const prepared: {record: BridgeCrossingRecord | null} = {record:null};
   try {
     // Confirm-time re-quote: bind amount, re-check paused + pinned
     // addresses, RE-READ allowance + balance just before signing
@@ -251,6 +253,16 @@ async function runUnwrap(
       tier: "normal",
       ceiling: { maxFeePerGas: gas.maxFeePerGas, maxCostWei: burnWei },
       session,
+      beforeBroadcast: async (hash) => {
+        const now = Date.now();
+        const intent: BridgeCrossingRecord = {
+          id: hash, direction: "unwrap", amountGrains: amount.toString(), netGrains: q2.net.toString(),
+          createdAt: now, phase: "prepared", relayState: "Submission is not yet confirmed. Check this transaction before retrying; do not unwrap again while its status is uncertain.",
+          confirmations: 0, settledRef: null, approveTxHash, updatedAt: now,
+        };
+        await view.onPrepared(intent);
+        prepared.record = intent;
+      },
     });
     const now = Date.now();
     try {
@@ -272,6 +284,14 @@ async function runUnwrap(
       view.setErr(`Burn submitted, but failed to save tracking. SAVE THIS burn tx: ${r.txHash}`);
     }
   } catch (e) {
+    if (prepared.record && !(e instanceof EthBroadcastStatusUnknownError)) {
+      // Every non-unknown failure is pre-submission or a definitive RPC
+      // rejection. Retain the hash, but never promise bridge review/refund.
+      const message = `Burn not submitted or rejected: ${e instanceof Error ? e.message : String(e)}`;
+      try { await view.onStarted({...prepared.record, phase:"failed", relayState:message, updatedAt:Date.now()}); }
+      catch { view.setErr(`${message}. Could not update tracking for ${prepared.record.id}; verify this hash before retrying.`); }
+      return;
+    }
     if (e instanceof EthBroadcastStatusUnknownError) {
       // The approve / burn may already be on the network: never a plain
       // failure, and no retry until the user has checked the hash.

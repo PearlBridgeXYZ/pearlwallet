@@ -1,3 +1,4 @@
+import ConfirmDialog from "../components/ConfirmDialog";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { useWallet, E_WALLET_EXISTS_ELSEWHERE, subscribeStoredWalletChange, WalletExistsError } from "../../state/wallet-store";
@@ -143,14 +144,19 @@ export default function OnboardingRestore() {
         </p>
       </aside>
 
+      <aside className="mt-4 border-l-2 border-warn-line p-4 text-sm" role="note">
+        <strong>BIP-39 passphrases are not supported.</strong> If your original wallet uses an extra passphrase
+        (sometimes called a 13th or 25th word), do not import it here: these words alone open a different wallet.
+        The unlock password below is only for this browser. Keep your original wallet until you have compared a known receiving address.
+      </aside>
       <div className="mt-6 flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-line py-2 text-sm">
         <span>Phrase length:</span>
         <label className="flex min-h-11 items-center gap-2">
-          <input type="radio" checked={length === 12} onChange={() => setLen(12)} />
+          <input type="radio" name="recovery-phrase-length" checked={length === 12} onChange={() => setLen(12)} />
           12 words
         </label>
         <label className="flex min-h-11 items-center gap-2">
-          <input type="radio" checked={length === 24} onChange={() => setLen(24)} />
+          <input type="radio" name="recovery-phrase-length" checked={length === 24} onChange={() => setLen(24)} />
           24 words
         </label>
       </div>
@@ -206,7 +212,7 @@ export default function OnboardingRestore() {
             onChange={(e) => setAcknowledged(e.target.checked)}
             className="mt-1"
           />
-          <span>I understand that only my recovery phrase can restore my wallet. If I lose it, my funds are gone. The PearlBridge team cannot recover them.</span>
+          <span>I understand that I need my recovery phrase to restore my keys and a recovery file for every multisig vault. Losing these backups can make my funds inaccessible. The PearlBridge team cannot recover them.</span>
         </label>
       </div>
 
@@ -222,13 +228,13 @@ export default function OnboardingRestore() {
       </button>
 
       {overwriteOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 px-4 py-6">
+        <ConfirmDialog onCancel={() => setOverwriteOver(null)} busy={busy}>
           <div className="card max-w-md">
-            <h2 className="text-lg font-semibold">Replace the wallet on this device?</h2>
+            <h2 id="replace-wallet-title" className="text-lg font-semibold">Replace the wallet on this device?</h2>
             <p className="mt-3 text-sm leading-7 text-text-2">
               A different wallet is already stored in this browser. Restoring
               will overwrite it. Anything currently on this device will be
-              unreachable unless you also have its recovery phrase saved
+              unreachable unless you also have its recovery phrase and every vault recovery file saved
               elsewhere.
             </p>
             <p className="mt-3 text-sm leading-7 text-text-2">
@@ -254,7 +260,7 @@ export default function OnboardingRestore() {
               </button>
             </div>
           </div>
-        </div>
+        </ConfirmDialog>
       )}
     </div>
     </>

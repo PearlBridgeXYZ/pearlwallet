@@ -4,7 +4,7 @@
 
 - **Web:** [wallet.pearlbridge.xyz](https://wallet.pearlbridge.xyz)
 - **Downloads:** [GitHub releases](https://github.com/PearlBridgeXYZ/pearlwallet/releases) — releases include a single-file HTML build for signing on an offline machine. Check the SHA-256 GitHub shows for the asset.
-- **Status:** experimental, pre-1.0 software. Only store what you can afford to lose.
+- **Status:** experimental, pre-1.0 software.
 
 PearlBridge is an independent project, not affiliated with Pearl Research Labs.
 
@@ -22,7 +22,7 @@ Keep your 12- or 24-word phrase somewhere safe. There is no password reset or su
 - Hold and send **PRL** on Pearl (Taproot), and **WPRL** and **ETH** on Ethereum, from one recovery phrase.
 - **Bridge** PRL ↔ WPRL through PearlBridge. Bridging carries smart-contract and operational risk; check the live backing at [pearlbridge.xyz/audit](https://pearlbridge.xyz/audit) first.
 - **Multisig vaults**: m-of-n Taproot vaults with co-signing.
-- **Offline signing** (experimental, off by default): compose on an online device, sign in the offline build, broadcast from the online device.
+- **Offline signing** (experimental, off by default): the disconnected HTML build can sign from manually supplied UTXOs. This wallet has no watch-only online composer; use a separately trusted broadcaster for the signed transaction. Never import a cold-wallet seed into the online wallet.
 - Combine many small coins into fewer, and see recent activity.
 - An **optional developer tip** on PRL sends: no tip on sends under 1 PRL, a flat 1 PRL on sends of 1 to 1,000 PRL, and 0.1% above 1,000 PRL. It is on by default and can be turned off in Settings. Network and bridge fees are separate.
 

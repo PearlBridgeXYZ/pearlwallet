@@ -92,7 +92,7 @@ beforeEach(() => {
   reset = vi.spyOn(workerClient.cryptoWorker, "reset").mockImplementation(() => undefined);
   vi.spyOn(workerClient.cryptoWorker, "call").mockImplementation((async (cmd: string) => {
     if (cmd === "unlock") return { addresses: W_ADDRS };
-    if (cmd === "exportMnemonic") return { mnemonic: "m" };
+    if ((cmd === "exportMnemonic" || cmd === "verifyPassword")) return { mnemonic: "m" };
     if (cmd === "lock") return { ok: true };
     if (cmd === "createWallet") return { mnemonic: "m", blob: { ...W_BLOB }, addresses: W_ADDRS };
     if (cmd === "restoreWallet") return { mnemonic: "m", blob: { ...W_BLOB }, addresses: W_ADDRS };

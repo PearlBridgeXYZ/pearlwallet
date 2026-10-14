@@ -46,7 +46,7 @@ const faqs: { question: string; answer: ReactNode }[] = [
 export default function WalletGuide() {
   return (
     <div className="wallet-guide">
-      <p className="guide-warning">Experimental, pre-1.0 software. Only store what you can afford to lose.</p>
+      <p className="guide-warning">Experimental, pre-1.0 software.</p>
       <aside className="landing-fees" aria-labelledby="fees-title">
         <h2 id="fees-title">A note on fees</h2>
         <p>PRL sends include an optional <strong>developer tip</strong>. {TIP_POLICY_TEXT} It is on by default; you can turn it off for any send or in Settings. PRL sends show the network fee before you sign. Bridge transfers show the bridge fee and their Pearl network fee or Ethereum gas before you sign.</p>

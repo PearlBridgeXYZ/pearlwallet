@@ -1,3 +1,4 @@
+import { assertVaultFeePolicy } from "../chains/pearl/multisig";
 // Multisig vault service — top-level façade over:
 //   - Dexie vault registry (vaults + vaultPendingTxs tables)
 //   - Crypto worker (cosigner pubkey derivation, PSBT composition + signing)
@@ -14,6 +15,7 @@
 // signing later can call `derivePearlMultisigPubkey` / `signPearlMultisigPsbt`
 // against the right BIP-32 slot without searching.
 
+import { vaultSignatureProgress } from "../crypto/vault-signatures";
 import { base64 } from "@scure/base";
 import * as btc from "@scure/btc-signer";
 import {
@@ -296,8 +298,7 @@ export async function createVault(input: CreateVaultInput): Promise<VaultRecord>
     createdAt: Date.now(),
     importedFrom: input.importedFrom ?? "manual",
   };
-  await putVaultForWallet(record, walletPrimary);
-  return record;
+  return putVaultForWallet(record, walletPrimary, true);
 }
 
 /**
@@ -478,7 +479,7 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
   }
 
   let change = sum - need;
-  if (change < DUST_LIMIT_GRAINS) {
+  if (change <= DUST_LIMIT_GRAINS) {
     // Coalesce dust change into fee — same heuristic as singlesig.
     // The PSBT will have only the destination output, so the on-wire fee
     // equals sum - amountGrains (i.e. the recomputed 1-output fee PLUS the
@@ -493,6 +494,7 @@ export async function composeVaultSend(opts: ComposeVaultSendOpts): Promise<Comp
     change = 0n;
   }
 
+  assertVaultFeePolicy(sum, fee);
   const outputs: { address: string; amountGrains: bigint }[] = [
     { address: opts.destination, amountGrains: opts.amountGrains },
   ];
@@ -686,7 +688,6 @@ export function inspectPsbt(
     tapScriptSig?: Array<[{ pubKey: Uint8Array; leafHash: Uint8Array }, Uint8Array]>;
     witnessUtxo?: { script: Uint8Array; amount: bigint };
   };
-  const sigEntries = input0.tapScriptSig ?? [];
 
   // Collect per-input amounts so we can compute fee. Any input lacking a
   // witnessUtxo.amount means the caller can't trust the fee figure — flag
@@ -705,32 +706,13 @@ export function inspectPsbt(
       totalInputGrains += amt;
     }
   }
-  // Dedupe by pubkey hex; a PSBT could (maliciously or accidentally) carry
-  // two tapScriptSig entries for the same pubkey, and only one of them ends
-  // up in the witness on finalize. We count distinct signing keys.
-  const seen = new Set<string>();
-  for (const [{ pubKey }] of sigEntries) {
-    seen.add(bytesToHex(pubKey));
-  }
-
-  // Split signers into "in-vault" vs "foreign" if the caller supplied the
-  // valid pubkey set. Without that set, every sig counts — backward-compat
-  // for any caller that hasn't been migrated. Callers driving UX off the
-  // result should always pass the valid set.
-  let signersHex: string[];
-  let foreignSignersHex: string[];
+  const progress = vaultSignatureProgress(tx);
   if (validPubkeysHex) {
-    const validSet = new Set(validPubkeysHex.map((h) => h.toLowerCase()));
-    signersHex = [];
-    foreignSignersHex = [];
-    for (const h of seen) {
-      if (validSet.has(h.toLowerCase())) signersHex.push(h);
-      else foreignSignersHex.push(h);
-    }
-  } else {
-    signersHex = Array.from(seen);
-    foreignSignersHex = [];
+    const expected = [...validPubkeysHex].map(h => h.toLowerCase()).sort();
+    const actual = progress.vault.sortedPubkeys.map(bytesToHex).sort();
+    if (threshold !== progress.vault.threshold || expected.join() !== actual.join()) throw new Error("E_MULTISIG_VAULT_BINDING");
   }
+  const { signersHex, foreignSignersHex } = progress;
 
   const witnessScript = input0.witnessUtxo?.script;
 
@@ -756,10 +738,10 @@ export function inspectPsbt(
       : 0n;
 
   return {
-    signerCount: signersHex.length,
+    signerCount: progress.signerCount,
     signersHex,
     foreignSignersHex,
-    thresholdMet: signersHex.length >= threshold,
+    thresholdMet: progress.thresholdMet && progress.signerCount >= threshold,
     inputCount: tx.inputsLength,
     witnessScriptHex: witnessScript ? bytesToHex(witnessScript) : "",
     outputs,
@@ -787,11 +769,11 @@ export function feeSuspiciousReason(info: PsbtSignerInfo): string | null {
     return "Input amounts are missing from the PSBT — fee can't be verified, so the wallet refuses to sign.";
   }
   if (info.totalInputGrains <= 0n) return null;
-  // 20% fee threshold — anything beyond is almost certainly extraction.
-  // Ten grains × 5 = 50 grains; we want fee_pct = (fee × 100) / inputs <= 20.
-  const feePct = (info.feeGrains * 100n) / info.totalInputGrains;
-  if (feePct > 20n) {
-    return `Fee is ${feePct}% of the spend (${info.feeGrains} grains of ${info.totalInputGrains}). That's far above normal — refusing.`;
+  try { assertVaultFeePolicy(info.totalInputGrains,info.feeGrains); }
+  catch {
+    if (info.feeGrains <= 0n) return "The transaction fee must be positive.";
+    const feePct=(info.feeGrains*100n)/info.totalInputGrains;
+    return `Fee exceeds the 20% limit (${feePct}% rounded down; ${info.feeGrains} grains of ${info.totalInputGrains}). Refusing to sign.`;
   }
   return null;
 }
@@ -894,6 +876,7 @@ export function finalizeVaultPsbt(psbtBase64: string): { rawHex: string } {
     );
   }
   try {
+    if (!vaultSignatureProgress(tx).thresholdMet) throw new Error("E_MULTISIG_THRESHOLD_NOT_MET");
     tx.finalize();
   } catch (err) {
     throw new Error(

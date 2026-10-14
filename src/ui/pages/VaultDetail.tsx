@@ -12,6 +12,7 @@ import {
   deletePendingTx,
   inspectPsbt,
 } from "../../services/multisig";
+import { confirmVaultBackup, downloadVaultBackup } from "../../services/vault-backup";
 import { formatGrains } from "../../lib/format";
 import type { PearlNetwork } from "../../chains/pearl/network";
 
@@ -27,6 +28,9 @@ export default function VaultDetail() {
   const pearlNetwork = useWallet((s) => s.pearlNetwork);
   const [vault, setVault] = useState<VaultRecord | null | undefined>(undefined);
   const [pending, setPending] = useState<VaultPendingTxRecord[]>([]);
+  const [backupDownloaded,setBackupDownloaded] = useState(false);
+  const [backupAcknowledged,setBackupAcknowledged] = useState(false);
+  const [backupError, setBackupError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
@@ -80,21 +84,31 @@ export default function VaultDetail() {
 
   return (
     <Page title={vault.label}>
+      <section className="card mb-6 border-warn-line bg-warn-bg">
+        <h2 className="text-sm font-semibold">Back up before funding</h2>
+        <p className="mt-2 text-sm">Your recovery phrase alone cannot restore this vault. Save this recovery file and verify its address with every cosigner before funding. It contains the full public policy and your signing-key origin, never your private keys. Keep it private because it links your cosigners and address.</p>
+        <button className="btn-secondary mt-3" onClick={() => { try { downloadVaultBackup(vault); setBackupDownloaded(true); setBackupError(null); } catch(e) { setBackupError(e instanceof Error ? e.message : String(e)); } }}>Download vault recovery file</button>
+        {!vault.backupConfirmedAt && <>
+          <label className="flex gap-2 mt-3 text-sm"><input type="checkbox" checked={backupAcknowledged} disabled={!backupDownloaded} onChange={e=>setBackupAcknowledged(e.target.checked)}/>I saved this recovery file and verified the vault address with my cosigners.</label>
+          <button className="btn-primary mt-3" disabled={!backupDownloaded || !backupAcknowledged} onClick={async()=>{try{await confirmVaultBackup(vault.id);setVault((await getVault(vault.id)) ?? null);}catch(e){setBackupError(e instanceof Error ? e.message : String(e));}}}>Confirm saved backup</button>
+        </>}
+        {backupError && <p role="alert" className="text-danger">{backupError}</p>}
+      </section>
       <section className="card mb-6">
         <div className="flex flex-wrap items-baseline justify-between gap-3">
           <h2 className="text-sm font-medium leading-relaxed tracking-tight">
             {vault.threshold} of {vault.total} multisig
           </h2>
-          <a
+          {vault.backupConfirmedAt && <a
             href={pearlAddressExplorerUrl(pearlNetwork, vault.pearlAddress)}
             target="_blank"
             rel="noreferrer noopener"
             className="text-xs text-accent underline underline-offset-4 leading-relaxed"
           >
             Explorer →
-          </a>
+          </a>}
         </div>
-        <div className="mt-2 break-all font-mono text-xs min-w-0 tabular-nums leading-relaxed">{vault.pearlAddress}</div>
+        <div className="mt-2 break-all font-mono text-xs min-w-0 tabular-nums leading-relaxed">{vault.backupConfirmedAt ? vault.pearlAddress : "Save and confirm your recovery backup before funding this vault."}</div>
         <div className="mt-3 text-sm leading-relaxed">
           Balance:{" "}
           {balanceQ.data ? (
@@ -112,9 +126,9 @@ export default function VaultDetail() {
         </div>
 
         <div className="mt-3 flex flex-wrap gap-2">
-          <Link to={`/vaults/${vault.id}/send`} className="btn-primary">
+          {vault.backupConfirmedAt && <Link to={`/vaults/${vault.id}/send`} className="btn-primary">
             Send from vault
-          </Link>
+          </Link>}
           <Link to="/vaults/sign" className="btn-secondary">
             Sign a PSBT
           </Link>

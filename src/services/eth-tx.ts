@@ -387,6 +387,7 @@ async function signAndBroadcast(
   what: string,
   build: (nonce: number) => EthTxRequest,
   session: SigningSession,
+  beforeBroadcast?: (hash: `0x${string}`) => Promise<void>,
 ): Promise<SendResult> {
   assertSigningSession(session);
   // Before the lock, an in-flight record whose send may still be running
@@ -411,6 +412,9 @@ async function signAndBroadcast(
       assertNoUnresolvedEthBroadcast(network, from);
       // Rejects (nothing sent) if the record can't be saved to both
       // localStorage and the IndexedDB copy (committed, durability strict).
+      // Durable application intent precedes submission and journal removal.
+      if (beforeBroadcast) await beforeBroadcast(hash);
+      assertSigningSession(session);
       await beginEthBroadcast({ network, from, hash, what });
       let outcome: "sent" | "unknown" | "rejected" = "unknown";
       try {
@@ -794,11 +798,11 @@ export async function approveWprlForBridge(
 
 /** BridgeController.requestBurn(grossAmount, pearlAddress), signed locally. */
 export async function requestBurn(
-  p: ContractCallParams & { amount: bigint; pearlAddress: string },
+  p: ContractCallParams & { amount: bigint; pearlAddress: string; beforeBroadcast?: (hash: `0x${string}`) => Promise<void> },
 ): Promise<SendResult> {
   const session = p.session ?? captureSigningSession();
   const cfg = bridgeConfig(p.network);
-  return await sendContractCall(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress), p.tier, p.ceiling, "burn", session);
+  return await sendContractCall(p.network, p.from, cfg.bridgeController, burnCalldata(p.amount, p.pearlAddress), p.tier, p.ceiling, "burn", session, p.beforeBroadcast);
 }
 
 async function sendContractCall(
@@ -810,6 +814,7 @@ async function sendContractCall(
   ceiling: EthGasCeiling,
   what: string,
   session: SigningSession,
+  beforeBroadcast?: (hash: `0x${string}`) => Promise<void>,
 ): Promise<SendResult> {
   await assertNoUnresolvedEthBroadcastDurable(network, from, { exceptInflight: true });
   const chainId = await chainIdFor(network);
@@ -831,5 +836,5 @@ async function sendContractCall(
     gas: gas.toString(),
     maxFeePerGas: fees.maxFeePerGas.toString(),
     maxPriorityFeePerGas: fees.maxPriorityFeePerGas.toString(),
-  }), session);
+  }), session, beforeBroadcast);
 }

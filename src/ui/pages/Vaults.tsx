@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import Page from "../components/Page";
 import { useUI } from "../../state/ui-store";
 import { listVaults } from "../../services/multisig";
+import { parseVaultBackup, restoreVaultBackup } from "../../services/vault-backup";
 import type { VaultRecord } from "../../storage/db";
 
 // Multisig vault surface — on by default (v0.5.0). Settings exposes an
@@ -12,6 +13,10 @@ export default function Vaults() {
   const navigate = useNavigate();
   const multisigEnabled = useUI((s) => s.multisigEnabled);
   const [vaults, setVaults] = useState<VaultRecord[] | null>(null);
+  const [backupConfirmed,setBackupConfirmed] = useState(false);
+  const [backupText, setBackupText] = useState("");
+  const [restoreBusy, setRestoreBusy] = useState(false);
+  const [restoreError, setRestoreError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   // Belt-and-braces: if a user lands on /vaults with the toggle off
@@ -43,7 +48,7 @@ export default function Vaults() {
           Before you fund a vault
         </h2>
         <p className="mt-2 text-xs text-text-2 leading-relaxed break-words">
-          Always verify the vault address out-of-band with every cosigner
+          Save each vault’s recovery file from its detail page. Your phrase alone cannot reconstruct its full policy. Always verify the vault address out-of-band with every cosigner
           before sending funds to it — a malicious enroller can hand
           different cosigners different pubkey sets. A vault imported from a
           cosign request is reconstructed from the proposal and bound to its
@@ -94,6 +99,32 @@ export default function Vaults() {
             Sign a PSBT
           </Link>
         </div>
+      </section>
+
+      <section className="card mb-4">
+        <h2 className="text-base font-semibold">Restore a vault recovery file</h2>
+        <p className="mt-2 text-sm">First restore the same recovery phrase used to create this file. Paste the public recovery JSON below. Check the address against your own records before restoring.</p>
+        <label className="block mt-3">Choose recovery file
+          <input className="block mt-2 text-sm" type="file" accept="application/json,.json" disabled={restoreBusy} onChange={async e=>{
+            const file=e.target.files?.[0]; if(!file)return;
+            setRestoreError(null);
+            if(file.size>16384){setRestoreError("Vault backup is too large.");return;}
+            try { const text=await file.text();parseVaultBackup(text);setBackupText(text);setBackupConfirmed(false); }
+            catch(error){setRestoreError(error instanceof Error ? error.message : String(error));}
+          }}/>
+        </label>
+        <label className="block mt-3">Vault recovery JSON
+          <textarea className="input mt-2 w-full font-mono text-xs" rows={5} maxLength={16384} value={backupText} onChange={e=>{setBackupText(e.target.value);setBackupConfirmed(false);setRestoreError(null);}} disabled={restoreBusy}/>
+        </label>
+        {(() => { try { const b=parseVaultBackup(backupText); return <p className="my-3 break-all">{b.threshold} of {b.pubkeys.length} · {b.address}</p>; } catch { return null; } })()}
+        <label className="flex gap-2 mt-3 text-sm"><input type="checkbox" checked={backupConfirmed} disabled={restoreBusy} onChange={e=>setBackupConfirmed(e.target.checked)}/>I checked the displayed address against my saved vault record.</label>
+        <button className="btn-secondary mt-3" disabled={restoreBusy || !backupText.trim() || !backupConfirmed} onClick={async()=>{
+          setRestoreBusy(true);setRestoreError(null);
+          try { const v=await restoreVaultBackup(backupText);navigate(`/vaults/${v.id}`); }
+          catch(e){setRestoreError(e instanceof Error ? e.message : String(e));}
+          finally{setRestoreBusy(false);}
+        }}>{restoreBusy ? "Verifying signing key…" : "Verify and restore vault"}</button>
+        {restoreError && <p role="alert" className="mt-2 text-danger">{restoreError}</p>}
       </section>
 
       <section className="card text-xs text-text-3 leading-relaxed">

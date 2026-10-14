@@ -321,7 +321,7 @@ export default function SendWPRL() {
                 }
               >
                 <input
-                  type="radio"
+                  type="radio" name="eth-fee-tier"
                   className="sr-only"
                   checked={tier === t}
                   onChange={() => setTier(t)}

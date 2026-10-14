@@ -353,7 +353,7 @@ export default function Consolidate() {
                           : "cursor-pointer rounded-pb border border-line p-3 text-center text-sm min-h-11 has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-accent has-[:focus-visible]:outline-offset-2 leading-relaxed"
                       }
                     >
-                      <input type="radio" className="sr-only" checked={tier === t} onChange={() => setTier(t)} />
+                      <input type="radio" name="pearl-fee-tier" className="sr-only" checked={tier === t} onChange={() => setTier(t)} />
                       <div className="font-medium capitalize">{t}</div>
                       <div className="font-mono text-xs tabular-nums text-text-3">{FEERATE_BY_TIER[t].toString()} sat/vB</div>
                     </label>

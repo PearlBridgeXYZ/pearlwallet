@@ -2,6 +2,7 @@
 // links. Used by Dashboard (top 5) and History (full).
 
 import { useQuery } from "@tanstack/react-query";
+import { useUI } from "../../state/ui-store";
 import { useWallet } from "../../state/wallet-store";
 import { getScanBaseline } from "../../state/balance-memory";
 import { activityPool, prlScanQueryKey } from "../hooks/useWalletBalances";
@@ -24,6 +25,8 @@ interface Props {
 export default function ActivityList({ limit = 25, truncate = false, filter = "all", enabled = true }: Props) {
   const addresses = useWallet((s) => s.addresses);
   const ethNetwork = useWallet((s) => s.ethNetwork);
+  const ethEnabled = useUI((s) => s.ethEnabled);
+  const ethAddress = ethEnabled && filter !== "prl" ? addresses?.eth as `0x${string}` | undefined : undefined;
 
   // Both single-sig branches: without the change branch a send would be
   // shown as spending its change too. Change addresses the balance refresh
@@ -37,14 +40,14 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
     queryKey: [
       "activity",
       pearlAll.join(","),
-      addresses?.eth,
+      ethAddress,
       ethNetwork,
       limit,
     ],
     queryFn: ({ signal }) =>
       fetchActivity(
         pearlAll,
-        addresses!.eth as `0x${string}`,
+        ethAddress,
         ethNetwork,
         limit,
         { signal },
@@ -60,7 +63,7 @@ export default function ActivityList({ limit = 25, truncate = false, filter = "a
   if (!addresses) return null;
 
   if (activityQ.isLoading || (!enabled && !activityQ.data)) {
-    return <p role="status" className="border-b border-line py-5 text-sm text-text-3">Scanning Pearl and Ethereum for recent activity…</p>;
+    return <p role="status" className="border-b border-line py-5 text-sm text-text-3">Scanning {ethAddress ? "Pearl and Ethereum" : "Pearl"} for recent activity…</p>;
   }
 
   if (activityQ.isError) {

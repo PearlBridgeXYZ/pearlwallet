@@ -19,7 +19,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const WARNING = "Experimental, pre-1.0 software. Only store what you can afford to lose.";
+const WARNING = "Experimental, pre-1.0 software.";
 
 describe("redesign review fixes", () => {
   it("L3: the experimental warning is visible beside the onboarding actions, outside the collapsed guide", () => {

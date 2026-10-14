@@ -71,6 +71,7 @@ export interface TxCacheEntry {
 // being re-imported. The Pearl address is derivable from the pubkey set + the
 // threshold but cached here so a vault list renders without recomputing.
 export interface VaultRecord {
+  backupConfirmedAt?: number;
   id: string; // uuid
   version: 1;
   label: string;
@@ -144,7 +145,7 @@ export interface BridgeCrossingRecord {
   netGrains: string;
   createdAt: number;
   /** wallet-side coarse phase; relay state string mirrored in `relayState`. */
-  phase: "confirming" | "relay" | "review" | "done" | "refunded" | "failed";
+  phase: "dismissed" | "prepared" | "confirming" | "relay" | "review" | "done" | "refunded" | "failed";
   relayState: string | null;
   confirmations: number;
   /** wrap: WPRL mint tx once relay reports it. unwrap: pearl payout txid. */
@@ -302,10 +303,15 @@ async function assertStoredWallet(walletPrimary: string): Promise<void> {
 }
 
 /** Stores a vault for the wallet `walletPrimary` (see assertStoredWallet). */
-export async function putVaultForWallet(record: VaultRecord, walletPrimary: string): Promise<void> {
-  await db.transaction("rw", [db.keystore, db.vaults], async () => {
+export async function putVaultForWallet(record: VaultRecord, walletPrimary: string, reuseAddress = false): Promise<VaultRecord> {
+  return db.transaction("rw", [db.keystore, db.vaults], async () => {
     await assertStoredWallet(walletPrimary);
+    if (reuseAddress) {
+      const existing = await db.vaults.where("pearlAddress").equals(record.pearlAddress).first();
+      if (existing) return existing;
+    }
     await db.vaults.put(record);
+    return record;
   });
 }
 
@@ -337,11 +343,15 @@ export async function putPendingTxForWallet(record: VaultPendingTxRecord, wallet
 export async function putBridgeCrossingForWallet(
   record: BridgeCrossingRecord,
   walletPrimary: string,
-  opts: { ifAbsent?: boolean } = {},
+  opts: { ifAbsent?: boolean; expectedPhase?: BridgeCrossingRecord["phase"] } = {},
 ): Promise<boolean> {
   return db.transaction("rw", [db.keystore, db.bridgeCrossings], async () => {
     await assertStoredWallet(walletPrimary);
     if (opts.ifAbsent && (await db.bridgeCrossings.get(record.id))) return false;
+    if (opts.expectedPhase !== undefined) {
+      const current = await db.bridgeCrossings.get(record.id);
+      if (!current || current.phase !== opts.expectedPhase) return false;
+    }
     await db.bridgeCrossings.put(record);
     return true;
   });
@@ -507,7 +517,7 @@ export type WipeResult = "wiped" | "changed";
  * broadcast records and the Ethereum "may already be sent" blocks) while
  * its keys remain, and could hit a wallet another tab just stored.
  */
-export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<WipeResult> {
+export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON, expectedVaultIds?: readonly string[]): Promise<WipeResult> {
   // Ethereum send records and Pearl broadcast records saved (or rewritten)
   // after this snapshot belong to whatever is stored after the commit
   // (another tab may restore a wallet and send before the clears below
@@ -522,6 +532,12 @@ export async function wipeKeystore(expectedBlob?: KeystoreBlobJSON): Promise<Wip
       if (expectedBlob !== undefined) {
         const rec = await db.keystore.get("primary");
         if (rec && !sameKeystoreBlob(rec.blob, expectedBlob)) return false;
+      }
+      if (expectedVaultIds !== undefined) {
+        const actual = (await db.vaults.toArray()).map(v => v.id).sort();
+        if (JSON.stringify(actual) !== JSON.stringify([...expectedVaultIds].sort())) {
+          throw new Error("E_VAULT_LIST_CHANGED");
+        }
       }
       await db.keystore.delete("primary");
       await db.addressBook.clear();
